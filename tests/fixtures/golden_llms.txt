@@ -1,0 +1,40 @@
+# Example
+
+> The platform teams use to ship software faster.
+
+For full page content, see [example.com/llms-full.txt](https://example.com/llms-full.txt)
+
+## Main
+
+- [Example](https://example.com/): The platform teams use to ship software faster.
+
+## Integrations
+
+- [GitHub Integration](https://example.com/integrations/github): Connect Example to your GitHub repositories.
+
+## Blog
+
+- [Release Notes](https://example.com/blog/release-notes): Latest product updates and changelogs.
+- [How We Scaled CI to 10k Runs](https://example.com/blog/scaling-ci): Lessons from scaling continuous integration.
+
+## Docs
+
+- [Quick Start Guide](https://example.com/docs/quickstart): Get started with Example in five minutes.
+- [Core Concepts](https://example.com/docs/concepts): Understand projects workspaces and runs.
+- [Authentication](https://example.com/docs/api/authentication): Authenticate requests with API keys and OAuth.
+- [Webhooks](https://example.com/docs/api/webhooks): Receive events when runs complete or fail.
+
+## Contact
+
+- [Contact Us](https://example.com/contact): Talk to sales or get product support.
+- [Help Centre](https://example.com/support/help-centre): Search guides and troubleshooting articles.
+
+## Optional
+
+- [Subprocessors 2019](https://example.com/legal/subprocessors/archive/2019): Archived subprocessor list for 2019.
+- [CI Articles](https://example.com/blog/tag/ci/page/7): Page 7 of articles tagged CI.
+- [CI Articles](https://example.com/blog/tag/ci/page/8): Page 8 of articles tagged CI.
+
+---
+*Generated 2026-08-20. Recommend reviewing quarterly or after major site changes.*
+
