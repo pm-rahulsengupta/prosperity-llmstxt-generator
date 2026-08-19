@@ -35,6 +35,18 @@ from app.core.text import domain_of
 # Default ceiling for llms-full.txt. Roughly 1M characters ~ 250k tokens.
 DEFAULT_FULL_MAX_CHARS = 1_000_000
 
+# A section holding fewer pages than this is not a section, it is a link with a
+# heading on top.
+MIN_SECTION_PAGES = 2
+
+# Above this share of one-page sections, the URL structure is telling us nothing and
+# grouping by it produces an index worse than no index at all.
+FLAT_SITE_SINGLETON_RATIO = 0.6
+
+# Where consolidated singletons go. Deliberately plain: the LLM triage stage
+# replaces this grouping entirely when a key is configured.
+CATCH_ALL_SECTION = "Pages"
+
 
 def split_optional(pages: list[PageEntry]) -> tuple[list[PageEntry], list[PageEntry]]:
     """Partition into main pages and Optional pages."""
@@ -56,7 +68,41 @@ def group_by_url(pages: list[PageEntry]) -> tuple[list[Section], list[PageEntry]
         Section(name=name, description="", pages=sort_by_importance(pages_in))
         for name, pages_in in buckets.items()
     ]
-    return sections, sort_by_importance(optional)
+    return consolidate_singletons(sections), sort_by_importance(optional)
+
+
+def consolidate_singletons(
+    sections: list[Section], min_pages: int = MIN_SECTION_PAGES
+) -> list[Section]:
+    """Merge one-page sections when the URL structure is carrying no signal.
+
+    Flat sites -- WordPress, most Shopify themes -- put every page one level deep, so
+    the first path segment is the page's own slug. Grouping by it emits one H2 per
+    page ("## Seo Gold Coast", one link), which is worse for an LLM to navigate than
+    a single honest list. Measured on prosperitymedia.com.au: 12 pages produced 12
+    sections.
+
+    Only triggers when most sections are singletons. A site with a genuine structure
+    and one or two small corners keeps them.
+    """
+    if len(sections) < 3:
+        return sections
+
+    singletons = [s for s in sections if len(s.pages) < min_pages and s.name != "Contact"]
+    if len(singletons) / len(sections) < FLAT_SITE_SINGLETON_RATIO:
+        return sections
+
+    kept = [s for s in sections if s not in singletons]
+    merged = [page for s in singletons for page in s.pages]
+    if not merged:
+        return sections
+
+    existing = next((s for s in kept if s.name == CATCH_ALL_SECTION), None)
+    if existing:
+        existing.pages = sort_by_importance(existing.pages + merged)
+    else:
+        kept.append(Section(name=CATCH_ALL_SECTION, pages=sort_by_importance(merged)))
+    return kept
 
 
 def order_sections(sections: list[Section], pattern: str) -> list[Section]:

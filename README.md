@@ -15,15 +15,25 @@ CarsGuide, Gumtree and Autotrader plus ongoing maintenance.
 |---|---|
 | 1. Scaffold, env registry, Docker, Railway config | done |
 | 2. Core engine ported, 32 tests green | done |
-| 3. Scrapling crawl layer | not started |
+| 3. Recon, extraction, fetch ladder | done |
 | 4. Postgres + job queue | not started |
 | 5. LLM stages (plan / triage / summarise / QA) | not started |
 | 6. Web UI | not started |
 | 7. Google SSO | not started |
 | 8. Railway deploy | not started |
 
-The core generates a valid file today from a Screaming Frog export, with no
-network access and no API key.
+The tool generates a valid file today, end to end, from either a Screaming Frog
+export or a live crawl. No API key required. 80 tests.
+
+Measured against `prosperitymedia.com.au` on 2026-08-20: 223 URLs discovered across
+7 sitemaps in 7.5s; 12 pages fetched in 3.6s, all on the cheap HTTP tier with zero
+browser launches.
+
+What that run showed, and why the LLM stages are next: the site is flat, so every
+page sits one level deep and URL-path grouping produced twelve one-link sections.
+`consolidate_singletons` now collapses that into one honest list, but a real
+semantic grouping needs stage 3. Likewise pages with no meta description fall back
+to a description derived from the URL slug — serviceable, not good.
 
 ## Quick start
 
