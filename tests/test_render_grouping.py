@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.core.models import PageEntry, Section
+from app.core.ranking import PATTERN_CATALOG
 from app.core.render import (
     CATCH_ALL_SECTION,
     apply_manual_order,
@@ -10,7 +11,6 @@ from app.core.render import (
     group_by_url,
     order_sections,
 )
-from app.core.ranking import PATTERN_CATALOG
 
 
 def _pages(*urls: str) -> list[PageEntry]:
@@ -102,7 +102,9 @@ def test_homepage_section_is_pinned_first() -> None:
         Section("Guides", pages=_pages("https://e.com/g")),
         Section("Main", pages=_pages("https://e.com/")),
     ]
-    assert [s.name for s in order_sections(sections, PATTERN_CATALOG)][0] == "Main"
+    ordered = order_sections(sections, PATTERN_CATALOG)
+
+    assert ordered[0].name == "Main"
 
 
 def test_contact_is_pinned_last() -> None:
@@ -110,7 +112,9 @@ def test_contact_is_pinned_last() -> None:
         Section("Contact", pages=_pages("https://e.com/contact")),
         Section("Guides", pages=_pages("https://e.com/g")),
     ]
-    assert [s.name for s in order_sections(sections, PATTERN_CATALOG)][-1] == "Contact"
+    ordered = order_sections(sections, PATTERN_CATALOG)
+
+    assert ordered[-1].name == "Contact"
 
 
 def test_manual_order_wins_and_appends_the_unlisted() -> None:
