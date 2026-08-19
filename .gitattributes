@@ -1,0 +1,7 @@
+# Normalise to LF in the repo. The Dockerfile still strips CR from entrypoint.sh as
+# a belt-and-braces guard, because a shebang with a trailing \r fails in the
+# container with a "no such file or directory" that names the file that exists.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
