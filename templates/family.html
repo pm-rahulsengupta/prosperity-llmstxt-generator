@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ family_label }}{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <div class="spread">
+        <h2>{{ family_label }}</h2>
+        <span class="muted">{{ domain }}</span>
+    </div>
+    <p class="muted">{{ family_blurb }}</p>
+</div>
+
+{% if statuses %}
+<div class="panel">
+    {% for status in statuses %}
+    {% include "partials/component.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+    <p class="empty">
+        Nothing in this group applies to a {{ site_type.replace('_', '/') }} site.
+        That is a decision rather than a gap &mdash; publishing a file a site has no
+        use for gives an agent one more thing to fetch and nothing more to act on.
+    </p>
+</div>
+{% endif %}
+{% endblock %}

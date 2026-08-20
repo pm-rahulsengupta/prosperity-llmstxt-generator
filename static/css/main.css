@@ -634,3 +634,37 @@ button.destructive {
     letter-spacing: 0;
     color: var(--pm-teal-deep);
 }
+
+/* -- components -------------------------------------------------------------
+   One block per checklist component, rendered identically on all eight pages.
+   The left border carries the state, so a page can be scanned for what still
+   needs doing without reading a word. */
+
+.component { padding: 1rem 0; border-top: 1px solid var(--pm-rule); }
+.component:first-child { border-top: none; padding-top: 0; }
+.component h4 { margin: 0 0 0.3rem; font-size: var(--pm-base); font-weight: 500; }
+.component p { margin: 0.25rem 0; }
+
+.component.live { border-left: 3px solid var(--pm-emerald); padding-left: 0.8rem; }
+.component.ready { border-left: 3px solid var(--pm-lime); padding-left: 0.8rem; }
+.component.template { border-left: 3px solid var(--pm-teal); padding-left: 0.8rem; }
+.component.missing { border-left: 3px solid var(--pm-red); padding-left: 0.8rem; }
+
+/* Visibly not a finished file. A template that looks like an artefact is a
+   template somebody uploads. */
+pre.doc.template {
+    background: var(--pm-sunken);
+    border: 1px dashed var(--pm-teal);
+    opacity: 0.92;
+}
+
+.component .mark {
+    margin-top: 0.6rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.component .mark input[type="text"] { flex: 1 1 16rem; margin: 0; }
+.component .mark button { flex: 0 0 auto; }

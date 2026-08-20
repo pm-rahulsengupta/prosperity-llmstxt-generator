@@ -56,6 +56,14 @@ from app.core.bundle import (
     build_bundle,
     verify_declared,
 )
+from app.core.components import (
+    FAMILY_BLURBS,
+    FAMILY_LABELS,
+    ComponentState,
+    Family,
+    SiteType,
+    by_key,
+)
 from app.core.edits import EditTarget, apply_operations
 from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
@@ -67,6 +75,8 @@ from app.core.ranking import (
     PATTERN_TEMPLATES,
 )
 from app.core.render import render_combined
+from app.core.site_state import derive, manually_markable
+from app.core.templates_lib import build_templates
 from app.db import repo
 from app.db.base import get_session, session_scope
 from app.db.models import ChatMessage, DocumentRevision, RunStatus
@@ -78,7 +88,7 @@ from app.nav import build_nav
 from app.scrape.agents_probe import probe_site
 from app.scrape.discover import discover, normalise_site_url
 from app.scrape.extract import extract
-from app.scrape.readiness import SiteType, audit_readiness
+from app.scrape.readiness import audit_readiness
 from app.scrape.tech_probe import probe_tech
 
 logger = logging.getLogger(__name__)
@@ -829,7 +839,18 @@ async def agents_download(
     for the file being true when it is downloaded.
     """
     normalised = normalise_site_url(site)
-    probe, doc, _tech, catalog, _readiness, bundle = await _agents_document(session, normalised)
+    _probe, doc, _tech, catalog, _readiness, bundle = await _agents_document(session, normalised)
+
+    # Any file the bundle produced, by name. Checked first because the family
+    # tabs link here by artefact name -- without it every one of those links fell
+    # through to the default and returned agents.md instead, which is a download
+    # that looks like it worked.
+    if (artifact := bundle.get(kind)) is not None:
+        return PlainTextResponse(
+            artifact.body,
+            headers={"Content-Disposition": f'attachment; filename="{artifact.name}"'},
+            media_type=f"{artifact.media_type}; charset=utf-8",
+        )
 
     if kind == "liquid":
         body, filename, media = render_agents_liquid(doc), "agents.md.liquid", "text/markdown"
@@ -851,6 +872,151 @@ async def agents_download(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         media_type=f"{media}; charset=utf-8",
     )
+
+
+async def _site_status(session: AsyncSession, domain: str):
+    """Everything the eight tabs render, derived once.
+
+    One derivation shared by every page is what stops the family tabs, the client
+    checklist and the developer handover disagreeing about what is done.
+    """
+    site_url = f"https://{domain}"
+    _probe, doc, tech, _catalog, readiness, bundle = await _agents_document(session, site_url)
+
+    artifacts = {a.name: a.body for a in bundle.artifacts}
+    templates_for_site = build_templates(site_url, doc.site_name or domain)
+    marks = await repo.load_marks(session, domain)
+
+    status = derive(
+        site_url,
+        SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
+        readiness=readiness,
+        artifacts=artifacts,
+        templates=templates_for_site,
+        marks=marks,
+    )
+    return status, tech
+
+
+def _component_context(request, user, domain, status, tech) -> dict:
+    return {
+        "user": user,
+        "domain": domain,
+        "site_url": status.site_url,
+        "site_type": status.site_type.value,
+        "platform": tech.platform.value,
+        "markable": {s.key for s in status.statuses if manually_markable(s.component)},
+    }
+
+
+@app.get("/sites/{domain}/family/{family}", response_class=HTMLResponse)
+async def family_tab(
+    request: Request,
+    domain: str,
+    family: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        wanted = Family(family)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such group.") from exc
+
+    site_status, tech = await _site_status(session, domain)
+    # Not-applicable components are dropped from the tab rather than listed as
+    # absent. A page of "does not apply" reads as a broken tool on exactly the
+    # sites where the tool is most useful.
+    statuses = [
+        s for s in site_status.family(wanted) if s.state is not ComponentState.NOT_APPLICABLE
+    ]
+
+    return templates.TemplateResponse(
+        request,
+        "family.html",
+        {
+            **_component_context(request, user, domain, site_status, tech),
+            "family_label": FAMILY_LABELS[wanted],
+            "family_blurb": FAMILY_BLURBS[wanted],
+            "statuses": statuses,
+        },
+    )
+
+
+@app.get("/sites/{domain}/checklist", response_class=HTMLResponse)
+async def client_checklist(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    site_status, tech = await _site_status(session, domain)
+    statuses = site_status.for_client()
+
+    return templates.TemplateResponse(
+        request,
+        "checklist.html",
+        {
+            **_component_context(request, user, domain, site_status, tech),
+            "statuses": statuses,
+            "done": sum(1 for s in statuses if s.state is ComponentState.LIVE),
+            "total": len(statuses),
+            "dev_count": len(site_status.for_developer()),
+        },
+    )
+
+
+@app.get("/sites/{domain}/handover", response_class=HTMLResponse)
+async def developer_handover(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    site_status, tech = await _site_status(session, domain)
+
+    return templates.TemplateResponse(
+        request,
+        "handover.html",
+        {
+            **_component_context(request, user, domain, site_status, tech),
+            "grouped": site_status.by_effort(),
+            "total": len(site_status.for_developer()),
+        },
+    )
+
+
+@app.post("/sites/{domain}/marks")
+async def set_component_mark(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Record that a person checked something no probe can check.
+
+    Refused for anything the tool can verify itself. Letting someone tick
+    `llms.txt` while it returns 404 would put a false claim into a client-facing
+    status, which costs more than the sense of progress the marking exists to give.
+    """
+    form = await request.form()
+    key = str(form.get("component_key") or "")
+    component = by_key(key)
+    if component is None or not manually_markable(component):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That component is decided by the probe, not by hand.",
+        )
+
+    if str(form.get("action") or "set") == "clear":
+        await repo.clear_mark(session, domain, key)
+    else:
+        await repo.set_mark(
+            session, domain, key, noted_by=user.email, note=str(form.get("note") or "")
+        )
+    await session.commit()
+
+    back = request.headers.get("referer") or f"/sites/{domain}/checklist"
+    return RedirectResponse(back, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/runs/{run_id}", response_class=HTMLResponse)

@@ -1,0 +1,65 @@
+{# One component, rendered the same way on all eight pages.
+
+   Written once because the family tabs, the client checklist and the developer
+   handover must agree about what is done. Three templates saying the same thing
+   differently is how they come to disagree. #}
+<div class="component {{ status.state.value }}">
+    <div class="spread">
+        <h4>
+            {{ status.component.title }}
+            <span class="pill {% if status.state.value == 'live' %}ok{% elif status.state.value == 'ready' %}wait{% elif status.state.value == 'not_applicable' %}run{% else %}bad{% endif %}">
+                {{ status.state.value.replace('_', ' ') }}
+            </span>
+        </h4>
+        <span class="muted">{{ status.component.priority.value }}</span>
+    </div>
+
+    {% if status.component.why %}<p class="muted">{{ status.component.why }}</p>{% endif %}
+    {% if status.detail %}<p class="hint">{{ status.detail }}</p>{% endif %}
+
+    {% if status.state.value == 'template' %}
+    <p class="notice bad">
+        Not for publication. This names something that does not answer yet.
+        Stand the service up, enter its URL in onboarding, and this becomes a real
+        file once it verifies.
+    </p>
+    <pre class="doc template">{{ status.template_body }}</pre>
+    {% endif %}
+
+    {% if status.publishable %}
+    <p>
+        <a class="button" href="/agents/download?site={{ site_url|urlencode }}&amp;kind={{ status.artifact_name|urlencode }}">
+            Download {{ status.artifact_name }}
+        </a>
+        <span class="hint">Serve at <code>{{ status.component.path or status.artifact_name }}</code></span>
+    </p>
+    {% endif %}
+
+    {% if status.component.needs_developer %}
+    <p class="hint">
+        {{ effort_labels[status.component.effort] }} &mdash; {{ effort_owners[status.component.effort] }}
+    </p>
+    {% endif %}
+
+    {% if status.verify %}
+    <p class="hint">Verify: <code>{{ status.verify }}</code></p>
+    {% endif %}
+
+    {# Only where nothing can check it. A tick on a probe-decided component would
+       let someone assert llms.txt is published while it returns 404. #}
+    {% if markable and status.key in markable %}
+    <form method="post" action="/sites/{{ domain }}/marks" class="mark">
+        <input type="hidden" name="component_key" value="{{ status.key }}">
+        {% if status.state.value == 'live' %}
+        <input type="hidden" name="action" value="clear">
+        <button type="submit">Un-mark</button>
+        <span class="hint">{{ status.detail }}</span>
+        {% else %}
+        <input type="hidden" name="action" value="set">
+        <input type="text" name="note" placeholder="Optional note (who checked, when)">
+        <button type="submit">Mark as done</button>
+        <span class="hint">Nothing here can check this for you, so your word is the record.</span>
+        {% endif %}
+    </form>
+    {% endif %}
+</div>

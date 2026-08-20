@@ -20,6 +20,7 @@ from app.core.metrics import DateRange, PageMetrics
 from app.core.models import GenerationResult, PageEntry
 from app.core.onboarding import SiteBrief, matches_any
 from app.db.models import (
+    ComponentMark,
     DocumentRevision,
     Page,
     Run,
@@ -570,6 +571,48 @@ async def latest_complete_run(session: AsyncSession, domain: str) -> Run | None:
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def load_marks(session: AsyncSession, domain: str) -> dict[str, str]:
+    """Component key -> who marked it done."""
+    result = await session.execute(
+        select(ComponentMark.component_key, ComponentMark.noted_by).where(
+            ComponentMark.domain == domain
+        )
+    )
+    return {key: (who or "someone") for key, who in result.all()}
+
+
+async def set_mark(
+    session: AsyncSession, domain: str, component_key: str, noted_by: str, note: str = ""
+) -> None:
+    existing = await session.execute(
+        select(ComponentMark).where(
+            ComponentMark.domain == domain, ComponentMark.component_key == component_key
+        )
+    )
+    mark = existing.scalar_one_or_none()
+    if mark is None:
+        session.add(
+            ComponentMark(domain=domain, component_key=component_key, noted_by=noted_by, note=note)
+        )
+    else:
+        # Re-marking updates who and when. An assertion about an accessibility
+        # item goes stale with the next theme change, so the date is the useful
+        # part and overwriting it is the point.
+        mark.noted_by = noted_by
+        mark.note = note
+        mark.noted_at = datetime.now(UTC)
+    await session.flush()
+
+
+async def clear_mark(session: AsyncSession, domain: str, component_key: str) -> None:
+    await session.execute(
+        delete(ComponentMark).where(
+            ComponentMark.domain == domain, ComponentMark.component_key == component_key
+        )
+    )
+    await session.flush()
 
 
 async def record_observed_shape(session: AsyncSession, domain: str, shape: dict[str, int]) -> None:

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Developer handover{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <div class="spread">
+        <h2>Developer handover</h2>
+        <span class="muted">{{ domain }}</span>
+    </div>
+    <p class="muted">
+        {{ total }} item{{ '' if total == 1 else 's' }} needing someone with access to
+        the server, the templates or the stack. Grouped by what kind of access each
+        one takes, so the work can be split rather than queued behind one person.
+        {% if platform and platform != 'unknown' %}
+        Platform detected as <strong>{{ platform }}</strong>; the notes below account
+        for what it can and cannot do.
+        {% endif %}
+    </p>
+</div>
+
+{% for effort, statuses in grouped.items() %}
+<div class="panel">
+    <h3>{{ effort_labels[effort] }}</h3>
+    <p class="hint">{{ effort_owners[effort] }}</p>
+    {% for status in statuses %}
+    {% include "partials/component.html" %}
+    {% endfor %}
+</div>
+{% endfor %}
+
+{% if not grouped %}
+<div class="panel">
+    <p class="empty">
+        Nothing here needs a developer. Everything applicable to this site is on
+        <a href="/sites/{{ domain }}/checklist">your checklist</a>.
+    </p>
+</div>
+{% endif %}
+{% endblock %}

@@ -137,3 +137,124 @@ def test_the_sidebar_does_not_break_existing_pages(template):
 
     assert 'class="side"' in html
     assert "agents.md" in html
+
+
+# -- the eight new pages ------------------------------------------------------
+
+
+def _render(template: str, **extra):
+    """Render through the app's own environment with StrictUndefined.
+
+    `base.html` reads globals registered on that environment, so a fresh one
+    would test a template that does not exist. Strict undefined turns a context
+    key a route forgets into a failure here instead of a 500 in production.
+    """
+    from types import SimpleNamespace
+
+    from jinja2 import StrictUndefined
+
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+    from app.core.templates_lib import build_templates
+    from app.main import templates as app_templates
+
+    status = derive(
+        "https://x.example",
+        SiteType.CONTENT,
+        artifacts={"llms.txt": "# x", "robots.txt": "# r"},
+        templates=build_templates("https://x.example"),
+    )
+    context = {
+        "request": SimpleNamespace(url=SimpleNamespace(path="/"), query_params={}),
+        "user": SimpleNamespace(email="a@b.c", is_admin=True),
+        "domain": "x.example",
+        "site_url": "https://x.example",
+        "site_type": "content",
+        "platform": "wordpress",
+        "markable": {"cls", "cursor"},
+        "statuses": status.for_client(),
+        "grouped": status.by_effort(),
+        "family_label": "Crawl rules",
+        "family_blurb": "Who may crawl this site.",
+        "done": 1,
+        "total": 5,
+        "dev_count": 12,
+        **extra,
+    }
+
+    env = app_templates.env
+    previous, env.undefined = env.undefined, StrictUndefined
+    try:
+        return env.get_template(template).render(**context)
+    finally:
+        env.undefined = previous
+
+
+@pytest.mark.parametrize("template", ["family.html", "checklist.html", "handover.html"])
+def test_the_new_pages_render(template):
+    html = _render(template)
+
+    assert 'class="side"' in html
+    assert "Your checklist" in html
+
+
+def test_the_family_page_shows_a_components_state_and_how_to_verify_it():
+    html = _render("family.html")
+
+    assert "Verify:" in html
+    assert "robots.txt" in html
+
+
+def test_a_template_is_rendered_with_its_warning_and_no_download():
+    """The one thing that must never slip: a placeholder offered as a file."""
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+    from app.core.templates_lib import build_templates
+
+    status = derive(
+        "https://x.example", SiteType.APP_API, templates=build_templates("https://x.example")
+    )
+    card = status.by_key("mcp-card")
+    html = _render("family.html", statuses=[card], markable=set())
+
+    assert "Not for publication" in html
+    assert "REPLACE_ME" in html
+    assert "Download" not in html
+
+
+def test_a_ready_artefact_offers_a_download():
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+
+    status = derive("https://x.example", SiteType.CONTENT, artifacts={"llms.txt": "# x"})
+    html = _render("family.html", statuses=[status.by_key("llms-txt")], markable=set())
+
+    assert "Download llms.txt" in html
+
+
+def test_only_markable_components_show_a_mark_button():
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+
+    status = derive("https://x.example", SiteType.CONTENT, artifacts={"llms.txt": "# x"})
+    llms = status.by_key("llms-txt")
+
+    assert "Mark as done" not in _render("family.html", statuses=[llms], markable=set())
+    assert "Mark as done" in _render("family.html", statuses=[llms], markable={"llms-txt"})
+
+
+def test_an_empty_family_explains_itself():
+    """A page of nothing reads as a broken tool on exactly the sites that need it."""
+    html = _render("family.html", statuses=[])
+
+    assert "That is a decision rather than a gap" in html
+
+
+def test_the_nav_offers_every_family_and_both_action_lists():
+    from app.core.components import FAMILY_LABELS
+
+    items = flat(build_nav("/", domain="x.example"))
+    for label in FAMILY_LABELS.values():
+        assert label in items, label
+    assert "Your checklist" in items
+    assert "Developer handover" in items

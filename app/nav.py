@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.core.components import FAMILY_LABELS
+
 __all__ = ["NavGroup", "NavItem", "build_nav"]
 
 
@@ -72,6 +74,38 @@ def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGr
                     active=_active(path, "/") or _active(path, "/runs"),
                 ),
                 NavItem("agents.md", "/agents", active=_active(path, "/agents")),
+            ],
+        ),
+        NavGroup(
+            label="Files",
+            items=[
+                NavItem(
+                    label,
+                    site_url(f"/family/{family.value}"),
+                    active=scoped and _active(path, f"/sites/{domain}/family/{family.value}"),
+                    disabled=not scoped,
+                    hint=site_hint,
+                )
+                for family, label in FAMILY_LABELS.items()
+            ],
+        ),
+        NavGroup(
+            label="Actions",
+            items=[
+                NavItem(
+                    "Your checklist",
+                    site_url("/checklist"),
+                    active=scoped and _active(path, f"/sites/{domain}/checklist"),
+                    disabled=not scoped,
+                    hint=site_hint,
+                ),
+                NavItem(
+                    "Developer handover",
+                    site_url("/handover"),
+                    active=scoped and _active(path, f"/sites/{domain}/handover"),
+                    disabled=not scoped,
+                    hint=site_hint,
+                ),
             ],
         ),
         NavGroup(

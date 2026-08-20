@@ -38,7 +38,21 @@ def report(*results: CheckResult) -> ReadinessReport:
 def test_the_checklist_covers_both_layers():
     layers = {item.layer for item in CHECKLIST}
     assert layers == {1, 2}
-    assert len(CHECKLIST) == 21
+
+
+def test_the_checklist_is_the_sheet_plus_the_two_files_this_tool_generates():
+    """Twenty-one from the published checklist, plus agents.md and ai-catalog.
+
+    Neither is in the sheet -- it predates Agentic Resource Discovery, and
+    agents.md was a Shopify convention when it was written -- and both are what
+    this tool exists to produce, so auditing a site without them would leave the
+    two most relevant components unexamined.
+    """
+    from app.core.components import COMPONENTS
+
+    assert len(CHECKLIST) == len(COMPONENTS) == 23
+    added = {"agents-md", "ai-catalog"}
+    assert added <= {c.key for c in CHECKLIST}
 
 
 def test_every_item_states_how_to_verify_it_by_hand():

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Your checklist{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <div class="spread">
+        <h2>Your checklist</h2>
+        <span class="muted">{{ domain }}</span>
+    </div>
+    <p class="muted">
+        Everything here can be done without a developer &mdash; download the file and
+        put it in the web root. {{ done }} of {{ total }} done.
+    </p>
+    {% if total %}
+    <div class="bar"><span style="width: {{ (100 * done / total)|round|int }}%"></span></div>
+    {% endif %}
+</div>
+
+{% if statuses %}
+<div class="panel">
+    {% for status in statuses %}
+    {% include "partials/component.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<div class="panel"><p class="empty">Nothing to do here yet. Run the onboarding first.</p></div>
+{% endif %}
+
+<div class="panel">
+    <h3>What is not on this list</h3>
+    <p class="muted">
+        {{ dev_count }} component{{ '' if dev_count == 1 else 's' }} need someone with
+        access to the server, the templates or the stack. They are on the
+        <a href="/sites/{{ domain }}/handover">developer handover</a> instead, so this
+        list stays things you can finish today. A list that mixes the two stalls at
+        the first item you cannot action.
+    </p>
+</div>
+{% endblock %}

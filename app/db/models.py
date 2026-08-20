@@ -408,6 +408,36 @@ class DocumentRevision(Base):
     __table_args__ = (Index("ix_document_revisions_run_at", "run_id", "at"),)
 
 
+class ComponentMark(Base):
+    """A person's assertion that a component is done.
+
+    Only for the six the tool cannot check: layout shift, cursor styles, tap
+    targets, ghost overlays, WebMCP and Web Bot Auth. Everything else is decided
+    by the probe on every request and stored nowhere, because a remembered tick
+    is a claim about the site as it was rather than as it is.
+
+    `noted_by` is not decoration. This is a client-facing status, and "someone
+    said this was done in August" needs a name attached to it when a client asks
+    who, particularly for the accessibility items where the answer changes with
+    every theme update.
+    """
+
+    __tablename__ = "component_marks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    component_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="")
+    noted_by: Mapped[str] = mapped_column(String(320), default="")
+    noted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("domain", "component_key", name="uq_component_marks_domain_key"),
+    )
+
+
 class SiteMetric(Base):
     """Per-URL search metrics for a domain, from an upload or from the API.
 

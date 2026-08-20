@@ -36,6 +36,14 @@ from enum import StrEnum
 
 import httpx
 
+from app.core.components import (
+    COMPONENTS,
+    Applicability,
+    Component,
+    Priority,
+    SiteType,
+)
+
 __all__ = [
     "CHECKLIST",
     "Applicability",
@@ -48,24 +56,6 @@ __all__ = [
 ]
 
 
-class Priority(StrEnum):
-    MUST = "Must"
-    SHOULD = "Should"
-    OPTIONAL = "Optional"
-
-
-class SiteType(StrEnum):
-    CONTENT = "content"
-    APP_API = "app_api"
-    ECOMMERCE = "ecommerce"
-
-
-class Applicability(StrEnum):
-    YES = "yes"
-    CONDITIONAL = "conditional"
-    NO = "no"
-
-
 class CheckState(StrEnum):
     PASS = "pass"
     FAIL = "fail"
@@ -75,253 +65,12 @@ class CheckState(StrEnum):
     UNREACHABLE = "unreachable"
 
 
-@dataclass(frozen=True, slots=True)
-class ChecklistItem:
-    key: str
-    component: str
-    priority: Priority
-    layer: int
-    # Per site type. `CONDITIONAL` is the sheet's "If you run one" / "If you have
-    # a public API" -- real, common, and not something a probe can settle, so it
-    # is reported rather than scored.
-    applies: dict[SiteType, Applicability]
-    verify: str
-    # The path this checks, where it is a simple fetch. Empty for the rest.
-    path: str = ""
-    expect: tuple[str, ...] = ()
-
-
-def _all(applicability: Applicability) -> dict[SiteType, Applicability]:
-    return dict.fromkeys(SiteType, applicability)
-
-
-JSON = ("application/json",)
-TEXT = ("text/plain", "text/markdown")
-XML = ("application/xml", "text/xml", "application/rss+xml")
-
-# The checklist, verbatim in priority, layer and applicability.
-CHECKLIST: tuple[ChecklistItem, ...] = (
-    # -- Layer 1: the page itself. None of these are checkable without a browser.
-    ChecklistItem(
-        "cls",
-        "Stable layout (CLS under 0.1)",
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        "npx lighthouse <site> --view (check CLS)",
-    ),
-    ChecklistItem(
-        "semantic-html",
-        "Semantic HTML (button, a, nav, main, section, article)",
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        "DevTools > Elements > Accessibility tab > walk tree",
-    ),
-    ChecklistItem(
-        "roles",
-        "role + tabindex on div-pretending-to-be-button elements",
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        "Accessibility tree walk; look for clickable divs without role",
-    ),
-    ChecklistItem(
-        "cursor",
-        "cursor: pointer on interactive elements",
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        "Hover-test; CSS audit for missing cursor: pointer",
-    ),
-    ChecklistItem(
-        "labels",
-        'label for="id" on every form input',
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        "Lighthouse Accessibility audit flags missing labels",
-    ),
-    ChecklistItem(
-        "tap-targets",
-        "Tap targets at least 24x24 pixels (WCAG 2.5.8)",
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        'Lighthouse: "Tap targets are sized appropriately"',
-    ),
-    ChecklistItem(
-        "overlays",
-        "No ghost overlays (orphan absolute-positioned elements)",
-        Priority.MUST,
-        1,
-        _all(Applicability.YES),
-        "Inspect for position:absolute with high z-index showing no content",
-    ),
-    # -- Layer 2: the protocol surface. All of this is a fetch.
-    ChecklistItem(
-        "robots",
-        "AI bot rules in /robots.txt",
-        Priority.MUST,
-        2,
-        _all(Applicability.YES),
-        "curl <site>/robots.txt",
-        path="/robots.txt",
-        expect=TEXT,
-    ),
-    ChecklistItem(
-        "sitemap",
-        "/sitemap.xml live and reachable",
-        Priority.MUST,
-        2,
-        _all(Applicability.YES),
-        "curl <site>/sitemap.xml",
-        path="/sitemap.xml",
-        expect=XML,
-    ),
-    ChecklistItem(
-        "link-header",
-        "Link HTTP header with agent-aware rels",
-        Priority.MUST,
-        2,
-        _all(Applicability.YES),
-        'curl -sI <site>/ | grep -i "^link:"',
-    ),
-    ChecklistItem(
-        "llms-txt",
-        "/llms.txt at the domain root",
-        Priority.MUST,
-        2,
-        _all(Applicability.YES),
-        "curl <site>/llms.txt",
-        path="/llms.txt",
-        expect=TEXT,
-    ),
-    ChecklistItem(
-        "markdown-negotiation",
-        "Markdown negotiation (Accept: text/markdown)",
-        Priority.SHOULD,
-        2,
-        {
-            SiteType.CONTENT: Applicability.YES,
-            SiteType.APP_API: Applicability.CONDITIONAL,
-            SiteType.ECOMMERCE: Applicability.CONDITIONAL,
-        },
-        'curl -H "Accept: text/markdown" <site>/ | wc -c',
-    ),
-    ChecklistItem(
-        "mcp-card",
-        "MCP Server Card at /.well-known/mcp/server-card.json",
-        Priority.SHOULD,
-        2,
-        {
-            SiteType.CONTENT: Applicability.CONDITIONAL,
-            SiteType.APP_API: Applicability.YES,
-            SiteType.ECOMMERCE: Applicability.CONDITIONAL,
-        },
-        "curl <site>/.well-known/mcp/server-card.json",
-        path="/.well-known/mcp/server-card.json",
-        expect=JSON,
-    ),
-    ChecklistItem(
-        "webmcp",
-        "WebMCP (navigator.modelContext)",
-        Priority.SHOULD,
-        2,
-        {
-            SiteType.CONTENT: Applicability.CONDITIONAL,
-            SiteType.APP_API: Applicability.YES,
-            SiteType.ECOMMERCE: Applicability.YES,
-        },
-        "Load homepage; check navigator.modelContext in console",
-    ),
-    ChecklistItem(
-        "content-signals",
-        "Content Signals in robots.txt",
-        Priority.SHOULD,
-        2,
-        _all(Applicability.YES),
-        "curl <site>/robots.txt | grep -i content-signal",
-    ),
-    ChecklistItem(
-        "a2a-card",
-        "A2A Agent Card at /.well-known/agent.json",
-        Priority.OPTIONAL,
-        2,
-        {
-            SiteType.CONTENT: Applicability.NO,
-            SiteType.APP_API: Applicability.CONDITIONAL,
-            SiteType.ECOMMERCE: Applicability.NO,
-        },
-        "curl <site>/.well-known/agent.json",
-        path="/.well-known/agent.json",
-        expect=JSON,
-    ),
-    ChecklistItem(
-        "oauth-resource",
-        "OAuth Protected Resource at /.well-known/oauth-protected-resource.json",
-        Priority.OPTIONAL,
-        2,
-        {
-            SiteType.CONTENT: Applicability.NO,
-            SiteType.APP_API: Applicability.CONDITIONAL,
-            SiteType.ECOMMERCE: Applicability.CONDITIONAL,
-        },
-        "curl <site>/.well-known/oauth-protected-resource.json",
-        path="/.well-known/oauth-protected-resource.json",
-        expect=JSON,
-    ),
-    ChecklistItem(
-        "skills",
-        "Agent Skills at /.well-known/skills.json",
-        Priority.OPTIONAL,
-        2,
-        {
-            SiteType.CONTENT: Applicability.NO,
-            SiteType.APP_API: Applicability.CONDITIONAL,
-            SiteType.ECOMMERCE: Applicability.NO,
-        },
-        "curl <site>/.well-known/skills.json",
-        path="/.well-known/skills.json",
-        expect=JSON,
-    ),
-    ChecklistItem(
-        "api-catalog",
-        "API Catalog at /.well-known/api-catalog",
-        Priority.OPTIONAL,
-        2,
-        {
-            SiteType.CONTENT: Applicability.NO,
-            SiteType.APP_API: Applicability.CONDITIONAL,
-            SiteType.ECOMMERCE: Applicability.CONDITIONAL,
-        },
-        "curl <site>/.well-known/api-catalog",
-        path="/.well-known/api-catalog",
-        expect=JSON + ("text/plain",),
-    ),
-    ChecklistItem(
-        "commerce-protocols",
-        "Commerce protocols (x402, MPP, UCP, ACP)",
-        Priority.OPTIONAL,
-        2,
-        {
-            SiteType.CONTENT: Applicability.NO,
-            SiteType.APP_API: Applicability.NO,
-            SiteType.ECOMMERCE: Applicability.CONDITIONAL,
-        },
-        "curl <site>/.well-known/ucp",
-        path="/.well-known/ucp",
-        expect=JSON,
-    ),
-    ChecklistItem(
-        "web-bot-auth",
-        "Web Bot Auth at CDN edge",
-        Priority.OPTIONAL,
-        2,
-        _all(Applicability.CONDITIONAL),
-        "Check your CDN dashboard for verified-bots setting",
-    ),
-)
+# The checklist is a projection of the component registry, not a second copy of
+# it. Priorities, applicability and verify commands all live in one place now;
+# this module contributes the probing and nothing else. `ChecklistItem` is an
+# alias so the twenty call sites reading `item.component` keep working.
+ChecklistItem = Component
+CHECKLIST: tuple[Component, ...] = COMPONENTS
 
 
 @dataclass(slots=True)
