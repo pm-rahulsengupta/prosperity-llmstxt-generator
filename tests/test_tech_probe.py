@@ -23,7 +23,6 @@ from app.scrape.tech_probe import (
     platform_from_html,
 )
 
-
 # -- headers ------------------------------------------------------------------
 
 
