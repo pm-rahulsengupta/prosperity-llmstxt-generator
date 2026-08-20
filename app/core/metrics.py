@@ -92,6 +92,13 @@ class Thresholds:
     # concentrated and means nothing. A group must earn this many clicks in total
     # before its winners are worth promoting.
     promote_min_clicks: int = 50
+    # And the winners have to be winners. `top_decile_click_share` reports 100%
+    # whenever fewer URLs earn clicks than the decile is wide -- 60 URLs with one
+    # click each in a group of 1,000 looks perfectly concentrated and is perfectly
+    # uniform. What separates a hub from a facet is not the shape of the
+    # distribution but the absolute size of its head: a page with one click is not
+    # a hub no matter how alone it is.
+    promote_min_exemplar_clicks: int = 10
     # An impressions-heavy, click-poor group is the faceted-search signature even
     # when coverage is borderline.
     facet_min_impressions: int = 10_000
@@ -186,7 +193,7 @@ def summarise_group(
     group.exemplars = [
         m.url
         for m in sorted(known, key=lambda m: -(m.clicks or 0))[:exemplar_limit]
-        if (m.clicks or 0) > 0
+        if (m.clicks or 0) >= thresholds.promote_min_exemplar_clicks
     ]
 
     # Confidence is about how much of the group we actually measured, not about how
@@ -195,9 +202,11 @@ def summarise_group(
     group.confidence = "high" if measured >= 0.8 else "medium" if measured >= 0.4 else "low"
 
     coverage = group.coverage
+    best = max((m.clicks or 0) for m in known)
     concentrated = (
         group.top_decile_click_share >= thresholds.concentration
         and group.total_clicks >= thresholds.promote_min_clicks
+        and best >= thresholds.promote_min_exemplar_clicks
     )
 
     if coverage >= thresholds.coverage_include:
@@ -266,8 +275,16 @@ def _apply_overrides(
 
     # Impressions without clicks, at scale, is faceted search even when coverage is
     # borderline: Google indexes the pages and nobody picks them.
+    #
+    # It must not fire on PROMOTE_EXEMPLARS. A facet group can hold a genuine hub --
+    # `/location/sydney/` taking 150 of a group's 200 clicks -- and forcing the whole
+    # group out discards the one page in it worth indexing. Where exemplars exist,
+    # promoting them already demotes the tail, which is what this override wants;
+    # the two rules would otherwise disagree about the same group. The override still
+    # earns its place on the diffuse case: a facet group whose clicks are spread too
+    # thinly to concentrate lands in REVIEW, and this is what settles it.
     if (
-        group.verdict is not GroupVerdict.EXCLUDE
+        group.verdict not in (GroupVerdict.EXCLUDE, GroupVerdict.PROMOTE_EXEMPLARS)
         and group.total_impressions >= thresholds.facet_min_impressions
         and group.mean_ctr < thresholds.facet_max_ctr
         and group.url_count > thresholds.min_group_size_for_exclude

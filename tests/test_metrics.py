@@ -220,3 +220,28 @@ def test_concentration_without_volume_is_not_promoted():
     urls, metrics = pages(clicks)
     group = summarise_group("AllNew_DriveType", urls, metrics)
     assert group.verdict is GroupVerdict.EXCLUDE
+
+
+def test_a_facet_group_with_a_real_hub_keeps_the_hub():
+    """The two rules disagreed: concentration promoted, the facet override excluded.
+
+    AllNew_Location with 200 clicks, 150 on /location/sydney/, is faceted by every
+    signature test -- and the Sydney hub still belongs in the index.
+    """
+    clicks = [0] * 4_000
+    clicks[0], clicks[1], clicks[2] = 150, 20, 15
+    urls, metrics = pages(clicks, impressions=120)
+    group = summarise_group("AllNew_Location", urls, metrics)
+
+    assert group.verdict is GroupVerdict.PROMOTE_EXEMPLARS
+    assert group.exemplars[0].endswith("p0")
+
+
+def test_the_facet_override_still_settles_the_diffuse_case():
+    """Clicks too thin to concentrate: nothing to promote, so the override decides."""
+    clicks = [1] * 70 + [0] * 930
+    urls, metrics = pages(clicks, impressions=900)
+    group = summarise_group("AllUsed_Fuel", urls, metrics)
+
+    assert group.verdict is GroupVerdict.EXCLUDE
+    assert group.overridden
