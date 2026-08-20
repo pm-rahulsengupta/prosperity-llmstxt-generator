@@ -35,13 +35,16 @@ from app.auth import (
     user_from_claims,
 )
 from app.config import get_settings
+from app.core.edits import EditTarget, apply_operations
 from app.core.pipeline import rebuild
 from app.core.ranking import PATTERN_LABELS, PATTERN_TEMPLATES
 from app.core.render import render_combined
 from app.db import repo
-from app.db.base import get_session
-from app.db.models import RunStatus
+from app.db.base import get_session, session_scope
+from app.db.models import ChatMessage, DocumentRevision, RunStatus
+from app.llm.client import LLMClient
 from app.llm.prompts.plan import CrawlPlan
+from app.llm.stages import apply_chat_turn
 from app.scrape.discover import normalise_site_url
 
 logger = logging.getLogger(__name__)
@@ -470,6 +473,176 @@ async def download(
         content=bodies[kind],
         media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{kind}"'},
+    )
+
+
+@app.post("/runs/{run_id}/chat", response_class=HTMLResponse)
+async def chat_edit(
+    request: Request,
+    run_id: UUID,
+    message: str = Form(...),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Edit the finished file by conversation.
+
+    The model returns operations, not text. They are applied to the same rows the
+    edit form writes to, the file is re-rendered from those rows, and the result is
+    validated -- and if the edit introduced a spec *error* the whole turn is rolled
+    back. That ordering is the point: a chat that can produce an invalid client
+    deliverable is worse than no chat.
+    """
+    run = await repo.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such run.")
+    if not run.llmstxt:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Nothing generated yet.")
+
+    pages = await repo.get_pages(session, run_id)
+    before = _result_from_rows(run, pages)
+    excluded_urls = [page.url for page in pages if not page.included]
+
+    turn = await apply_chat_turn(
+        LLMClient(settings),
+        request=message,
+        site_name=run.site_name,
+        site_summary=run.site_summary,
+        sections=before.sections,
+        optional=before.optional,
+        excluded=excluded_urls,
+    )
+
+    session.add(ChatMessage(run_id=run_id, role="user", body=message.strip(), author=user.email))
+
+    if turn.rejected or not turn.operations:
+        reply = turn.rejected or turn.reply or "No change was needed."
+        session.add(ChatMessage(run_id=run_id, role="assistant", body=reply, author="model"))
+        await session.commit()
+        return await _chat_panel(request, session, run_id, user)
+
+    # Snapshot before touching anything, so undo restores the model and not just
+    # the rendered text.
+    session.add(
+        DocumentRevision(
+            run_id=run_id,
+            llmstxt=run.llmstxt,
+            llms_full=run.llms_full,
+            site_name=run.site_name,
+            site_summary=run.site_summary,
+            pages={
+                page.url: {
+                    "title": page.title,
+                    "description": page.description,
+                    "section": page.section_name,
+                    "is_optional": page.is_optional,
+                    "included": page.included,
+                }
+                for page in pages
+            },
+            reason=message.strip()[:255],
+            author=user.email,
+        )
+    )
+
+    target = EditTarget(
+        site_name=run.site_name,
+        site_summary=run.site_summary,
+        notes=run.notes,
+        pages={
+            page.url: {
+                "title": page.title,
+                "description": page.description,
+                "section": page.section_name,
+                "is_optional": page.is_optional,
+                "included": page.included,
+            }
+            for page in pages
+        },
+    )
+    report = apply_operations(target, turn.operations)
+
+    for page in pages:
+        edited = target.pages[page.url]
+        page.title = edited["title"]
+        page.description = edited["description"]
+        page.section_name = edited["section"]
+        page.is_optional = bool(edited["is_optional"])
+        page.included = bool(edited["included"])
+    run.site_name = target.site_name
+    run.site_summary = target.site_summary
+    run.notes = target.notes
+
+    rebuilt = rebuild(
+        _result_from_rows(run, pages),
+        excluded_urls={page.url for page in pages if not page.included},
+        site_name=run.site_name,
+        site_summary=run.site_summary,
+        section_order=target.section_order or None,
+    )
+
+    # The gate. A new error-level issue means the edit broke the spec, so nothing
+    # is kept -- the user is told what it would have done instead.
+    was = {issue.get("code") for issue in (run.issues or []) if issue.get("level") == "error"}
+    now = {issue.code for issue in rebuilt.issues if issue.level == "error"}
+    if now - was:
+        await session.rollback()
+        broke = ", ".join(sorted(now - was))
+        async with session_scope() as fresh:
+            fresh.add(
+                ChatMessage(run_id=run_id, role="user", body=message.strip(), author=user.email)
+            )
+            fresh.add(
+                ChatMessage(
+                    run_id=run_id,
+                    role="assistant",
+                    body=(
+                        f"That edit would have made the file invalid ({broke}), so I have not "
+                        "applied it. Nothing changed."
+                    ),
+                    author="model",
+                )
+            )
+        return await _chat_panel(request, session, run_id, user)
+
+    await repo.store_result(session, run, rebuilt)
+
+    reply = turn.reply or "Done."
+    if report.rejected:
+        reply += " Refused: " + "; ".join(report.rejected)
+    session.add(
+        ChatMessage(
+            run_id=run_id,
+            role="assistant",
+            body=reply,
+            operations=report.applied,
+            rejected=report.rejected,
+            author="model",
+        )
+    )
+    await repo.record_event(
+        session, run_id, "chat", f"{user.email}: {len(report.applied)} edit(s) applied"
+    )
+    await session.commit()
+    return await _chat_panel(request, session, run_id, user)
+
+
+@app.get("/runs/{run_id}/chat", response_class=HTMLResponse)
+async def chat_panel(
+    request: Request,
+    run_id: UUID,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _chat_panel(request, session, run_id, user)
+
+
+async def _chat_panel(request: Request, session: AsyncSession, run_id: UUID, user: User):
+    run = await repo.get_run(session, run_id)
+    messages = await repo.recent_chat(session, run_id)
+    return templates.TemplateResponse(
+        request,
+        "partials/chat.html",
+        {"user": user, "run": run, "messages": messages},
     )
 
 

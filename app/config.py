@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     llm_model_triage: str = "gpt-4o-mini"
     llm_model_summarise: str = "gpt-4o-mini"
     llm_model_qa: str = "gpt-4o"
+    llm_model_chat: str = "gpt-4o"
 
     # --- Crawler ----------------------------------------------------------
     max_browser_concurrency: int = Field(default=2, ge=1, le=8)

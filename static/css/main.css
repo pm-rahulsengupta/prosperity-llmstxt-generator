@@ -410,3 +410,31 @@ pre.output {
     header.top .brand img { height: 34px; }
     header.top .bar-divider { display: none; }
 }
+
+/* ── Chat editing ───────────────────────────────────────────────────────── */
+
+.chat-log {
+    max-height: 22rem;
+    overflow-y: auto;
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.chat-turn {
+    padding: 0.55rem 0.75rem;
+    border-radius: var(--pm-radius-sm);
+    font-size: var(--pm-sm);
+    max-width: 46rem;
+}
+/* The request, in the reader's own voice: emerald wash, gunmetal text. */
+.chat-turn.user { background: var(--pm-emerald-wash); align-self: flex-end; }
+.chat-turn.assistant { background: var(--pm-sunken); border: 1px solid var(--pm-rule); }
+.chat-body { white-space: pre-wrap; }
+.chat-ops {
+    margin-top: 0.35rem;
+    font-family: var(--pm-mono);
+    font-size: var(--pm-2xs);
+    color: var(--pm-ink-muted);
+    word-break: break-word;
+}

@@ -226,3 +226,16 @@ def indexed_estimate_is_fresh(config: SiteConfig | None, max_age_days: int = 30)
         return False
     age = datetime.now(UTC) - config.indexed_checked_at
     return age.days < max_age_days
+
+
+async def recent_chat(session: AsyncSession, run_id: uuid.UUID, limit: int = 40) -> list:
+    """The editing conversation, oldest first."""
+    from app.db.models import ChatMessage
+
+    result = await session.execute(
+        select(ChatMessage)
+        .where(ChatMessage.run_id == run_id)
+        .order_by(desc(ChatMessage.at), desc(ChatMessage.id))
+        .limit(limit)
+    )
+    return list(reversed(list(result.scalars())))

@@ -37,6 +37,7 @@ class Stage(StrEnum):
     TRIAGE = "triage"
     SUMMARISE = "summarise"
     QA = "qa"
+    CHAT = "chat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,9 @@ BUDGETS: dict[Stage, StageBudget] = {
     Stage.TRIAGE: StageBudget(max_tokens=4_000, temperature=0.0),
     Stage.SUMMARISE: StageBudget(max_tokens=3_000, temperature=0.3),
     Stage.QA: StageBudget(max_tokens=2_000, temperature=0.1),
+    # An edit turn returns a handful of operations and one line of prose. The
+    # budget is for a user asking to rewrite every description at once.
+    Stage.CHAT: StageBudget(max_tokens=4_000, temperature=0.2),
 }
 
 
@@ -115,6 +119,7 @@ class LLMClient:
             Stage.TRIAGE: self.settings.llm_model_triage,
             Stage.SUMMARISE: self.settings.llm_model_summarise,
             Stage.QA: self.settings.llm_model_qa,
+            Stage.CHAT: self.settings.llm_model_chat,
         }[stage]
 
     def _ensure_client(self) -> Any:

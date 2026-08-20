@@ -13,13 +13,15 @@ import logging
 import re
 from urllib.parse import urlparse
 
-from app.core.models import PageEntry, ValidationIssue
+from app.core.models import PageEntry, Section, ValidationIssue
 from app.core.ranking import PATTERN_CATALOG, template_order
 from app.llm.client import LLMClient, Stage
+from app.llm.prompts import chat as chat_prompt
 from app.llm.prompts import plan as plan_prompt
 from app.llm.prompts import qa as qa_prompt
 from app.llm.prompts import summarise as summarise_prompt
 from app.llm.prompts import triage as triage_prompt
+from app.llm.prompts.chat import ChatTurn
 from app.llm.prompts.plan import CrawlPlan, TemplateRule
 from app.llm.prompts.summarise import PageCopy, SiteBlurb
 from app.llm.prompts.triage import Assignment
@@ -299,3 +301,46 @@ async def review_output(
         schema_name="spec_review",
     )
     return qa_prompt.parse(data).findings if data else []
+
+
+# -- stage 5: chat editing --------------------------------------------------
+
+
+async def apply_chat_turn(
+    client: LLMClient,
+    request: str,
+    site_name: str,
+    site_summary: str,
+    sections: list[Section],
+    optional: list[PageEntry],
+    excluded: list[str],
+) -> ChatTurn:
+    """One conversational edit. Returns operations, never a rendered file.
+
+    A refusal here is a real answer: with no key configured there is nothing
+    sensible to fall back to, because unlike the other four stages there is no
+    deterministic version of "do what this sentence asks".
+    """
+    if not client.enabled:
+        return ChatTurn(rejected="Editing by chat needs an OpenAI key; none is configured.")
+    if not request.strip():
+        return ChatTurn(rejected="Nothing to do.")
+
+    section_names = [section.name for section in sections]
+    known_urls = {page.url for section in sections for page in section.pages}
+    known_urls.update(page.url for page in optional)
+    known_urls.update(excluded)
+
+    data = await client.structured(
+        stage=Stage.CHAT,
+        system=chat_prompt.SYSTEM,
+        user=chat_prompt.build_user_message(
+            request, site_name, site_summary, sections, optional, excluded
+        ),
+        schema=chat_prompt.schema(section_names, sorted(known_urls)),
+        schema_name="edit_operations",
+    )
+    if data is None:
+        return ChatTurn(rejected="The model did not return a usable edit. Nothing was changed.")
+
+    return chat_prompt.parse(data)

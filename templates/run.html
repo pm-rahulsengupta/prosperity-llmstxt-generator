@@ -103,6 +103,14 @@
     <pre class="output">{{ run.llmstxt }}</pre>
 </div>
 
+<div class="panel" id="chat"
+     hx-get="/runs/{{ run.id }}/chat"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    <h2>Edit by chat</h2>
+    <p class="muted">Loading&hellip;</p>
+</div>
+
 <div class="panel">
     <h2>Edit and re-render</h2>
     <form method="post" action="/runs/{{ run.id }}/pages">

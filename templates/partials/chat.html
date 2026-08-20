@@ -1,0 +1,40 @@
+<h2>Edit by chat</h2>
+<p class="muted">
+    Ask for changes in plain English &mdash; "tighten the descriptions", "move the
+    award posts to Optional", "the summary is too generic". Edits are applied to the
+    pages themselves, not to the text, so they survive a later re-render.
+</p>
+
+{% if messages %}
+<div class="chat-log">
+    {% for m in messages %}
+    <div class="chat-turn {{ m.role }}">
+        <div class="chat-body">{{ m.body }}</div>
+        {% if m.operations %}
+        <div class="chat-ops">{{ m.operations | join(' · ') }}</div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="muted">No edits yet.</p>
+{% endif %}
+
+<form hx-post="/runs/{{ run.id }}/chat"
+      hx-target="#chat"
+      hx-swap="innerHTML"
+      hx-disabled-elt="find button, find input"
+      hx-on::after-request="this.reset()">
+    <div class="row">
+        <div>
+            <label for="message">What would you like changed?</label>
+            <input type="text" id="message" name="message" required
+                   placeholder="Shorten every description to under 12 words">
+        </div>
+        <div class="narrow"><button class="primary" type="submit">Send</button></div>
+    </div>
+    <p class="muted">
+        The file is re-validated after every edit. If a change would make it
+        spec-invalid it is rolled back and nothing is altered.
+    </p>
+</form>

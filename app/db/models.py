@@ -91,6 +91,10 @@ class Run(Base):
     # -- output -------------------------------------------------------------
     site_name: Mapped[str] = mapped_column(String(255), default="")
     site_summary: Mapped[str] = mapped_column(Text, default="")
+    # Prose block under the blockquote. The spec allows any markdown except
+    # headings there; it is where disambiguation an agent would otherwise get
+    # wrong belongs.
+    notes: Mapped[str] = mapped_column(Text, default="")
     pattern: Mapped[str] = mapped_column(String(32), default="")
     llmstxt: Mapped[str] = mapped_column(Text, default="")
     llms_full: Mapped[str] = mapped_column(Text, default="")
@@ -332,3 +336,60 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ChatMessage(Base):
+    """One turn of the editing conversation.
+
+    Kept because a client deliverable that was edited by a model should be able to
+    answer "who asked for what, and what did it do" months later. The operations
+    are stored alongside the prose so the answer is specific.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # user | assistant
+    body: Mapped[str] = mapped_column(Text, default="")
+    # What the turn actually did, and what it refused to do.
+    operations: Mapped[list] = mapped_column(JSONB, default=list)
+    rejected: Mapped[list] = mapped_column(JSONB, default=list)
+    author: Mapped[str] = mapped_column(String(320), default="")
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_chat_messages_run_at", "run_id", "at"),)
+
+
+class DocumentRevision(Base):
+    """The rendered file as it stood before an edit, so undo is real.
+
+    Stored per edit rather than per run: the point of keeping them is to be able to
+    go back one step after a chat turn did something unwanted, which is the failure
+    mode a conversational editor actually has.
+    """
+
+    __tablename__ = "document_revisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    llmstxt: Mapped[str] = mapped_column(Text, default="")
+    llms_full: Mapped[str] = mapped_column(Text, default="")
+    # Snapshot of the per-page state, so a revert restores assignments and copy and
+    # not merely the rendered text -- the text is downstream of the model.
+    pages: Mapped[dict] = mapped_column(JSONB, default=dict)
+    site_name: Mapped[str] = mapped_column(String(255), default="")
+    site_summary: Mapped[str] = mapped_column(Text, default="")
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    author: Mapped[str] = mapped_column(String(320), default="")
+    at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_document_revisions_run_at", "run_id", "at"),)
