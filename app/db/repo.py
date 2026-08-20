@@ -345,7 +345,9 @@ async def metrics_summary(session: AsyncSession, domain: str) -> dict:
     }
 
 
-async def purge_embargoed_pages(session: AsyncSession, domain: str, patterns: tuple[str, ...]) -> int:
+async def purge_embargoed_pages(
+    session: AsyncSession, domain: str, patterns: tuple[str, ...]
+) -> int:
     """Delete stored page bodies for a domain that match an embargo pattern.
 
     Declaring an embargo has to be retroactive. The crawl filter only protects
@@ -370,6 +372,61 @@ async def purge_embargoed_pages(session: AsyncSession, domain: str, patterns: tu
         await session.execute(delete(Page).where(Page.id.in_(doomed)))
         await session.flush()
     return len(doomed)
+
+
+async def is_cancelled(session: AsyncSession, run_id: uuid.UUID) -> bool:
+    """Has someone asked this run to stop?
+
+    Read as a bare column rather than through `get_run`, because it is checked at
+    every stage boundary and pulling the pages relationship each time to answer a
+    boolean would be the most expensive question in the pipeline.
+    """
+    result = await session.execute(select(Run.status).where(Run.id == run_id))
+    return result.scalar_one_or_none() == RunStatus.CANCELLED
+
+
+async def delete_run(session: AsyncSession, run_id: uuid.UUID) -> bool:
+    """Remove a run and everything hanging off it. Irreversible.
+
+    Deliberately a plain delete with no soft-delete flag. A half-deleted run that
+    still appears in cost totals and group rollups is worse than either outcome,
+    and the thing an operator wants gone is usually the stored page bodies rather
+    than the row.
+
+    Cascades are declared on the foreign keys, so pages, sections, events and
+    document revisions go with it.
+    """
+    run = await session.get(Run, run_id)
+    if run is None:
+        return False
+    await session.delete(run)
+    await session.flush()
+    return True
+
+
+async def clone_run(session: AsyncSession, run_id: uuid.UUID, created_by: str) -> Run | None:
+    """Start a fresh run against the same site.
+
+    A new row rather than a reset of the old one. Re-running is nearly always a
+    comparison -- did the fix change the output -- and resetting in place destroys
+    the artefact being compared against. It also keeps a failed run's events
+    readable while its replacement runs, which is exactly when they are wanted.
+    """
+    original = await session.get(Run, run_id)
+    if original is None:
+        return None
+    fresh = Run(
+        site_url=original.site_url,
+        domain=original.domain,
+        created_by=created_by,
+        source=original.source,
+        # The cap is carried because it is usually a deliberate choice; the plan
+        # is not, because re-running exists to get a new one.
+        max_pages=original.max_pages,
+    )
+    session.add(fresh)
+    await session.flush()
+    return fresh
 
 
 async def record_observed_shape(session: AsyncSession, domain: str, shape: dict[str, int]) -> None:

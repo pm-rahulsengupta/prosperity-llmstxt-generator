@@ -154,4 +154,53 @@
 </div>
 {% endif %}
 
+<div class="panel">
+    <h3>Run actions</h3>
+
+    <div class="actions">
+        <form method="post" action="/runs/{{ run.id }}/rerun">
+            <button type="submit">Re-run from the start</button>
+            <span class="hint">
+                Starts a new run for {{ run.domain }} and leaves this one intact, so the
+                two can be compared. It stops at the review gate like any other run.
+            </span>
+        </form>
+
+        {% if not status.is_terminal %}
+        <form method="post" action="/runs/{{ run.id }}/cancel">
+            <button type="submit">Cancel</button>
+            <span class="hint">
+                Stops before the next stage. The stage now in flight finishes &mdash;
+                interrupting a crawl or a batch of LLM calls mid-way leaves worse state
+                than it saves.
+            </span>
+        </form>
+        {% endif %}
+    </div>
+
+    {% if user and user.is_admin %}
+    <details class="danger">
+        <summary>Delete this run</summary>
+        {% if status.is_terminal %}
+        <p class="muted">
+            Deletes the run, its {{ pages|length }} stored page{{ '' if pages|length == 1 else 's' }},
+            its events and every saved revision. There is no undo and no soft delete.
+        </p>
+        <form method="post" action="/runs/{{ run.id }}/delete">
+            <div class="field">
+                <label for="confirm">Type <code>{{ run.domain }}</code> to confirm</label>
+                <input type="text" id="confirm" name="confirm" autocomplete="off" required>
+            </div>
+            <button class="destructive" type="submit">Delete permanently</button>
+        </form>
+        {% else %}
+        <p class="muted">
+            This run is still working. Cancel it first &mdash; a worker mid-stage still
+            holds its id and would write rows back after the delete.
+        </p>
+        {% endif %}
+    </details>
+    {% endif %}
+</div>
+
 {% endblock %}

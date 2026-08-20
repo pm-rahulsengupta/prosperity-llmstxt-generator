@@ -67,6 +67,30 @@ def build_fetcher(settings, allow_browser: bool = True) -> PageFetcher:
     )
 
 
+class Cancelled(Exception):
+    """Raised at a stage boundary when someone has asked the run to stop."""
+
+
+async def _abort_if_cancelled(rid: uuid.UUID, stage: str) -> None:
+    """Cooperative cancellation, checked between stages.
+
+    There is no way to interrupt an in-flight stage and no attempt to fake one: a
+    crawl of 400 pages or a batch of LLM calls runs to completion, and cancelling
+    mid-flight would leave half-written state that is worse than the work saved.
+    What this guarantees is that no *new* expensive stage starts, which is where
+    the money is -- the crawl and the per-page LLM spend both sit behind a check.
+
+    A status nothing reads would be a lie. `CANCELLED` existed as an enum member
+    before this and nothing set it or acted on it.
+    """
+    async with session_scope() as session:
+        if await repo.is_cancelled(session, rid):
+            await repo.record_event(
+                session, rid, stage, "Cancelled by request; no further stages will run"
+            )
+            raise Cancelled
+
+
 @app.task(name="preflight", queue=QUEUE_CRAWL, retry=2)
 async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
     """Recon, size check and crawl plan. Stops at the review gate, crawls nothing."""
@@ -187,6 +211,7 @@ async def generate_task(run_id: str) -> None:
         await repo.record_event(session, rid, "crawl", "Re-reading sitemaps")
 
     try:
+        await _abort_if_cancelled(rid, "crawl")
         pre = await run_preflight(site_url, settings)
         urls = select_urls(pre.recon, plan, cap)
 
@@ -276,6 +301,7 @@ async def generate_task(run_id: str) -> None:
                 await repo.set_status(session, run, RunStatus.TRIAGING)
 
         # -- triage ---------------------------------------------------------
+        await _abort_if_cancelled(rid, "triage")
         assignments = await triage_pages(client, entries, plan.site_pattern, scores)
         protected = 0
         for entry in entries:
@@ -311,6 +337,7 @@ async def generate_task(run_id: str) -> None:
                 await repo.set_status(session, run, RunStatus.SUMMARISING)
 
         # -- summarise ------------------------------------------------------
+        await _abort_if_cancelled(rid, "summarise")
         ranked = sort_by_importance(entries)
         blurb = await summarise_site(client, site_url, plan.site_name, ranked)
         copy = await summarise_pages(client, ranked)
@@ -392,6 +419,19 @@ async def generate_task(run_id: str) -> None:
                 done=result.pages_included,
                 total=len(entries),
             )
+
+    except Cancelled:
+        # Caught before the generic handler, and not re-raised. A cancelled run is
+        # not a failed one: marking it FAILED would put it in the error counts and
+        # invite someone to investigate a thing a person did on purpose, and
+        # re-raising would have procrastinate retry it -- restarting the work the
+        # cancellation existed to stop.
+        logger.info("run %s cancelled", run_id)
+        async with session_scope() as session:
+            run = await repo.get_run(session, rid)
+            if run is not None:
+                run.stats = {**(run.stats or {}), "llm": usage.as_dict()}
+        return
 
     except Exception as exc:
         logger.exception("generate failed for run %s", run_id)

@@ -340,9 +340,7 @@ class Drift:
     @property
     def affected(self) -> frozenset[str]:
         """Exactly the groups needing another look. Everything else stands."""
-        return frozenset(
-            [*self.added, *self.removed, *(name for name, _, _ in self.resized)]
-        )
+        return frozenset([*self.added, *self.removed, *(name for name, _, _ in self.resized)])
 
     def reason(self) -> str:
         """One line for the operator, naming what moved rather than that something did."""

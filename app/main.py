@@ -517,6 +517,106 @@ async def run_detail(
     )
 
 
+@app.post("/runs/{run_id}/rerun")
+async def rerun(
+    run_id: UUID,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Start a fresh run against the same site, from the beginning.
+
+    A new run rather than a reset of this one. Re-running is nearly always a
+    comparison -- did the fix change the output -- and resetting in place
+    destroys the artefact being compared against. The old run stays readable
+    while its replacement works, which is exactly when its events are wanted.
+
+    It goes through preflight and stops at the review gate like any other run:
+    re-running is not a licence to skip the human. The domain's brief is reused,
+    so nobody is asked the onboarding questions twice.
+    """
+    fresh = await repo.clone_run(session, run_id, created_by=user.email)
+    if fresh is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such run.")
+    new_id = str(fresh.id)
+    await repo.record_event(
+        session, fresh.id, "preflight", f"Re-run of {run_id} started by {user.email}"
+    )
+    await session.commit()
+
+    from app.jobs.tasks import preflight_task
+
+    await preflight_task.defer_async(run_id=new_id, requested_max_pages=fresh.max_pages or 0)
+    return RedirectResponse(f"/runs/{new_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: UUID,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Ask a running job to stop at its next stage boundary.
+
+    Cooperative, and honest about it: the stage in flight finishes. A crawl of
+    400 pages or a batch of LLM calls runs to completion, because interrupting
+    one leaves half-written state that is worse than the work saved. What
+    stopping guarantees is that no further expensive stage begins.
+    """
+    run = await repo.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such run.")
+    if RunStatus(run.status).is_terminal:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "That run has already finished.")
+
+    await repo.set_status(session, run, RunStatus.CANCELLED)
+    await repo.record_event(session, run_id, "cancelled", f"Cancelled by {user.email}")
+    await session.commit()
+    return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/runs/{run_id}/delete")
+async def delete_run(
+    request: Request,
+    run_id: UUID,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete a run and everything it stored. Irreversible.
+
+    Three guards, each for a different failure:
+
+    * **Admin only.** There is no undo and no soft delete, and a run holds
+      crawled client page bodies.
+    * **Terminal runs only.** A worker mid-stage still holds this run's id and
+      would write rows back after the delete, or fail in a way that reads as a
+      bug. Cancel first; the button says so.
+    * **Typed confirmation.** The domain has to be typed. A second click is not
+      a decision -- it is the same click twice -- and this is the one action in
+      the tool that cannot be walked back.
+    """
+    run = await repo.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such run.")
+    if not RunStatus(run.status).is_terminal:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That run is still working. Cancel it first, then delete it.",
+        )
+
+    form = await request.form()
+    if str(form.get("confirm") or "").strip().lower() != run.domain.lower():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Type {run.domain} to confirm. Nothing was deleted.",
+        )
+
+    domain = run.domain
+    await repo.delete_run(session, run_id)
+    await session.commit()
+    logger.info("run %s (%s) deleted by %s", run_id, domain, user.email)
+    return RedirectResponse("/?deleted=" + quote(domain), status_code=status.HTTP_303_SEE_OTHER)
+
+
 @app.get("/runs/{run_id}/progress", response_class=HTMLResponse)
 async def run_progress(
     request: Request,

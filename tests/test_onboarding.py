@@ -510,3 +510,102 @@ def test_shrinking_is_as_detectable_as_growing():
     assert gutted.resized == (("Guides", 4_000, 200),)
     assert "shrank" in gutted.reason()
     assert "grew" in grown.reason()
+
+
+# -- run actions ------------------------------------------------------------
+
+
+def test_the_run_page_renders_its_actions():
+    """Same guard as the brief form: a missing variable here is a 500 on the
+    page an operator uses most."""
+    from types import SimpleNamespace
+
+    from jinja2 import StrictUndefined
+
+    from app.db.models import RunStatus
+    from app.main import templates
+
+    env = templates.env
+    previous, env.undefined = env.undefined, StrictUndefined
+    try:
+        html = env.get_template("run.html").render(
+            request=None,
+            user=SimpleNamespace(email="a@b.c", is_admin=True),
+            run=SimpleNamespace(
+                id="r1",
+                domain="example.com",
+                site_url="https://example.com",
+                status="complete",
+                pattern="agency_services",
+                max_pages=400,
+                site_name="",
+                site_summary="",
+                notes="",
+                llmstxt="",
+                llms_full="",
+                issues=[],
+                stats={},
+                error="",
+                sitemap_html=10,
+                sitemap_total=10,
+                indexed_estimate=10,
+                size_tier="small",
+                size_warnings=[],
+                created_at=None,
+                plan_source="llm",
+            ),
+            plan=SimpleNamespace(rules=[], site_pattern="agency_services", reasoning=""),
+            pages=[],
+            events=[],
+            status=RunStatus.COMPLETE,
+        )
+    finally:
+        env.undefined = previous
+
+    assert "Re-run from the start" in html
+    assert "Delete permanently" in html
+    # Terminal run, so cancel is not offered.
+    assert 'action="/runs/r1/cancel"' not in html
+
+
+def test_delete_is_hidden_from_a_non_admin():
+    from types import SimpleNamespace
+
+    from app.db.models import RunStatus
+    from app.main import templates
+
+    html = templates.env.get_template("run.html").render(
+        request=None,
+        user=SimpleNamespace(email="a@b.c", is_admin=False),
+        run=SimpleNamespace(
+            id="r1",
+            domain="example.com",
+            site_url="https://example.com",
+            status="complete",
+            pattern="",
+            max_pages=400,
+            site_name="",
+            site_summary="",
+            notes="",
+            llmstxt="",
+            llms_full="",
+            issues=[],
+            stats={},
+            error="",
+            sitemap_html=10,
+            sitemap_total=10,
+            indexed_estimate=10,
+            size_tier="small",
+            size_warnings=[],
+            created_at=None,
+            plan_source="llm",
+        ),
+        plan=SimpleNamespace(rules=[], site_pattern="", reasoning=""),
+        pages=[],
+        events=[],
+        status=RunStatus.COMPLETE,
+    )
+
+    assert "Delete permanently" not in html
+    # Re-running is safe, so it stays available to everyone.
+    assert "Re-run from the start" in html

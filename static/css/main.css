@@ -505,3 +505,37 @@ pre.output {
 .notice.ok { background: var(--pm-emerald); color: var(--pm-gunmetal); }
 input[type="file"] { font-size: var(--pm-sm); padding: 0.4rem 0; }
 input[type="date"] { font-family: inherit; }
+
+/* -- run actions ------------------------------------------------------------
+   Delete is styled apart from the others and folded away behind a summary. The
+   two safe actions sit in the open; the irreversible one takes a deliberate
+   click to even reveal, and a typed confirmation to perform. */
+
+.actions { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
+.actions form { flex: 1 1 18rem; }
+.actions .hint {
+    display: block;
+    margin-top: 0.4rem;
+    font-size: var(--pm-xs);
+    color: var(--pm-ink-muted);
+}
+
+details.danger {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--pm-rule);
+}
+
+details.danger summary {
+    cursor: pointer;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink-muted);
+}
+
+details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
+
+button.destructive {
+    background: var(--pm-red);
+    color: #ffffff;
+    border-color: var(--pm-red);
+}
