@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     firecrawl_api_key: str = ""
     firecrawl_base_url: str = "https://api.firecrawl.dev/v2"
 
+    # --- Google Search Console (the metrics source that repairs page ranking) --
+    #
+    # Two ways in, because the two environments cannot share one. Locally the key
+    # is a file kept outside the repo; on Railway there is no filesystem to put it
+    # on, so the whole JSON document goes in a service variable. Neither ever
+    # reaches git -- the repo is public, and a key that lands in it is compromised
+    # on push, with rotation the only remedy.
+    gsc_service_account_file: str = ""
+    gsc_service_account_json: str = ""
+
     # --- Size pre-check (DataForSEO `site:` query, one SERP call per site) -
     dataforseo_login: str = ""
     dataforseo_password: str = ""
@@ -115,6 +125,31 @@ class Settings(BaseSettings):
     @property
     def size_check_enabled(self) -> bool:
         return bool(self.dataforseo_login and self.dataforseo_password)
+
+    @property
+    def gsc_enabled(self) -> bool:
+        return bool(self.gsc_service_account_json or self.gsc_service_account_file)
+
+    def gsc_credentials(self) -> dict | None:
+        """The service-account document, from whichever source is configured.
+
+        Inline JSON wins: if a deploy sets both, the variable is the deliberate
+        one and a stale path left in `.env` should not quietly take precedence.
+        Returns None rather than raising when unconfigured, because running
+        without GSC is a supported mode, not an error -- ranking falls back to
+        depth and content signals and says so.
+        """
+        import json
+        from pathlib import Path
+
+        if self.gsc_service_account_json:
+            return json.loads(self.gsc_service_account_json)
+        if self.gsc_service_account_file:
+            path = Path(self.gsc_service_account_file).expanduser()
+            if not path.is_file():
+                raise FileNotFoundError(f"GSC service-account file not found: {path}")
+            return json.loads(path.read_text(encoding="utf-8"))
+        return None
 
     @property
     def sso_enabled(self) -> bool:

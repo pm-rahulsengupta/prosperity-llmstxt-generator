@@ -102,13 +102,18 @@ def test_a_declaration_does_not_force_a_group_in():
 
 
 def test_the_floor_keeps_the_exemplars_the_evidence_found():
-    """Concentration still decides which pages; the operator only stopped the drop."""
+    """The evidence still decides which pages; the operator only stopped the drop.
+
+    Two earners in four thousand URLs cannot be measured for concentration, so
+    this arrives as a recommendation. The declaration does not upgrade it -- that
+    would be the floor manufacturing a conclusion -- but the named pages survive.
+    """
     clicks = [0] * 4_000
     clicks[0], clicks[1] = 150, 40
     urls, metrics = pages(clicks, prefix="https://x.com/services/p", impressions=120)
     group = summarise_group("Services", urls, metrics, brief=SiteBrief(valuable=("/services/*",)))
 
-    assert group.verdict is GroupVerdict.PROMOTE_EXEMPLARS
+    assert group.verdict is GroupVerdict.REVIEW
     assert group.exemplars[0].endswith("p0")
 
 

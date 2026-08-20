@@ -18,6 +18,8 @@ from app.core.metrics import (
     GroupVerdict,
     PageMetrics,
     Thresholds,
+    canonical_metric_url,
+    merge_metrics,
     planning_table,
     summarise_group,
 )
@@ -68,14 +70,21 @@ def test_a_facet_group_is_excluded():
 
 
 def test_a_group_carried_by_a_few_winners_promotes_them():
-    """The verdict that makes marketplaces tractable: index the hubs, drop the tail."""
-    clicks = [0] * 900 + [800, 640, 520, 410, 380, 300, 240, 180, 120, 90]
+    """The verdict that makes marketplaces tractable: index the hubs, drop the tail.
+
+    Promotion requires a measurable distribution, so this needs enough earners to
+    have one -- 20 of 100 URLs, with the top two taking most of the clicks. The
+    ten-hubs-in-910-URLs shape is the same intent with too few earners to measure,
+    and is handled a rung down as a recommendation rather than a decision.
+    """
+    clicks = [500, 400] + [10] * 18 + [0] * 80
     urls, metrics = pages(clicks)
     group = summarise_group("AllUsed_BodyType", urls, metrics)
 
     assert group.verdict is GroupVerdict.PROMOTE_EXEMPLARS
     assert len(group.exemplars) == 5
-    assert group.top_decile_click_share >= 0.7
+    assert group.head_click_share is not None
+    assert group.head_click_share >= 0.7
 
 
 def test_a_small_weak_group_is_reviewed_not_excluded():
@@ -200,21 +209,28 @@ def test_planning_table_renders_the_decision():
     assert "buying_guide" in table and "include_group" in table
 
 
-def test_concentration_is_checked_before_low_coverage_exclusion():
-    """The gap the spec's decision table left open.
+def test_a_material_head_is_never_excluded_just_because_it_cannot_be_measured():
+    """910 URLs where 10 hub pages take 3,680 clicks: 1.1% coverage.
 
-    910 URLs where 10 hub pages take 3,680 clicks has 1.1% coverage, which lands in
-    the exclude branch — and excluding it throws away the only pages in the group
-    worth indexing. Concentration has to be evaluated first.
+    Coverage alone lands this in the exclude branch, which would throw away the
+    only pages in the group worth indexing. Ten earners is too few to measure a
+    distribution against a 91-URL decile, so promotion cannot be justified either
+    -- the old code promoted it on a statistic that read 100% for arithmetic
+    reasons rather than distributional ones. What survives is the recommendation:
+    the exemplars are named and a human decides.
     """
     clicks = [0] * 900 + [800, 640, 520, 410, 380, 300, 240, 180, 120, 90]
     urls, metrics = pages(clicks)
     group = summarise_group("AllUsed_BodyType", urls, metrics)
-    assert group.verdict is GroupVerdict.PROMOTE_EXEMPLARS
+
+    assert group.verdict is GroupVerdict.REVIEW
+    assert group.head_click_share is None
+    assert group.confidence == "low"
+    assert len(group.exemplars) == 5
     assert group.coverage < 0.05
 
 
-def test_concentration_without_volume_is_not_promoted():
+def test_a_head_without_volume_is_not_promoted():
     """Three clicks on one URL is 100% concentrated and means nothing."""
     clicks = [0] * 900 + [3]
     urls, metrics = pages(clicks)
@@ -233,7 +249,10 @@ def test_a_facet_group_with_a_real_hub_keeps_the_hub():
     urls, metrics = pages(clicks, impressions=120)
     group = summarise_group("AllNew_Location", urls, metrics)
 
-    assert group.verdict is GroupVerdict.PROMOTE_EXEMPLARS
+    # Held for review rather than promoted -- three earners in four thousand URLs
+    # is not a measurable distribution -- but the hub is named either way, which
+    # is the property that matters and the one the override used to destroy.
+    assert group.verdict is GroupVerdict.REVIEW
     assert group.exemplars[0].endswith("p0")
 
 
@@ -245,3 +264,114 @@ def test_the_facet_override_still_settles_the_diffuse_case():
 
     assert group.verdict is GroupVerdict.EXCLUDE
     assert group.overridden
+
+
+# -- the metric itself, not the verdict it feeds -----------------------------
+
+
+def test_sparse_and_uniform_does_not_report_as_concentrated():
+    """The denominator bug, stated directly.
+
+    1,000 URLs where 60 earn 100 clicks each is perfectly uniform among earners.
+    Measured against a 100-URL decile every earner falls inside the top decile and
+    the old statistic read 100%. The verdict was arguably right; the number was
+    not, and a guard bolted onto a statistic that misreports is tuning, not logic.
+    """
+    urls, metrics = pages([100] * 60 + [0] * 940)
+    group = summarise_group("g", urls, metrics)
+
+    assert group.head_click_share is None
+    assert group.verdict is GroupVerdict.REVIEW
+    assert group.confidence == "low"
+
+
+def test_concentration_is_measured_over_earners_not_over_every_url():
+    """Same earners, same clicks, a hundred times more dead URLs.
+
+    Concentration is a property of the distribution among the pages that have one.
+    Padding a group with URLs that earn nothing must not change how lopsided its
+    earners are -- under the old denominator it changed the answer from 41% to
+    100%, and the padding was doing all the work.
+    """
+    earning = [500, 400] + [10] * 18
+    small = summarise_group("small", *pages(earning + [0] * 80))
+    padded = summarise_group("padded", *pages(earning + [0] * 180))
+
+    assert small.head_click_share == padded.head_click_share
+
+
+def test_an_uncomputable_share_is_none_and_never_zero():
+    """0.0 reads as "measured, and flat". None reads as "not answerable"."""
+    for clicks in ([0] * 500, [5] + [0] * 499, [1, 1, 1] + [0] * 497):
+        group = summarise_group("g", *pages(clicks))
+        assert group.head_click_share is None
+
+
+def test_a_group_with_enough_earners_still_gets_a_number():
+    """The metric is not simply disabled: above a decile of earners it works."""
+    group = summarise_group("g", *pages([500, 400] + [10] * 18 + [0] * 80))
+
+    assert group.head_click_share is not None
+    assert 0.0 <= group.head_click_share <= 1.0
+
+
+def test_promotion_needs_a_measured_distribution():
+    """PROMOTE_EXEMPLARS is now a claim about shape, so it needs shape to claim."""
+    measurable = summarise_group("a", *pages([500, 400] + [10] * 18 + [0] * 80))
+    unmeasurable = summarise_group("b", *pages([500, 400] + [0] * 908))
+
+    assert measurable.verdict is GroupVerdict.PROMOTE_EXEMPLARS
+    assert unmeasurable.verdict is GroupVerdict.REVIEW
+    # Both name the same winners; only the confidence in the shape differs.
+    assert unmeasurable.exemplars[:2] == measurable.exemplars[:2]
+
+
+# -- canonicalisation, found against real Search Console data ----------------
+
+
+def test_tracking_parameters_do_not_split_a_page_in_two():
+    """Measured on prosperitymedia.com.au, where the homepage arrived twice."""
+    assert canonical_metric_url(
+        "https://x.com/?utm_source=google_maps&utm_medium=organic"
+    ) == canonical_metric_url("https://x.com/")
+
+
+def test_meaningful_query_parameters_survive():
+    """Stripping every query string would delete real pages on a paginated site."""
+    assert canonical_metric_url("https://x.com/search?q=seo&utm_source=x") == (
+        "https://x.com/search?q=seo"
+    )
+
+
+def test_merging_sums_the_variants_rather_than_picking_one():
+    rows = [
+        PageMetrics(url="https://x.com/", clicks=80, impressions=1_000, source="gsc"),
+        PageMetrics(url="https://x.com/?utm_source=maps", clicks=20, impressions=300, source="gsc"),
+        PageMetrics(url="https://x.com/seo/", clicks=5, impressions=90, source="gsc"),
+    ]
+    merged = merge_metrics(rows)
+
+    assert set(merged) == {"https://x.com/", "https://x.com/seo/"}
+    assert merged["https://x.com/"].clicks == 100
+    assert merged["https://x.com/"].impressions == 1_300
+
+
+def test_unmerged_tracking_urls_understate_coverage():
+    """The invisible half: a tagged URL never joins its sitemap entry.
+
+    Without merging, the group sees one dead URL and loses the clicks entirely,
+    which is how a metric quietly recommends excluding a page that is earning.
+    """
+    sitemap = ["https://x.com/", "https://x.com/seo/"]
+    raw = [
+        PageMetrics(url="https://x.com/?utm_source=maps", clicks=90, impressions=900, source="gsc"),
+        PageMetrics(url="https://x.com/seo/", clicks=10, impressions=200, source="gsc"),
+    ]
+
+    unmerged = summarise_group("g", sitemap, {m.url: m for m in raw})
+    merged = summarise_group("g", sitemap, merge_metrics(raw))
+
+    assert unmerged.total_clicks == 10
+    assert unmerged.coverage == 0.5
+    assert merged.total_clicks == 100
+    assert merged.coverage == 1.0

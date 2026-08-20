@@ -23,10 +23,12 @@ So metrics adjust the internal prior; they never replace it.
 from __future__ import annotations
 
 import statistics
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import StrEnum
 from typing import Literal, Protocol
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from app.core.onboarding import SiteBrief, matches_any
 
@@ -95,12 +97,9 @@ class Thresholds:
     # concentrated and means nothing. A group must earn this many clicks in total
     # before its winners are worth promoting.
     promote_min_clicks: int = 50
-    # And the winners have to be winners. `top_decile_click_share` reports 100%
-    # whenever fewer URLs earn clicks than the decile is wide -- 60 URLs with one
-    # click each in a group of 1,000 looks perfectly concentrated and is perfectly
-    # uniform. What separates a hub from a facet is not the shape of the
-    # distribution but the absolute size of its head: a page with one click is not
-    # a hub no matter how alone it is.
+    # And the winners have to be winners: a page with one click is not a hub no
+    # matter how alone it is. This is also the only evidence available when the
+    # concentration statistic cannot be computed at all -- see `_head_share`.
     promote_min_exemplar_clicks: int = 10
     # An impressions-heavy, click-poor group is the faceted-search signature even
     # when coverage is borderline.
@@ -119,7 +118,9 @@ class GroupMetrics:
     total_impressions: int = 0
     median_clicks: float = 0.0
     p90_clicks: float = 0.0
-    top_decile_click_share: float = 0.0
+    # None means "not computable on this group", which is a different claim from
+    # 0.0 and must not be flattened into one. See `_head_share`.
+    head_click_share: float | None = None
     exemplars: list[str] = field(default_factory=list)
     verdict: GroupVerdict = GroupVerdict.REVIEW
     confidence: Confidence = "low"
@@ -146,19 +147,108 @@ class GroupMetrics:
         return self.total_clicks / self.total_impressions if self.total_impressions else 0.0
 
 
-def _top_decile_share(clicks: list[int]) -> float:
-    """What fraction of the group's clicks the best 10% of its URLs account for.
+# Parameters that identify a traffic source rather than a page. Search Console
+# reports each variant as its own row, so a campaign-tagged homepage arrives as a
+# separate page from the homepage.
+TRACKING_PARAMS = frozenset(
+    {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "utm_id",
+        "gclid",
+        "gbraid",
+        "wbraid",
+        "fbclid",
+        "msclkid",
+        "dclid",
+        "mc_cid",
+        "mc_eid",
+        "_ga",
+        "ref",
+        "referrer",
+    }
+)
 
-    High concentration with low coverage means a few real pages are carrying a mass
-    of dead ones -- index those and drop the tail, rather than taking or rejecting
-    the group whole.
+
+def canonical_metric_url(url: str) -> str:
+    """Strip tracking parameters and normalise the trailing slash.
+
+    Measured on prosperitymedia.com.au: the homepage arrives from GSC as both
+    `/` and `/?utm_source=google_maps&utm_medium=organic&utm_campaign=local`, and
+    both showed up as separate exemplars. Splitting one page's clicks in two is
+    the visible half of the problem. The invisible half is worse -- a tagged URL
+    never matches the sitemap entry it belongs to, so its clicks do not merely
+    double-count, they are dropped from the group and coverage reads lower than
+    the truth. A metric that silently understates demand would exclude pages that
+    are earning.
+
+    Only known tracking keys are removed. Stripping every query string would
+    destroy real pages on any site that paginates or filters through one.
     """
-    total = sum(clicks)
+    parsed = urlparse(url)
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in TRACKING_PARAMS
+    ]
+    path = parsed.path or "/"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", urlencode(kept), ""))
+
+
+def merge_metrics(rows: Iterable[PageMetrics]) -> dict[str, PageMetrics]:
+    """Key metrics by canonical URL, summing the variants that collapse together.
+
+    Clicks and impressions add; the date window is carried from the first row,
+    since every row in one fetch shares it.
+    """
+    merged: dict[str, PageMetrics] = {}
+    for row in rows:
+        key = canonical_metric_url(row.url)
+        if (existing := merged.get(key)) is None:
+            merged[key] = replace(row, url=key)
+        else:
+            merged[key] = replace(
+                existing,
+                clicks=(existing.clicks or 0) + (row.clicks or 0),
+                impressions=(existing.impressions or 0) + (row.impressions or 0),
+            )
+    return merged
+
+
+def _head_share(clicks: list[int]) -> float | None:
+    """How lopsided the earning URLs are, or None when that cannot be answered.
+
+    Concentration is a claim about a distribution, so it has to be measured over
+    the URLs that have one. Measuring the top decile of *all* URLs instead makes
+    the denominator do the work: if fewer URLs earn clicks than the decile is
+    wide, every earner falls inside the top decile and the statistic reads 100%
+    however evenly those clicks are spread. A thousand URLs where sixty earn a
+    hundred clicks each is perfectly uniform and used to report as perfectly
+    concentrated.
+
+    So there are two questions here, and the old function conflated them:
+
+    * Is the distribution lopsided? Answerable only when there are enough earners
+      to have a shape -- at least a decile's worth. Then it is the share of clicks
+      taken by the top tenth *of earners*.
+    * Are there enough earners to ask? When there are not, the honest answer is
+      None. Not 0.0, which reads as "measured, and flat", and not 1.0, which reads
+      as "measured, and extreme". The caller must then decide on other evidence,
+      and `summarise_group` uses the absolute size of the head instead.
+    """
+    earners = sorted((c for c in clicks if c > 0), reverse=True)
+    total = sum(earners)
     if not total:
-        return 0.0
-    ranked = sorted(clicks, reverse=True)
-    cut = max(1, len(ranked) // 10)
-    return sum(ranked[:cut]) / total
+        return None
+    # The decile width of the group as a whole is what makes the old statistic
+    # degenerate, so it is what decides whether the question is answerable.
+    if len(earners) < max(1, len(clicks) // 10):
+        return None
+    cut = max(1, len(earners) // 10)
+    return sum(earners[:cut]) / total
 
 
 def summarise_group(
@@ -196,7 +286,7 @@ def summarise_group(
         if len(clicks) >= 10
         else float(max(clicks, default=0))
     )
-    group.top_decile_click_share = _top_decile_share(clicks)
+    group.head_click_share = _head_share(clicks)
     group.exemplars = [
         m.url
         for m in sorted(known, key=lambda m: -(m.clicks or 0))[:exemplar_limit]
@@ -210,11 +300,24 @@ def summarise_group(
 
     coverage = group.coverage
     best = max((m.clicks or 0) for m in known)
-    concentrated = (
-        group.top_decile_click_share >= thresholds.concentration
-        and group.total_clicks >= thresholds.promote_min_clicks
+    # Volume is a precondition for promotion under either path: a group has to
+    # have earned something before the shape of its earnings matters.
+    material = (
+        group.total_clicks >= thresholds.promote_min_clicks
         and best >= thresholds.promote_min_exemplar_clicks
     )
+    concentrated = (
+        group.head_click_share is not None
+        and group.head_click_share >= thresholds.concentration
+        and material
+    )
+    # Too few earners to measure a distribution, but the head is substantial. The
+    # old code promoted these on a statistic that read 100% for arithmetic
+    # reasons; excluding them instead would be the opposite error, since this is
+    # the marketplace shape the promote verdict exists for -- ten hub pages
+    # carrying nine hundred dead ones. With no distributional evidence the honest
+    # move is neither: recommend the exemplars and let a person confirm them.
+    unmeasurable_but_material = group.head_click_share is None and material
 
     if coverage >= thresholds.coverage_include:
         group.verdict = GroupVerdict.INCLUDE_GROUP
@@ -231,9 +334,18 @@ def summarise_group(
         # and it is exactly what this verdict exists for.
         group.verdict = GroupVerdict.PROMOTE_EXEMPLARS
         group.rationale = (
-            f"Only {coverage:.1%} of URLs earn clicks, but the top decile takes "
-            f"{group.top_decile_click_share:.0%} of {group.total_clicks:,} clicks — index "
+            f"Only {coverage:.1%} of URLs earn clicks, but the top tenth of those take "
+            f"{group.head_click_share:.0%} of {group.total_clicks:,} clicks — index "
             "the winners, drop the tail."
+        )
+    elif unmeasurable_but_material:
+        group.verdict = GroupVerdict.REVIEW
+        group.confidence = "low"
+        group.rationale = (
+            f"{group.urls_with_clicks} of {group.url_count:,} URLs earn "
+            f"{group.total_clicks:,} clicks, the best of them {best:,} — too few earners "
+            "to tell a hub from an even spread, so this is a recommendation and not a "
+            "decision. The exemplars are the pages worth keeping if you agree."
         )
     elif coverage >= thresholds.coverage_exclude:
         group.verdict = GroupVerdict.REVIEW
@@ -302,15 +414,20 @@ def _apply_overrides(
     # Impressions without clicks, at scale, is faceted search even when coverage is
     # borderline: Google indexes the pages and nobody picks them.
     #
-    # It must not fire on PROMOTE_EXEMPLARS. A facet group can hold a genuine hub --
-    # `/location/sydney/` taking 150 of a group's 200 clicks -- and forcing the whole
-    # group out discards the one page in it worth indexing. Where exemplars exist,
-    # promoting them already demotes the tail, which is what this override wants;
-    # the two rules would otherwise disagree about the same group. The override still
-    # earns its place on the diffuse case: a facet group whose clicks are spread too
-    # thinly to concentrate lands in REVIEW, and this is what settles it.
+    # It must not fire on a group that has exemplars. A facet group can hold a
+    # genuine hub -- `/location/sydney/` taking 150 of a group's 200 clicks -- and
+    # forcing the whole group out discards the one page in it worth indexing.
+    #
+    # The condition is exemplars rather than verdict on purpose. It was written as
+    # `verdict is not PROMOTE_EXEMPLARS` first, which held only while promotion was
+    # the sole verdict that identified winners; the moment an unmeasurable-but-
+    # material group started arriving here as REVIEW-with-exemplars, the override
+    # ate it and the Sydney hub disappeared again. What this rule actually wants to
+    # settle is the diffuse case -- impressions at scale with nothing worth keeping
+    # -- and a group with exemplars is by definition not that.
     if (
-        group.verdict not in (GroupVerdict.EXCLUDE, GroupVerdict.PROMOTE_EXEMPLARS)
+        not group.exemplars
+        and group.verdict is not GroupVerdict.EXCLUDE
         and group.total_impressions >= thresholds.facet_min_impressions
         and group.mean_ctr < thresholds.facet_max_ctr
         and group.url_count > thresholds.min_group_size_for_exclude
