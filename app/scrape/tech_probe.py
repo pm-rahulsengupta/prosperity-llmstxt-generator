@@ -50,6 +50,7 @@ from app.scrape.fingerprints import detect
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 15.0
+MAX_CONCURRENCY = 3
 
 GENERATOR_META = re.compile(
     r"""<meta[^>]+name=["']generator["'][^>]+content=["']([^"']+)["']""", re.I
@@ -313,11 +314,17 @@ async def probe_tech(
         profile.platform = platform
         profile.platform_evidence = evidence
 
+        # Ten candidate paths, capped for the same reason as everywhere else: a
+        # refused request becomes a missing endpoint, and a missing endpoint
+        # becomes a thinner file. Politeness here is accuracy.
+        gate = asyncio.Semaphore(MAX_CONCURRENCY)
+
+        async def limited(path: str, label: str, expected: tuple[str, ...]):
+            async with gate:
+                return await _check(client, origin, path, label, expected)
+
         found = await asyncio.gather(
-            *(
-                _check(client, origin, path, label, expected)
-                for path, label, expected in CANDIDATE_ENDPOINTS
-            )
+            *(limited(path, label, expected) for path, label, expected in CANDIDATE_ENDPOINTS)
         )
 
     seen: set[str] = set()

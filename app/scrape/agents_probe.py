@@ -35,6 +35,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 20.0
+# Small sites refuse a burst. Two at a time still finishes in about a second.
+MAX_CONCURRENCY = 2
 
 # Paths probed on every site.
 AGENTS_PATH = "/agents.md"
@@ -304,11 +306,23 @@ async def probe_site(
         timeout=timeout,
         headers={"User-Agent": user_agent, "Accept": "*/*"},
     ) as client:
+        # Capped, for the same reason the readiness audit is: a shared-hosting
+        # WordPress site refused four of these when they arrived together with
+        # the technology probe's ten, and every refusal was then reported as
+        # "this site does not publish one". Measured on prosperitymedia.com.au,
+        # where all four surfaces came back unreachable while a slower pass
+        # showed llms.txt honestly 404ing. Our own impatience is not evidence.
+        gate = asyncio.Semaphore(MAX_CONCURRENCY)
+
+        async def limited(path: str, expected: tuple[str, ...]) -> Surface:
+            async with gate:
+                return await _probe(client, origin, path, expected)
+
         agents_md, ucp, llms_txt, llms_full = await asyncio.gather(
-            _probe(client, origin, AGENTS_PATH, TEXT_TYPES),
-            _probe(client, origin, UCP_PATH, JSON_TYPES),
-            _probe(client, origin, LLMS_PATH, TEXT_TYPES),
-            _probe(client, origin, LLMS_FULL_PATH, TEXT_TYPES),
+            limited(AGENTS_PATH, TEXT_TYPES),
+            limited(UCP_PATH, JSON_TYPES),
+            limited(LLMS_PATH, TEXT_TYPES),
+            limited(LLMS_FULL_PATH, TEXT_TYPES),
         )
         headers: dict[str, str] = {}
         try:

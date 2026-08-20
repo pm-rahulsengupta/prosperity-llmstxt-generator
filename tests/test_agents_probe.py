@@ -282,3 +282,37 @@ def test_the_summary_lists_every_probed_surface():
     summary = result.summary()
 
     assert "agents.md" in summary and "llms.txt" in summary
+
+
+# -- politeness is accuracy ---------------------------------------------------
+
+
+def test_every_probe_caps_its_own_concurrency():
+    """A refused request becomes a false finding about the client's site.
+
+    Measured on prosperitymedia.com.au: `probe_site` and `probe_tech` fired
+    together put fourteen requests at one shared-hosting WordPress site, four
+    were refused, and all four agent surfaces were reported `unreachable` while
+    a slower pass showed them honestly 404ing. The endpoint count went from five
+    to one at the same time, thinning the generated file.
+    """
+    import inspect
+
+    from app.scrape import agents_probe, readiness, tech_probe
+
+    for module in (agents_probe, tech_probe, readiness):
+        assert hasattr(module, "MAX_CONCURRENCY"), module.__name__
+        assert module.MAX_CONCURRENCY <= 4, module.__name__
+        source = inspect.getsource(module)
+        assert "Semaphore" in source, module.__name__
+
+
+def test_the_two_probes_are_not_raced_against_one_host():
+    """Capping each and then firing both at once puts the total back up."""
+    import inspect
+
+    from app import main
+
+    source = inspect.getsource(main._agents_document)
+    assert "probe = await probe_site(" in source
+    assert "asyncio.gather(\n        probe_site" not in source

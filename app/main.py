@@ -11,7 +11,7 @@ more than elegance.
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
 import logging
 import mimetypes
 import zipfile
@@ -132,6 +132,28 @@ templates.env.globals["usd"] = usd
 # route must remember: sixteen routes render templates, and the one that forgot
 # would 500 on a page that has nothing to do with navigation.
 templates.env.globals["build_nav"] = build_nav
+
+
+def _asset_version(name: str) -> str:
+    """A content hash for a static file, so the cache-buster cannot go stale.
+
+    It was a hand-written `?v=3` and it stayed at 3 through four rewrites of the
+    stylesheet. Anyone whose browser had cached v=3 kept being served CSS from
+    before the sidebar existed -- the markup shipped, the styles did not, and the
+    feature looked missing rather than broken.
+
+    Hashing the file removes the step a person has to remember. Read once at
+    import: the file cannot change without a redeploy, and a redeploy re-imports.
+    """
+    path = ROOT / "static" / name
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        # Never fatal. A missing hash costs cache-busting, not the page.
+        return "dev"
+
+
+templates.env.globals["asset_version"] = _asset_version
 templates.env.globals["effort_labels"] = EFFORT_LABELS
 templates.env.globals["effort_owners"] = EFFORT_OWNERS
 templates.env.globals["pattern_labels"] = PATTERN_LABELS
@@ -546,10 +568,12 @@ async def _agents_document(session: AsyncSession, normalised: str):
     # Both probes together: one asks what agent-facing files exist, the other what
     # the site is built on and what machine-readable surfaces answer. Concurrent
     # because neither depends on the other and the page waits on the slower.
-    probe, tech = await asyncio.gather(
-        probe_site(normalised, settings.crawl_user_agent),
-        probe_tech(normalised, settings.crawl_user_agent),
-    )
+    # Sequential, not concurrent. Together these are fourteen requests to one
+    # host; issued at once they were refused often enough that a live agency site
+    # reported every agent surface as unreachable. Each is fast on its own and
+    # the page is not waiting on a crawl.
+    probe = await probe_site(normalised, settings.crawl_user_agent)
+    tech = await probe_tech(normalised, settings.crawl_user_agent)
     # The readiness audit runs after, not alongside. It is nine more requests to
     # the same host, and firing them concurrently with the other two probes is how
     # a small site starts refusing us and we report our own impatience as its
