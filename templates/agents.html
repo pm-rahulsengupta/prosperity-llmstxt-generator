@@ -94,6 +94,43 @@
 </div>
 {% endif %}
 
+{% if readiness %}
+<div class="panel">
+    <h3>Agent readiness &mdash; {{ readiness.score }}/100</h3>
+    <p class="muted">{{ readiness.summary() }}</p>
+
+    {% if readiness.failures %}
+    <table>
+        <thead><tr><th>Priority</th><th>Component</th><th>Detail</th></tr></thead>
+        <tbody>
+        {% for r in readiness.failures %}
+        <tr>
+            <td><span class="pill {% if r.item.priority.value == 'Must' %}bad{% else %}wait{% endif %}">{{ r.item.priority.value }}</span></td>
+            <td>{{ r.item.component }}</td>
+            <td class="muted">{{ r.detail }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Everything checkable from here passed.</p>
+    {% endif %}
+
+    {% if readiness.manual %}
+    <h4>Needs a browser</h4>
+    <p class="muted">
+        These are page-level checks &mdash; layout stability, semantic HTML, tap
+        targets. They are excluded from the score rather than assumed to pass.
+    </p>
+    <ul class="notes">
+        {% for r in readiness.manual %}
+        <li class="info">{{ r.item.component }} &mdash; <code>{{ r.detail }}</code></li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>
+{% endif %}
+
 {% if doc %}
 <div class="panel">
     <h3>Generated file</h3>

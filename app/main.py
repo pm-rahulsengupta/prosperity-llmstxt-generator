@@ -70,6 +70,7 @@ from app.metrics.gsc_csv import parse_gsc_export
 from app.nav import build_nav
 from app.scrape.agents_probe import probe_site
 from app.scrape.discover import normalise_site_url
+from app.scrape.readiness import SiteType, audit_readiness
 from app.scrape.tech_probe import probe_tech
 
 logger = logging.getLogger(__name__)
@@ -537,6 +538,15 @@ async def _agents_document(session: AsyncSession, normalised: str):
         probe_site(normalised, settings.crawl_user_agent),
         probe_tech(normalised, settings.crawl_user_agent),
     )
+    # The readiness audit runs after, not alongside. It is nine more requests to
+    # the same host, and firing them concurrently with the other two probes is how
+    # a small site starts refusing us and we report our own impatience as its
+    # shortcomings.
+    readiness = await audit_readiness(
+        normalised,
+        settings.crawl_user_agent,
+        SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
+    )
 
     domain = urlparse(normalised).netloc
     config = await repo.load_site_config(session, domain)
@@ -590,7 +600,7 @@ async def _agents_document(session: AsyncSession, normalised: str):
     doc.platform = tech.platform.value
     doc.notes.extend(tech.notes)
     catalog = build_catalog(probe, tech, site_name=doc.site_name)
-    return probe, doc, tech, catalog
+    return probe, doc, tech, catalog, readiness
 
 
 @app.get("/agents", response_class=HTMLResponse)
@@ -598,7 +608,15 @@ async def agents_page(request: Request, user: User = Depends(require_user)):
     return templates.TemplateResponse(
         request,
         "agents.html",
-        {"user": user, "site_url": "", "probe": None, "doc": None, "tech": None, "catalog": None},
+        {
+            "user": user,
+            "site_url": "",
+            "probe": None,
+            "doc": None,
+            "tech": None,
+            "catalog": None,
+            "readiness": None,
+        },
     )
 
 
@@ -620,7 +638,7 @@ async def agents_generate(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    probe, doc, tech, catalog = await _agents_document(session, normalised)
+    probe, doc, tech, catalog, readiness = await _agents_document(session, normalised)
 
     return templates.TemplateResponse(
         request,
@@ -632,6 +650,7 @@ async def agents_generate(
             "doc": doc,
             "tech": tech,
             "catalog": catalog,
+            "readiness": readiness,
             "rendered": render_agents_md(doc),
         },
     )
@@ -652,7 +671,7 @@ async def agents_download(
     for the file being true when it is downloaded.
     """
     normalised = normalise_site_url(site)
-    probe, doc, _tech, catalog = await _agents_document(session, normalised)
+    probe, doc, _tech, catalog, _readiness = await _agents_document(session, normalised)
 
     if kind == "liquid":
         body, filename, media = render_agents_liquid(doc), "agents.md.liquid", "text/markdown"
