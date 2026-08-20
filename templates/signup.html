@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Claim this instance{% endblock %}
+
+{% block content %}
+<div class="panel" style="max-width: 26rem; margin: 4rem auto">
+    <h2>Claim this instance</h2>
+    <p class="muted">
+        This deployment has no accounts yet. The first person to register becomes its
+        admin, and self-service signup closes permanently at that point &mdash;
+        everyone else is added from the Accounts page.
+    </p>
+    {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
+    <form method="post" action="/signup" style="margin-top:1rem">
+        <div style="margin-bottom:0.75rem">
+            <label for="name">Name</label>
+            <input type="text" id="name" name="name" autocomplete="name">
+        </div>
+        <div style="margin-bottom:0.75rem">
+            <label for="email">Email</label>
+            <input type="text" id="email" name="email" autocomplete="username" required autofocus>
+        </div>
+        <div style="margin-bottom:1rem">
+            <label for="password">Password &mdash; at least 12 characters</label>
+            <input type="password" id="password" name="password" autocomplete="new-password"
+                   minlength="12" required>
+        </div>
+        <button class="primary" type="submit" style="width:100%">Claim it</button>
+    </form>
+</div>
+{% endblock %}

@@ -23,7 +23,16 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.auth import SESSION_KEY, User, build_oauth, current_user, require_user, user_from_claims
+from app import accounts
+from app.auth import (
+    User,
+    build_oauth,
+    current_user,
+    require_admin,
+    require_user,
+    sign_in,
+    user_from_claims,
+)
 from app.config import get_settings
 from app.core.pipeline import rebuild
 from app.core.render import render_combined
@@ -76,6 +85,7 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 templates.env.globals["sso_enabled"] = settings.sso_enabled
+templates.env.globals["allow_anonymous"] = settings.allow_anonymous
 templates.env.globals["llm_enabled"] = settings.llm_enabled
 templates.env.globals["firecrawl_enabled"] = settings.firecrawl_enabled
 templates.env.globals["size_check_enabled"] = settings.size_check_enabled
@@ -94,10 +104,10 @@ async def healthz() -> PlainTextResponse:
 # -- auth -------------------------------------------------------------------
 
 
-@app.get("/login", response_class=HTMLResponse)
-async def login(request: Request):
+@app.get("/login/google", include_in_schema=False)
+async def login_google(request: Request):
     if not settings.sso_enabled:
-        return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
     redirect_uri = f"{settings.app_url.rstrip('/')}/auth/callback"
     # `hd` here only pre-filters the account chooser. The domain is enforced from
     # the ID token in `user_from_claims`, never from this hint.
@@ -112,12 +122,120 @@ async def auth_callback(request: Request):
         return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
     token = await oauth.google.authorize_access_token(request)
     user = user_from_claims(token.get("userinfo") or {}, settings)
-    request.session[SESSION_KEY] = {
-        "email": user.email,
-        "name": user.name,
-        "picture": user.picture,
-    }
+    sign_in(request, user)
     return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request, session: AsyncSession = Depends(get_session)):
+    """Sign in, or -- on a brand-new instance -- claim it.
+
+    A fresh deployment has no accounts, so this redirects to /signup. That window
+    is the only time a stranger could take the instance, which is why the person
+    given the URL should be the person who opens it first.
+    """
+    if current_user(request) is not None:
+        return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+    if not await accounts.is_bootstrapped(session):
+        return RedirectResponse("/signup", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request, "login.html", {"user": None, "error": None})
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    session: AsyncSession = Depends(get_session),
+):
+    row = await accounts.authenticate(session, email, password)
+    if row is None:
+        # One message for both halves: a wrong address and a wrong password are
+        # indistinguishable, so the form cannot be used to enumerate accounts.
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"user": None, "error": "That email and password do not match an account."},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+    sign_in(request, User(email=row.email, name=row.name, is_admin=row.is_admin))
+    return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_form(request: Request, session: AsyncSession = Depends(get_session)):
+    if await accounts.is_bootstrapped(session):
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(request, "signup.html", {"user": None, "error": None})
+
+
+@app.post("/signup", response_class=HTMLResponse)
+async def signup_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    name: str = Form(""),
+    session: AsyncSession = Depends(get_session),
+):
+    """Claim the instance. Succeeds exactly once, for anyone, ever.
+
+    The rule is enforced in `accounts.claim_instance` under an advisory lock, so
+    this endpoint answers a curl the same way it answers the form, and two
+    simultaneous attempts cannot both win.
+    """
+    try:
+        row = await accounts.claim_instance(session, email, password, name)
+    except (accounts.SignupClosed, accounts.WeakPassword) as exc:
+        return templates.TemplateResponse(
+            request,
+            "signup.html",
+            {"user": None, "error": str(exc)},
+            status_code=status.HTTP_403_FORBIDDEN
+            if isinstance(exc, accounts.SignupClosed)
+            else status.HTTP_400_BAD_REQUEST,
+        )
+    await session.commit()
+    sign_in(request, User(email=row.email, name=row.name, is_admin=row.is_admin))
+    return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/accounts", response_class=HTMLResponse)
+async def accounts_page(
+    request: Request,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    rows = await accounts.list_users(session)
+    return templates.TemplateResponse(
+        request, "accounts.html", {"user": user, "accounts": rows, "error": None}
+    )
+
+
+@app.post("/accounts", response_class=HTMLResponse)
+async def create_account(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    name: str = Form(""),
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """The operator path: how the second and subsequent accounts come to exist."""
+    admin = await accounts.find_by_email(session, user.email)
+    if admin is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Your account no longer exists.")
+    try:
+        await accounts.create_teammate(session, admin, email, password, name)
+    except (ValueError, PermissionError) as exc:
+        rows = await accounts.list_users(session)
+        return templates.TemplateResponse(
+            request,
+            "accounts.html",
+            {"user": user, "accounts": rows, "error": str(exc)},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    await session.commit()
+    return RedirectResponse("/accounts", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.get("/logout", include_in_schema=False)
@@ -132,8 +250,9 @@ async def logout(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, session: AsyncSession = Depends(get_session)):
     user = current_user(request)
-    if settings.sso_enabled and user is None:
-        return templates.TemplateResponse(request, "login.html", {"user": None})
+    if user is None and not settings.allow_anonymous:
+        # /login sends a brand-new instance on to /signup.
+        return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
     runs = await repo.list_runs(session, limit=40)
     return templates.TemplateResponse(request, "index.html", {"user": user, "runs": runs})
 

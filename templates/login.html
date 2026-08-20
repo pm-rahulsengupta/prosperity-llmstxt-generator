@@ -2,9 +2,28 @@
 {% block title %}Sign in{% endblock %}
 
 {% block content %}
-<div class="panel" style="max-width: 24rem; margin: 4rem auto; text-align: center">
-    <h2>Prosperity llms.txt Generator</h2>
-    <p class="muted">Internal tool. Sign in with your Prosperity Google account.</p>
-    <p style="margin-top:1.5rem"><a class="button primary" href="/login">Sign in with Google</a></p>
+<div class="panel" style="max-width: 24rem; margin: 4rem auto">
+    <h2>Sign in</h2>
+    {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
+    <form method="post" action="/login">
+        <div style="margin-bottom:0.75rem">
+            <label for="email">Email</label>
+            <input type="text" id="email" name="email" autocomplete="username" required autofocus>
+        </div>
+        <div style="margin-bottom:1rem">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" autocomplete="current-password" required>
+        </div>
+        <button class="primary" type="submit" style="width:100%">Sign in</button>
+    </form>
+    {% if sso_enabled %}
+    <p style="margin-top:1rem; text-align:center">
+        <a class="button ghost" href="/login/google" style="width:100%">Sign in with Google</a>
+    </p>
+    {% endif %}
+    <p class="muted" style="margin-top:1rem">
+        No account? An admin creates them &mdash; there is no self-service signup once
+        this instance has an owner.
+    </p>
 </div>
 {% endblock %}

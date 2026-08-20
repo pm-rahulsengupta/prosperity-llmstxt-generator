@@ -1,15 +1,21 @@
-"""Google sign-in, restricted to Prosperity accounts.
+"""Two ways in, one session.
 
-The domain check reads `hd` (and falls back to the email) from the **verified ID
-token**, not from the `hd` request parameter. That parameter is a UI hint sent by
+A password account is the primary path and is what makes a fresh deployment
+usable before any identity provider exists -- the same choice geo-tracker makes,
+which runs `DEPLOYMENT_MODE=local` on its public Railway domain today. Google
+sign-in is layered on top and takes over as soon as a client is configured.
+
+The account rules themselves live in `app/accounts.py`; this module is only
+concerned with sessions and with who a request is.
+
+
+For Google, the domain check reads `hd` (and falls back to the email) from the
+**verified ID token**, not from the `hd` request parameter. That parameter is a UI hint sent by
 the client: it changes which account chooser Google shows and it is trivially
 removed from the authorize URL. Trusting it would let any Google account in. The
 claim inside the signed token is the only trustworthy statement of which domain an
 account belongs to.
 
-With no client ID configured the app runs open, and says so on every page. That is
-right for local development and would be wrong in deploy, which is why
-`Settings.assert_deployable` refuses to boot an https deployment without it.
 """
 
 from __future__ import annotations
@@ -31,9 +37,16 @@ SESSION_KEY = "user"
 
 @dataclass(frozen=True, slots=True)
 class User:
+    """The signed-in identity, as carried in the session cookie.
+
+    Not the database row: this is what a request has proven about itself. Routes
+    that need the row load it by email.
+    """
+
     email: str
     name: str = ""
     picture: str = ""
+    is_admin: bool = False
 
     @property
     def domain(self) -> str:
@@ -85,11 +98,32 @@ def current_user(request: Request) -> User | None:
     return User(**data) if isinstance(data, dict) else None
 
 
+def sign_in(request: Request, user: User) -> None:
+    """Put a signed-in user in the session cookie."""
+    request.session[SESSION_KEY] = {
+        "email": user.email,
+        "name": user.name,
+        "picture": user.picture,
+        "is_admin": user.is_admin,
+    }
+
+
 def require_user(request: Request) -> User:
-    """FastAPI dependency. Open when SSO is unconfigured, enforced when it is."""
+    """FastAPI dependency. A session is always required; only the way in varies.
+
+    Two ways to sign in, and the app supports both at once rather than switching
+    on a mode flag: a password account, and -- once a Google client is configured
+    -- Google. Whichever produced the session, what lands here is a session.
+
+    The one exception is a machine with neither an identity provider nor a
+    database-backed account, i.e. `pytest` and a bare `python -m app.web` with no
+    migrations run. `ALLOW_ANONYMOUS=true` opts into that explicitly. It is
+    refused in any https deployment by `Settings.assert_deployable`, so it cannot
+    be the reason a public instance is open.
+    """
     settings = get_settings()
-    if not settings.sso_enabled:
-        return User(email="local@localhost", name="Local development")
+    if settings.allow_anonymous:
+        return User(email="local@localhost", name="Local development", is_admin=True)
 
     user = current_user(request)
     if user is None:
@@ -98,4 +132,11 @@ def require_user(request: Request) -> User:
             "Sign in to continue.",
             headers={"Location": "/login"},
         )
+    return user
+
+
+def require_admin(request: Request) -> User:
+    user = require_user(request)
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only an admin can manage accounts.")
     return user

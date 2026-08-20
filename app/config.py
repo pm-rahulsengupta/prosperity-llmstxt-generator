@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     allowed_email_domains: str = "prosperitymedia.com.au"
 
+    # Skip authentication entirely. For the test suite and for a local run against
+    # no database. `assert_deployable` refuses it on https, so it cannot be what
+    # leaves a deployed instance open.
+    allow_anonymous: bool = False
+
     # --- LLM --------------------------------------------------------------
     openai_api_key: str = ""
     openai_base_url: str = ""
@@ -124,10 +129,13 @@ class Settings(BaseSettings):
         if self.app_url.startswith("https://"):
             if self.session_secret == "dev-only-change-me":
                 problems.append("SESSION_SECRET is still the development default")
-            if not self.sso_enabled:
-                problems.append("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are required in deploy")
-            if not self.allowed_domains:
-                problems.append("ALLOWED_EMAIL_DOMAINS must not be empty in deploy")
+            # Google is optional -- password accounts are a complete way in, and are
+            # what geo-tracker runs in production. Anonymous access is not: it would
+            # mean a public URL with no gate at all.
+            if self.allow_anonymous:
+                problems.append("ALLOW_ANONYMOUS cannot be set on an https deployment")
+            if self.sso_enabled and not self.allowed_domains:
+                problems.append("ALLOWED_EMAIL_DOMAINS must not be empty when Google SSO is on")
         if problems:
             raise RuntimeError("Refusing to start: " + "; ".join(problems))
 

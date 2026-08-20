@@ -304,3 +304,31 @@ class SiteConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class User(Base):
+    """An account that can sign in.
+
+    Replicates geo-tracker's local-mode rule: exactly one self-service signup,
+    after which the instance is closed and further accounts are created by an
+    existing operator. That is what makes a public Railway domain safe without an
+    identity provider -- the window in which a stranger could claim the instance
+    closes the moment the first real user registers.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    # Null for an account that signs in through Google rather than a password.
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # True for the bootstrap account and anyone it promotes. Only an admin can
+    # create further accounts.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(320), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

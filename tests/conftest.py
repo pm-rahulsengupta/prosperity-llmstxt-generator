@@ -9,6 +9,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import Settings
+from app.runtime import configure_event_loop
+
+# psycopg cannot run async on the loop Python picks by default on Windows, and
+# pytest-asyncio creates that loop. Without this the database-backed tests skip
+# themselves with "no database reachable" on this machine and nowhere else.
+configure_event_loop()
 from app.core.models import PageEntry
 
 FIXTURES = Path(__file__).parent / "fixtures"

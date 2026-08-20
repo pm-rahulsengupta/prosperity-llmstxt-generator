@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <h2>Accounts</h2>
+    <p class="muted">
+        Self-service signup closed when this instance was claimed. Everyone else is
+        added here.
+    </p>
+    <table>
+        <thead>
+        <tr><th>Email</th><th>Name</th><th>Role</th><th>Added by</th><th>Last signed in</th></tr>
+        </thead>
+        <tbody>
+        {% for row in accounts %}
+        <tr>
+            <td>{{ row.email }}</td>
+            <td>{{ row.name or '—' }}</td>
+            <td>{% if row.is_admin %}<span class="pill ok">admin</span>{% else %}<span class="pill">member</span>{% endif %}</td>
+            <td class="muted">{{ row.created_by or '—' }}</td>
+            <td class="muted">{{ row.last_login_at.strftime('%Y-%m-%d %H:%M') if row.last_login_at else 'never' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="panel">
+    <h2>Add someone</h2>
+    {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
+    <form method="post" action="/accounts">
+        <div class="row">
+            <div>
+                <label for="email">Email</label>
+                <input type="text" id="email" name="email" required>
+            </div>
+            <div>
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name">
+            </div>
+            <div>
+                <label for="password">Temporary password &mdash; 12+ characters</label>
+                <input type="password" id="password" name="password" minlength="12" required>
+            </div>
+            <div class="narrow"><button type="submit">Add</button></div>
+        </div>
+        <p class="muted">
+            Send the password over Vaultwarden, not email. There is no reset flow yet:
+            to change a password, an admin re-creates the account.
+        </p>
+    </form>
+</div>
+{% endblock %}

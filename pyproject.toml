@@ -27,6 +27,9 @@ dependencies = [
     "lxml>=5.3.0",
     "openai>=2.9.0",
     "authlib>=1.6.5",
+    # Password hashing for the bootstrap account. Argon2id is the current OWASP
+    # recommendation and argon2-cffi picks sane parameters without being told.
+    "argon2-cffi>=23.1.0",
     "httpx>=0.28.1",
 ]
 
@@ -56,6 +59,9 @@ ignore = ["E501"]
 # `Depends(...)` in a parameter default is FastAPI's dependency-injection idiom,
 # not the mutable-default bug B008 exists to catch.
 "app/main.py" = ["B008"]
+# conftest must set the event-loop policy before anything imports psycopg, so its
+# imports cannot all sit at the top.
+"tests/conftest.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -22,23 +22,37 @@ One image, two services, dispatched by `APP_TARGET` in `docker/entrypoint.sh` �
 Railway builds only a Dockerfile's final stage and offers no target selection, so
 the final stage carries both runtimes. Copied from geo-tracker.
 
-### The web service has no public domain, deliberately
+### Authentication: one signup, then closed
 
-Google SSO is not configured yet, and `Settings.assert_deployable()` only refuses to
-boot when `APP_URL` is `https://`. Generating a domain now would put a tool that
-crawls arbitrary sites and stores client page content on the public internet with no
-authentication at all.
+Copied from geo-tracker, which runs `DEPLOYMENT_MODE=local` on its public Railway
+domain today — email and password, no identity provider. The rule:
 
-To finish the deployment:
+> The first person to reach a fresh deployment registers and becomes the admin.
+> Every self-service signup after that is refused, forever. Further accounts are
+> created by an admin from `/accounts`.
 
-1. Create an OAuth 2.0 Web client in Google Cloud for the Prosperity workspace.
-   Authorised redirect URI: `https://<railway-domain>/auth/callback`.
-2. `railway variables --service web --set GOOGLE_CLIENT_ID=... --set GOOGLE_CLIENT_SECRET=...`
-3. `railway variables --service web --set APP_URL=https://<railway-domain>`
-4. Generate the domain in the Railway dashboard, then `railway redeploy --service web`.
+That is what makes a public URL safe without Google. The only window in which a
+stranger could take the instance is between the domain being created and the
+intended owner signing up, and it is the owner who is handed the link. Anyone
+arriving after that gets a 403 — from `curl` exactly as from the form, because the
+rule lives in `app/accounts.py` in the write path, not in a template.
 
-Step 3 is what arms the guard: from then on the service refuses to start if the SSO
-variables are missing, so it cannot regress to open access silently.
+One deliberate improvement on the original. geo-tracker's hook reads `countUsers()`
+and then inserts, which two simultaneous signups can both pass. `claim_instance`
+takes a Postgres advisory lock and re-checks inside it, so the second attempt
+blocks and then loses. `tests/test_signup_gate.py` runs both signups concurrently
+against a real database and asserts exactly one account exists afterwards.
+
+Google sign-in is still wired up and takes over the moment
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set — the two coexist rather than
+being a mode switch. `ALLOWED_EMAIL_DOMAINS` applies only to the Google path.
+
+`ALLOW_ANONYMOUS=true` skips auth entirely, for the test suite and for a local run
+with no database. `assert_deployable` refuses it on any https deployment, so it
+cannot be what leaves a public instance open.
+
+There is no password reset. To change one, an admin re-creates the account. Send
+credentials over Vaultwarden, not email.
 
 ---
 
