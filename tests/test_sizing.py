@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.scrape.sizing import (
+    HTTP_STATUS_REASONS,
     CountFailure,
     IndexedCount,
     assess,
@@ -152,6 +153,22 @@ def test_an_empty_but_valid_response_is_not_an_error():
     assert result.failed
     assert result.reason is CountFailure.NO_RESULTS
     assert "not indexed" in result.explain()
+
+
+def test_http_level_refusals_are_not_reported_as_transport_failures():
+    """A 401 is a rejected password, not an unreachable server.
+
+    Caught in production: `raise_for_status()` sent every HTTP error down the
+    transport path, so a wrong password read as "could not reach DataForSEO" --
+    the same wrong-cause failure this module was rewritten to eliminate.
+    """
+    assert HTTP_STATUS_REASONS[401] is CountFailure.AUTH_FAILED
+    assert HTTP_STATUS_REASONS[402] is CountFailure.OUT_OF_CREDITS
+    assert HTTP_STATUS_REASONS[429] is CountFailure.RATE_LIMITED
+
+    message = IndexedCount(reason=CountFailure.AUTH_FAILED, detail="HTTP 401").explain()
+    assert "rejected the credentials" in message
+    assert "could not reach" not in message
 
 
 def test_assess_reports_the_real_reason_not_a_guess():

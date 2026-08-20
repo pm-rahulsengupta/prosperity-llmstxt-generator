@@ -103,6 +103,15 @@ TASK_STATUS_REASONS: dict[int, CountFailure] = {
     40501: CountFailure.API_ERROR,
 }
 
+# The same refusals, when DataForSEO answers at the HTTP layer instead of in the
+# task body. A rejected password arrives here as a 401 and never reaches a task.
+HTTP_STATUS_REASONS: dict[int, CountFailure] = {
+    401: CountFailure.AUTH_FAILED,
+    403: CountFailure.AUTH_FAILED,
+    402: CountFailure.OUT_OF_CREDITS,
+    429: CountFailure.RATE_LIMITED,
+}
+
 # What to tell a human. These are read off the run page by someone deciding what to
 # do next, so each one names the fix rather than the symptom.
 FAILURE_MESSAGES: dict[CountFailure, str] = {
@@ -339,11 +348,22 @@ async def indexed_page_count(
                     "Content-Type": "application/json",
                 },
             )
-            response.raise_for_status()
-            body = response.json()
+            body = response.json() if response.content else {}
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("site: size check transport failure for %s: %s", host, exc)
+        logger.warning("site: size check could not reach DataForSEO for %s: %s", host, exc)
         return IndexedCount(reason=CountFailure.TRANSPORT, detail=f"{type(exc).__name__}: {exc}")
+
+    # An HTTP-level refusal never reaches the task body, so it has to be read here.
+    # `raise_for_status()` used to send a 401 down the transport path, which reported
+    # a rejected password as "could not reach DataForSEO" -- the same wrong-cause
+    # failure this function was rewritten to stop.
+    if response.status_code >= 400:
+        result = IndexedCount(
+            reason=HTTP_STATUS_REASONS.get(response.status_code, CountFailure.API_ERROR),
+            detail=f"HTTP {response.status_code}",
+        )
+        logger.warning("site: size check for %s: %s", host, result.explain())
+        return result
 
     result = parse_results_count(body)
     if result.failed:
