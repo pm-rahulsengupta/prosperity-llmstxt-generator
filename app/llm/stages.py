@@ -20,6 +20,7 @@ from app.core.ranking import PATTERN_CATALOG, template_order
 from app.llm.client import LLMClient, Stage
 from app.llm.prompts import chat as chat_prompt
 from app.llm.prompts import intent as intent_prompt
+from app.llm.prompts import onboard as onboard_prompt
 from app.llm.prompts import plan as plan_prompt
 from app.llm.prompts import qa as qa_prompt
 from app.llm.prompts import summarise as summarise_prompt
@@ -192,6 +193,61 @@ def _heuristic_intents(rows: list) -> dict[str, tuple[str, str]]:
         else:
             out[row.group_key] = ("unknown", "shape alone is not conclusive")
     return out
+
+
+async def suggest_brief(
+    client: LLMClient,
+    site_url: str,
+    site_summary: str,
+    platform: str,
+    groups: list[tuple[str, int]],
+    sample_urls: list[str],
+    homepage_text: str = "",
+    known_urls: list[str] | None = None,
+) -> dict:
+    """Propose brief answers from site evidence. Returns {} when it cannot.
+
+    Empty rather than a heuristic fallback, and the distinction matters here more
+    than elsewhere: everywhere else a fallback keeps the pipeline running, but a
+    guessed *brief* would be adopted as the operator's own stated intent and then
+    drive every downstream decision. A blank form is honest; a form pre-filled by
+    keyword matching looks considered and is not.
+    """
+    if not client.enabled:
+        return {}
+
+    data = await client.structured(
+        stage=Stage.PLAN,
+        system=onboard_prompt.SYSTEM,
+        user=onboard_prompt.build_user_message(
+            site_url, site_summary, platform, groups, sample_urls, homepage_text
+        ),
+        schema=onboard_prompt.schema(),
+        schema_name="brief_suggestion",
+    )
+    if data is None:
+        return {}
+
+    parsed = onboard_prompt.parse(data)
+    # Verify the globs against real URLs before they reach the form. A pattern
+    # matching nothing looks like a decision and is approved without testing.
+    dropped: list[str] = []
+    for key in ("valuable", "noise"):
+        if not parsed.get(key):
+            continue
+        # Validated against every URL the site declares, not the sample shown to
+        # the model. The model also reads the homepage, so it legitimately
+        # proposes patterns for pages outside a 40-URL sample -- checking against
+        # the sample alone dropped `/seo-agency/*` on a site that plainly has one,
+        # which is the guard doing more damage than the thing it guards against.
+        kept, missed = onboard_prompt.keep_matching(
+            parsed[key].splitlines(), known_urls or sample_urls
+        )
+        parsed[key] = "\n".join(kept)
+        dropped.extend(missed)
+    if dropped:
+        parsed["_dropped"] = dropped
+    return parsed
 
 
 def select_urls(recon: SiteRecon, plan: CrawlPlan, page_cap: int) -> list[str]:

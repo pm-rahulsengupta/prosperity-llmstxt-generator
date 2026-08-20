@@ -15,10 +15,41 @@
     </p>
     {% endif %}
 
+    {% if llm_used is not defined or not llm_used %}
+    <form method="post" action="/sites/{{ domain }}/brief/suggest{% if run_id %}?run={{ run_id }}{% endif %}"
+          class="wizard">
+        <p>
+            <strong>Answer these from the site itself.</strong>
+            We will read {{ domain }} &mdash; its sitemaps, its homepage and what it
+            runs on &mdash; and propose an answer to every question below. Nothing is
+            saved: you review and edit, then press save.
+        </p>
+        <button class="primary" type="submit">Analyse {{ domain }} and pre-fill</button>
+        <span class="hint">
+            Takes about twenty seconds. Answers you have already given are left alone.
+        </span>
+    </form>
+    {% endif %}
+
+    {% if suggested %}
+    <p class="notice ok">
+        Pre-filled {{ suggested|length }} answer{{ '' if suggested|length == 1 else 's' }} from
+        the site. Check each one &mdash; these are proposals, not decisions.
+        {% if reasoning %}<br><span class="muted">{{ reasoning }}</span>{% endif %}
+    </p>
+    {% elif llm_used is defined and llm_used %}
+    <p class="notice wait">
+        Nothing new to suggest &mdash; every field already has an answer.
+    </p>
+    {% endif %}
+
     <form method="post" action="/sites/{{ domain }}/brief{% if run_id %}?run={{ run_id }}{% endif %}">
         {% for q in questions %}
-        <div class="field">
-            <label for="q_{{ q.key }}">{{ q.prompt }}</label>
+        <div class="field{% if suggested and q.key in suggested %} suggested{% endif %}">
+            <label for="q_{{ q.key }}">
+                {{ q.prompt }}
+                {% if suggested and q.key in suggested %}<span class="tag">suggested</span>{% endif %}
+            </label>
             {% if q.kind == 'choice' %}
             <select id="q_{{ q.key }}" name="{{ q.key }}">
                 <option value="">Not decided yet</option>

@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 from uuid import UUID
 
+import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -69,13 +70,14 @@ from app.core.render import render_combined
 from app.db import repo
 from app.db.base import get_session, session_scope
 from app.db.models import ChatMessage, DocumentRevision, RunStatus
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, LLMUsage
 from app.llm.prompts.plan import CrawlPlan
-from app.llm.stages import apply_chat_turn
+from app.llm.stages import apply_chat_turn, suggest_brief
 from app.metrics.gsc_csv import parse_gsc_export
 from app.nav import build_nav
 from app.scrape.agents_probe import probe_site
-from app.scrape.discover import normalise_site_url
+from app.scrape.discover import discover, normalise_site_url
+from app.scrape.extract import extract
 from app.scrape.readiness import SiteType, audit_readiness
 from app.scrape.tech_probe import probe_tech
 
@@ -427,6 +429,91 @@ async def brief_form(
             "imported": request.query_params.get("imported"),
             "import_notes": request.query_params.get("notes"),
             "gsc_enabled": settings.gsc_enabled,
+            "suggested": [],
+            "reasoning": "",
+            "llm_used": False,
+        },
+    )
+
+
+@app.post("/sites/{domain}/brief/suggest", response_class=HTMLResponse)
+async def suggest_brief_route(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Analyse the site and pre-fill the brief for review.
+
+    The whole reason the wizard exists: thirteen empty fields is a form nobody
+    finishes, and reviewing a wrong answer takes seconds where writing a right one
+    from scratch takes minutes. Nothing is saved here -- the suggestions are
+    rendered into the same form the operator would have filled in by hand, and the
+    save button is still theirs to press.
+    """
+    settings = get_settings()
+    site_url = f"https://{domain}"
+
+    recon = await discover(site_url, settings.crawl_user_agent)
+    tech = await probe_tech(site_url, settings.crawl_user_agent)
+
+    homepage = ""
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=20, headers={"User-Agent": settings.crawl_user_agent}
+        ) as client:
+            response = await client.get(site_url)
+            # The reader, not the raw HTML. A model given 490KB of inlined CSS
+            # spends its context on stylesheets and reasons from whatever text
+            # survived, which on a WP Rocket site is very little of it.
+            homepage = extract(response.text, site_url).markdown[:4000]
+    except (httpx.HTTPError, ValueError):
+        # A site we cannot read still has sitemap groups to reason from, which is
+        # most of the signal; failing the whole suggestion over the homepage
+        # would send the operator back to an empty form for no reason.
+        homepage = ""
+
+    stored = await repo.load_brief(session, domain)
+    usage = LLMUsage()
+    suggestion = await suggest_brief(
+        LLMClient(settings, usage),
+        site_url,
+        homepage[:400],
+        tech.platform.value,
+        recon.sitemap_groups(),
+        recon.urls[:40],
+        homepage,
+        known_urls=recon.urls,
+    )
+
+    # Suggestions fill only what the operator has not already answered. Overwriting
+    # a considered answer with a guess is the one way this feature could do harm.
+    answers = _brief_form_values(stored)
+    filled = []
+    for key, value in suggestion.items():
+        if key.startswith("_") or not value:
+            continue
+        if not answers.get(key):
+            answers[key] = value
+            filled.append(key)
+
+    return templates.TemplateResponse(
+        request,
+        "brief.html",
+        {
+            "user": user,
+            "domain": domain,
+            "questions": QUESTIONS,
+            "answers": answers,
+            "run_id": request.query_params.get("run"),
+            "drift_reason": None,
+            "metrics": await repo.metrics_summary(session, domain),
+            "imported": None,
+            "import_notes": None,
+            "gsc_enabled": settings.gsc_enabled,
+            "suggested": filled,
+            "reasoning": suggestion.get("_reasoning", ""),
+            "llm_used": bool(suggestion),
         },
     )
 

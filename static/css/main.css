@@ -602,3 +602,35 @@ button.destructive {
     .side-group + .side-group { margin-top: 0; }
     .side ul { display: flex; gap: 0.25rem; flex-wrap: wrap; }
 }
+
+/* -- the onboarding wizard --------------------------------------------------
+   Thirteen empty fields is a form nobody finishes. The wizard fills them from
+   the site and marks what it filled, so review has somewhere to start. */
+
+.wizard {
+    margin-bottom: 1.5rem;
+    padding: 1rem 1.1rem;
+    background: var(--pm-emerald-wash);
+    border-left: 4px solid var(--pm-emerald);
+    border-radius: var(--pm-radius-sm);
+}
+
+.wizard p { margin: 0 0 0.8rem; font-size: var(--pm-sm); }
+.wizard .hint { display: inline-block; margin-left: 0.75rem; }
+
+/* A suggested answer is a proposal that has not been read yet. The marker is
+   what tells a reviewer where to look; without it the form looks finished. */
+.field.suggested > label { color: var(--pm-teal-deep); }
+
+.tag {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid var(--pm-teal);
+    border-radius: 999px;
+    font-size: var(--pm-xs);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--pm-teal-deep);
+}

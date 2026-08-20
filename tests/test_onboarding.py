@@ -425,6 +425,9 @@ def test_the_brief_form_renders_every_question_with_its_consequence():
             imported=None,
             import_notes=None,
             gsc_enabled=False,
+            suggested=[],
+            reasoning="",
+            llm_used=False,
         )
     finally:
         env.undefined = previous
