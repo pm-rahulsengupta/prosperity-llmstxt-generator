@@ -38,7 +38,16 @@ indexes, and near-identical location or comparison pages generated from a templa
 and a handful of examples over the whole set.
 
 Set priority 1 for pages that must appear, 5 for pages to take only if budget \
-allows. Use the section names given to you; do not invent a taxonomy."""
+allows. Use the section names given to you; do not invent a taxonomy.
+
+Choosing the site type is the most consequential judgement here, because it decides the section names the whole file is built from. Judge what the site *is*, from its URL shapes and sitemap names, not from what its content is about:
+
+- An SEO or marketing agency is an agency, even though it writes about technical subjects. A law or accounting firm is professional services.
+- A shop is e-commerce. A newspaper or magazine is a publisher.
+- A business with a page per suburb or branch is local / multi-location.
+- Choose a documentation profile only if the site genuinely is developer documentation, with URLs under /docs/, /api/, /reference/ or /guide/. A site with no such paths is not documentation, whatever it writes about, and filing its service pages under "Tutorials" or "Examples" makes the file actively misleading.
+
+If nothing fits well, prefer the closest business shape over a documentation shape."""
 
 
 def schema() -> dict[str, Any]:

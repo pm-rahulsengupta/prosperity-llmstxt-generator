@@ -166,15 +166,25 @@ async def store_result(session: AsyncSession, run: Run, result: GenerationResult
         session, run.id, [(section.name, section.description) for section in result.sections]
     )
 
+    # Write the copy back too, not just the placement. `replace_pages` stores the
+    # crawl's raw metadata *before* the summarise stage runs, so without this the
+    # rendered file carries the model's titles and descriptions while the database
+    # still carries the page's own meta description -- and the next re-render from
+    # rows silently reverts every line. That is the source tool's `_rebuild_llmstxt`
+    # defect exactly, one layer down.
     by_url = {page.url: page for page in await get_pages(session, run.id)}
     for position, section in enumerate(result.sections):
         for order, entry in enumerate(section.pages):
             if (row := by_url.get(entry.url)) is not None:
+                row.title = entry.title or row.title
+                row.description = entry.description or row.description
                 row.section_name = section.name
                 row.is_optional = False
                 row.position = position * 1_000 + order
     for entry in result.optional:
         if (row := by_url.get(entry.url)) is not None:
+            row.title = entry.title or row.title
+            row.description = entry.description or row.description
             row.is_optional = True
             row.section_name = ""
 

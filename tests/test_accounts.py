@@ -7,6 +7,8 @@ here runs anywhere.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 
 from app.accounts import (
@@ -125,7 +127,9 @@ def test_a_non_admin_gets_404_not_403_from_an_admin_route():
     from app.auth import require_admin_or_404
 
     class FakeRequest:
-        session = {"user": {"email": "member@prosperitymedia.com.au", "is_admin": False}}
+        session: ClassVar[dict] = {
+            "user": {"email": "member@prosperitymedia.com.au", "is_admin": False}
+        }
 
     with pytest.raises(HTTPException) as excinfo:
         require_admin_or_404(FakeRequest())
@@ -138,6 +142,8 @@ def test_an_admin_passes_through():
     from app.auth import require_admin_or_404
 
     class FakeRequest:
-        session = {"user": {"email": "owner@prosperitymedia.com.au", "is_admin": True}}
+        session: ClassVar[dict] = {
+            "user": {"email": "owner@prosperitymedia.com.au", "is_admin": True}
+        }
 
     assert require_admin_or_404(FakeRequest()).is_admin

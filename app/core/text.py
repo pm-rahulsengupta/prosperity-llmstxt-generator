@@ -102,3 +102,25 @@ def domain_of(url: str) -> str:
 def estimate_tokens(text: str) -> int:
     """Rough estimate: ~4 characters per token for English prose."""
     return max(1, len(text) // 4)
+
+
+def content_fingerprint(markdown: str, min_chars: int = 200) -> str:
+    """A stable hash of a page's visible content, for exact-duplicate detection.
+
+    Normalised before hashing -- whitespace collapsed, case folded -- so two URLs
+    serving the same page with different indentation still collide. Deliberately
+    exact rather than fuzzy: this catches a page reachable at two URLs, which is the
+    common case on a crawl. Near-duplicate detection over templated pages is a
+    different problem with a different tool.
+
+    Returns "" for content too short to be worth comparing, which keeps thin pages
+    and empty extractions from all hashing to the same value and deduplicating each
+    other out of existence.
+    """
+    import hashlib
+    import re
+
+    normalised = re.sub(r"\s+", " ", (markdown or "").strip().casefold())
+    if len(normalised) < min_chars:
+        return ""
+    return hashlib.blake2b(normalised.encode("utf-8"), digest_size=16).hexdigest()

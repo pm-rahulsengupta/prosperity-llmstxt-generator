@@ -62,6 +62,9 @@ ignore = ["E501"]
 # conftest must set the event-loop policy before anything imports psycopg, so its
 # imports cannot all sit at the top.
 "tests/conftest.py" = ["E402"]
+# The en/em dashes in the link-line regex are deliberate: real files use them as
+# the description separator, so the pattern has to contain the actual characters.
+"app/core/rules/document.py" = ["RUF001"]
 
 [tool.ruff.format]
 quote-style = "double"

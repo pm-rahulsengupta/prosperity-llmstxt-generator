@@ -39,14 +39,14 @@ PAGE_SYSTEM = """You write the link lines of an llms.txt file.
 
 For each page, return:
 
-- title: 3 to 5 words naming what the page is. Not a sentence. Strip any brand \
-suffix. Use the page's own vocabulary.
-- description: 8 to 12 words saying what a reader gets from it, starting with a \
-verb where that reads naturally.
+- title: 3 to 5 words naming what the page is. Not a sentence. Strip any brand suffix. Use the page's own vocabulary.
+- description: 8 to 12 words saying what the page *contains or answers*. Describe the page, not the reader's activity.
 
-Both must be specific enough that someone choosing between two pages could choose. \
-"Learn more about our services" is a failure. Return one entry per page, keyed by \
-the exact URL you were given."""
+Never begin a description with Learn, Discover, Explore, Understand, Find out, Gain, Dive into or Unlock. Those name what the reader should do and say nothing about what is behind the link. Write "Token types, scopes and refresh flow", not "Learn about authentication".
+
+Do not use unverifiable superlatives: award-winning, best, leading, top, world-class, premier, cutting-edge, proven, expert. This is a machine-readable index, not marketing copy.
+
+Both must be specific enough that someone choosing between two pages could choose. "Learn more about our services" is a failure. Return one entry per page, keyed by the exact URL you were given."""
 
 
 def site_schema() -> dict[str, Any]:

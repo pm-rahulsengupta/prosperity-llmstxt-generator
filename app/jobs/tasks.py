@@ -20,13 +20,15 @@ import uuid
 from datetime import UTC, datetime
 
 from app.config import get_settings
-from app.core.models import PageEntry, Section
-from app.core.pipeline import GenerateOptions, generate
+from app.core.models import PageEntry, Section, ValidationIssue
+from app.core.pipeline import FilterOptions, GenerateOptions, generate
 from app.core.ranking import (
     importance_score,
+    is_identity_page,
     is_optional_page,
     sort_by_importance,
 )
+from app.core.text import content_fingerprint
 from app.db import repo
 from app.db.base import session_scope
 from app.db.models import RunStatus
@@ -34,6 +36,7 @@ from app.jobs.queue import QUEUE_CRAWL, app
 from app.llm.client import LLMClient, LLMUsage
 from app.llm.prompts.plan import CrawlPlan
 from app.llm.stages import (
+    enforce_copy_rules,
     plan_crawl,
     review_output,
     select_urls,
@@ -183,6 +186,10 @@ async def generate_task(run_id: str) -> None:
                     # never set this, which is why `## Optional` was always empty on
                     # every crawl-sourced file it ever produced.
                     crawl_depth=depths.get(result.url, 1),
+                    # Without this `deduplicate` is inert on a crawl: it keys on
+                    # `content_hash` and `canonical`, and the scraper populated
+                    # neither, so two URLs serving identical content both shipped.
+                    content_hash=content_fingerprint(page.markdown),
                 )
             )
 
@@ -217,17 +224,30 @@ async def generate_task(run_id: str) -> None:
 
         # -- triage ---------------------------------------------------------
         assignments = await triage_pages(client, entries, plan.site_pattern, scores)
+        protected = 0
         for entry in entries:
             if (assignment := assignments.get(entry.url)) is not None:
                 entry.section = assignment.section
-                entry.is_optional = assignment.is_optional
+                # The model's Optional flag is advisory for an identity page and
+                # refused for it. `## Optional` means "ignore this when context is
+                # tight", and a homepage, about or contact page is never that. The
+                # model was previously believed unconditionally, which is how a file
+                # ends up with its case studies and testimonials marked skippable.
+                if assignment.is_optional and is_identity_page(entry):
+                    protected += 1
+                    entry.is_optional = False
+                else:
+                    entry.is_optional = assignment.is_optional
 
         async with session_scope() as session:
             await repo.record_event(
                 session,
                 rid,
                 "triage",
-                f"{len(assignments)} of {len(entries)} pages placed by model"
+                (
+                    f"{len(assignments)} of {len(entries)} pages placed by model"
+                    + (f"; {protected} identity page(s) kept out of Optional" if protected else "")
+                )
                 if assignments
                 else "No LLM triage; heuristic sections retained",
                 done=len(assignments),
@@ -246,7 +266,24 @@ async def generate_task(run_id: str) -> None:
                 entry.title = written.title or entry.title
                 entry.description = written.description or entry.description
 
+        # Enforce the copy rules the prompt asks for. The prompt is guidance; this is
+        # the part that makes it true. Our own last file shipped 106 CTA-voice openers
+        # and 41 superlatives past a prompt that already forbade them.
+        fixed, still_failing = await enforce_copy_rules(client, entries)
+
         async with session_scope() as session:
+            if fixed or still_failing:
+                await repo.record_event(
+                    session,
+                    rid,
+                    "copy-check",
+                    f"{fixed} line(s) rewritten to meet the copy rules"
+                    + (
+                        f"; {len(still_failing)} still failing and flagged" if still_failing else ""
+                    ),
+                    done=fixed,
+                    total=fixed + len(still_failing),
+                )
             await repo.record_event(
                 session,
                 rid,
@@ -267,6 +304,7 @@ async def generate_task(run_id: str) -> None:
             site_url=site_url,
             entries=entries,
             options=GenerateOptions(
+                filters=FilterOptions(dedup=True, near_duplicates=False, thin_content=True),
                 pattern=plan.site_pattern,
                 site_name=(blurb.site_name if blurb else "") or plan.site_name,
                 site_summary=blurb.summary if blurb else "",
@@ -279,6 +317,10 @@ async def generate_task(run_id: str) -> None:
         # -- QA -------------------------------------------------------------
         result.issues = list(result.issues) + await review_output(
             client, result.llmstxt, result.issues
+        )
+        result.issues.extend(
+            ValidationIssue(level="warning", message=problem, code="copy-rule")
+            for problem in still_failing[:20]
         )
 
         async with session_scope() as session:

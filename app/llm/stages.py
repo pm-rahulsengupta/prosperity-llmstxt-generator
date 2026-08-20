@@ -13,6 +13,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from app.core.copyrules import check_all
 from app.core.models import PageEntry, Section, ValidationIssue
 from app.core.ranking import PATTERN_CATALOG, template_order
 from app.llm.client import LLMClient, Stage
@@ -344,3 +345,51 @@ async def apply_chat_turn(
         return ChatTurn(rejected="The model did not return a usable edit. Nothing was changed.")
 
     return chat_prompt.parse(data)
+
+
+async def enforce_copy_rules(
+    client: LLMClient, entries: list[PageEntry], max_retry_batch: int = 60
+) -> tuple[int, list[str]]:
+    """Check every link line, regenerate what fails once, flag what still fails.
+
+    "Regenerate once, then flag" rather than loop-until-clean: a model that could not
+    satisfy the constraint on the second attempt will usually not satisfy it on the
+    fifth either, and an unbounded retry loop on 500 pages is real money. What is left
+    is reported rather than quietly shipped.
+
+    Returns (how many were fixed, the descriptions of what still fails).
+    """
+    verdicts = {v.url: v for v in check_all(entries)}
+    failing = [e for e in entries if not verdicts[e.url].ok]
+    if not failing:
+        return 0, []
+
+    logger.info("copy check: %d of %d link lines failed", len(failing), len(entries))
+
+    if client.enabled and failing:
+        by_url = {e.url: e for e in entries}
+        for start in range(0, min(len(failing), max_retry_batch), summarise_prompt.BATCH_SIZE):
+            batch = failing[start : start + summarise_prompt.BATCH_SIZE]
+            problems = "\n".join(f"- {verdicts[e.url].describe()}" for e in batch)
+            data = await client.structured(
+                stage=Stage.SUMMARISE,
+                system=summarise_prompt.PAGE_SYSTEM
+                + "\n\nThese specific lines were rejected. Rewrite them so each problem "
+                "is resolved, keeping the same URLs:\n" + problems,
+                user=summarise_prompt.build_page_message(batch),
+                schema=summarise_prompt.page_schema(),
+                schema_name="page_copy",
+            )
+            if data is None:
+                continue
+            for copy in summarise_prompt.parse_pages(data, {e.url for e in batch}):
+                if (entry := by_url.get(copy.url)) is not None:
+                    entry.title = copy.title or entry.title
+                    entry.description = copy.description or entry.description
+
+    after = {v.url: v for v in check_all(entries)}
+    still_failing = [after[e.url].describe() for e in entries if not after[e.url].ok]
+    fixed = len(failing) - len(still_failing)
+    if still_failing:
+        logger.warning("copy check: %d line(s) still failing after one rewrite", len(still_failing))
+    return fixed, still_failing
