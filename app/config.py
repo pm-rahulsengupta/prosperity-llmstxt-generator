@@ -56,9 +56,25 @@ class Settings(BaseSettings):
     crawl_obey_robots: bool = True
     crawl_default_max_pages: int = 500
 
+    # --- Firecrawl (last-resort fetch fallback, billed per page) -----------
+    firecrawl_api_key: str = ""
+    firecrawl_base_url: str = "https://api.firecrawl.dev/v2"
+
+    # --- Size pre-check (DataForSEO `site:` query, one SERP call per site) -
+    dataforseo_login: str = ""
+    dataforseo_password: str = ""
+    size_check_location_code: int = 2036  # Australia
+    size_check_language_code: str = "en"
+
     # ----------------------------------------------------------------------
 
-    @field_validator("openai_api_key", "google_client_secret", mode="after")
+    @field_validator(
+        "openai_api_key",
+        "google_client_secret",
+        "firecrawl_api_key",
+        "dataforseo_password",
+        mode="after",
+    )
     @classmethod
     def _reject_placeholders(cls, v: str) -> str:
         """Treat an obvious placeholder as absent.
@@ -85,6 +101,14 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.openai_api_key)
+
+    @property
+    def firecrawl_enabled(self) -> bool:
+        return bool(self.firecrawl_api_key)
+
+    @property
+    def size_check_enabled(self) -> bool:
+        return bool(self.dataforseo_login and self.dataforseo_password)
 
     @property
     def sso_enabled(self) -> bool:

@@ -10,6 +10,11 @@ the cheap rung:
 
 Browser tiers are gated by their own semaphore, separate from the HTTP one, because
 running 8 HTTP fetches alongside 2 browsers is fine and running 8 browsers is not.
+
+A fourth rung, Firecrawl, is appended when a key is configured. It sits last because
+it is the only rung that bills per page, and it exists because a managed unblocking
+service fails differently from a local browser -- which is the whole point of having
+a fallback at all. With no key the ladder is unchanged.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.scrape.extract import ExtractedPage, extract, looks_like_js_shell
+from app.scrape.firecrawl import FirecrawlFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +42,7 @@ class Tier(StrEnum):
     HTTP = "http"
     DYNAMIC = "dynamic"
     STEALTH = "stealth"
+    FIRECRAWL = "firecrawl"
 
 
 @dataclass(slots=True)
@@ -82,13 +89,19 @@ class PageFetcher:
         max_browser_concurrency: int = 2,
         timeout: float = 30.0,
         allow_browser: bool = True,
+        firecrawl: FirecrawlFetcher | None = None,
     ) -> None:
         self.user_agent = user_agent
         self.timeout = timeout
         self.allow_browser = allow_browser
+        self.firecrawl = firecrawl
         self._http = asyncio.Semaphore(max_http_concurrency)
         self._browser = asyncio.Semaphore(max_browser_concurrency)
         self.stats = FetchStats()
+        # Set when Firecrawl reports an account-level failure -- a bad key or an
+        # exhausted balance. Those are true of the next 500 pages too, so the rung
+        # is dropped for the rest of the run instead of being paid for repeatedly.
+        self.firecrawl_disabled_reason = ""
 
     async def fetch(self, url: str) -> FetchResult:
         result = FetchResult(url=url)
@@ -139,7 +152,15 @@ class PageFetcher:
     # -- internals ---------------------------------------------------------
 
     def _ladder(self) -> list[Tier]:
-        return [Tier.HTTP, Tier.DYNAMIC, Tier.STEALTH] if self.allow_browser else [Tier.HTTP]
+        tiers = [Tier.HTTP, Tier.DYNAMIC, Tier.STEALTH] if self.allow_browser else [Tier.HTTP]
+        if self._firecrawl_available():
+            tiers.append(Tier.FIRECRAWL)
+        return tiers
+
+    def _firecrawl_available(self) -> bool:
+        return bool(
+            self.firecrawl and self.firecrawl.enabled and not self.firecrawl_disabled_reason
+        )
 
     @staticmethod
     def _should_escalate(attempt: FetchResult) -> bool:
@@ -148,6 +169,9 @@ class PageFetcher:
         return attempt.page is None or attempt.page.is_thin
 
     async def _attempt(self, tier: Tier, url: str) -> FetchResult:
+        if tier is Tier.FIRECRAWL:
+            return await self._attempt_firecrawl(url)
+
         semaphore = self._http if tier is Tier.HTTP else self._browser
         async with semaphore:
             try:
@@ -170,6 +194,29 @@ class PageFetcher:
             return FetchResult(url=url, status=status, tier=tier, error="js-shell")
 
         return FetchResult(url=url, status=status, tier=tier, page=extract(html_text, url))
+
+    async def _attempt_firecrawl(self, url: str) -> FetchResult:
+        """The paid rung. Returns an already-extracted page, so no `extract` call."""
+        assert self.firecrawl is not None  # guarded by `_firecrawl_available`
+
+        # Remote API, no local browser: it belongs under the HTTP budget, not the
+        # 2-slot browser one.
+        async with self._http:
+            response = await self.firecrawl.scrape(url)
+
+        if response.status in {401, 402}:
+            self.firecrawl_disabled_reason = response.error
+            logger.warning("Firecrawl disabled for the rest of this run: %s", response.error)
+            return FetchResult(url=url, tier=Tier.FIRECRAWL, error=response.error, terminal=True)
+
+        if response.page is None:
+            return FetchResult(
+                url=url, status=response.status, tier=Tier.FIRECRAWL, error=response.error
+            )
+
+        return FetchResult(
+            url=url, status=response.status or 200, tier=Tier.FIRECRAWL, page=response.page
+        )
 
     async def _raw_fetch(self, tier: Tier, url: str):
         from scrapling import AsyncFetcher, DynamicFetcher, StealthyFetcher
