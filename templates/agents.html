@@ -94,6 +94,67 @@
 </div>
 {% endif %}
 
+{% if bundle %}
+<div class="panel">
+    <h3>Files for this scenario</h3>
+    <p class="muted">
+        Goal: <strong>{{ bundle.scenario.replace('_', ' ') }}</strong>.
+        {{ bundle.artifacts|length }} file{{ '' if bundle.artifacts|length == 1 else 's' }} to publish.
+    </p>
+    <table>
+        <thead><tr><th>File</th><th>Serve at</th><th></th></tr></thead>
+        <tbody>
+        {% for a in bundle.artifacts %}
+        <tr>
+            <td>{{ a.name }}</td>
+            <td><span class="url">{{ a.path }}</span></td>
+            <td class="right">
+                <a href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind={{ a.name|urlencode }}">Download</a>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    {% if bundle.not_needed %}
+    <p class="hint">
+        Not needed for this goal: {{ bundle.not_needed|join(', ') }}. That is a decision,
+        not an omission &mdash; publishing a file a site has no use for gives an agent
+        one more thing to fetch and nothing more to act on.
+    </p>
+    {% endif %}
+
+    {% if bundle.notes %}
+    <ul class="notes">
+        {% for note in bundle.notes %}<li class="info">{{ note }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h3>Deployment dependencies</h3>
+    <p class="muted">
+        Grouped by who has to do it. The uploads can be actioned today; everything
+        below them needs someone with access to the server, the templates or the
+        stack &mdash; and a list that mixes the two is a list nobody starts.
+    </p>
+
+    {% for effort, tasks in bundle.tasks_by_effort().items() %}
+    <h4>{{ effort_labels[effort] }}</h4>
+    <p class="hint">{{ effort_owners[effort] }}</p>
+    <ul class="notes">
+        {% for t in tasks %}
+        <li class="{% if t.blocked_by %}error{% else %}info{% endif %}">
+            <strong>{{ t.component }}</strong> &mdash; {{ t.what }}
+            {% if t.platform_hint %}<br><span class="muted">{{ t.platform_hint }}</span>{% endif %}
+            {% if t.blocked_by %}<br><span class="muted">Blocked: {{ t.blocked_by }}</span>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if readiness %}
 <div class="panel">
     <h3>Agent readiness &mdash; {{ readiness.score }}/100</h3>

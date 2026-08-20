@@ -49,6 +49,12 @@ from app.core.agents_doc import (
 from app.core.agents_render import render_agents_liquid, render_agents_md
 from app.core.ai_catalog import CONTENT_TYPE as CATALOG_TYPE
 from app.core.ai_catalog import build_catalog, render_catalog
+from app.core.bundle import (
+    EFFORT_LABELS,
+    EFFORT_OWNERS,
+    build_bundle,
+    verify_declared,
+)
 from app.core.edits import EditTarget, apply_operations
 from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
@@ -126,6 +132,8 @@ templates.env.globals["usd"] = usd
 # route must remember: sixteen routes render templates, and the one that forgot
 # would 500 on a page that has nothing to do with navigation.
 templates.env.globals["build_nav"] = build_nav
+templates.env.globals["effort_labels"] = EFFORT_LABELS
+templates.env.globals["effort_owners"] = EFFORT_OWNERS
 templates.env.globals["pattern_labels"] = PATTERN_LABELS
 templates.env.globals["pattern_sections"] = PATTERN_TEMPLATES
 templates.env.globals["sso_enabled"] = settings.sso_enabled
@@ -340,6 +348,10 @@ def _brief_form_values(brief: SiteBrief) -> dict[str, str]:
     )
     return {
         "primary_action": brief.primary_action.value,
+        "ai_bot_policy": brief.ai_bot_policy.value,
+        "mcp_server_url": "\n".join(brief.mcp_server_url),
+        "a2a_agent_url": "\n".join(brief.a2a_agent_url),
+        "openapi_url": "\n".join(brief.openapi_url),
         "found_for": brief.found_for,
         "audience": brief.audience,
         "rate_limit_note": brief.rate_limit_note,
@@ -558,13 +570,15 @@ async def _agents_document(session: AsyncSession, normalised: str):
     # Endpoints the tech probe confirmed are citable on the same terms as anything
     # else here: each answered with the right content type, so each is a capability
     # rather than a convention someone expects to exist.
+    run = None
     read_only: list = [
         Capability(label=d.name, url=d.url, evidence=f"answered {d.evidence}")
         for d in tech.endpoints
     ]
     policies: list = []
     contact = ""
-    if (run := await repo.latest_complete_run(session, domain)) is not None:
+    run = await repo.latest_complete_run(session, domain)
+    if run is not None:
         pages = await repo.get_pages(session, run.id)
         crawled, policies, contact = links_from_pages(
             [(p.url, p.title or "") for p in pages if p.included]
@@ -600,7 +614,25 @@ async def _agents_document(session: AsyncSession, normalised: str):
     doc.platform = tech.platform.value
     doc.notes.extend(tech.notes)
     catalog = build_catalog(probe, tech, site_name=doc.site_name)
-    return probe, doc, tech, catalog, readiness
+
+    # Declared endpoints are verified before anything references them. An
+    # operator naming their own MCP server is the only way we learn of it, and
+    # also the easiest place for a typo or a decommissioned host to reach a
+    # published file.
+    declared = await verify_declared(brief, settings.crawl_user_agent)
+    rendered_catalog = render_catalog(catalog) if catalog.worth_publishing else ""
+    bundle = build_bundle(
+        normalised,
+        brief,
+        declared=declared,
+        llms_txt=(run.llmstxt if run else ""),
+        llms_full=(run.llms_full if run else ""),
+        agents_md=render_agents_md(doc),
+        ai_catalog=rendered_catalog,
+        sitemap_url=f"{normalised}/sitemap.xml",
+        platform=tech.platform.value,
+    )
+    return probe, doc, tech, catalog, readiness, bundle
 
 
 @app.get("/agents", response_class=HTMLResponse)
@@ -638,7 +670,7 @@ async def agents_generate(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    probe, doc, tech, catalog, readiness = await _agents_document(session, normalised)
+    probe, doc, tech, catalog, readiness, bundle = await _agents_document(session, normalised)
 
     return templates.TemplateResponse(
         request,
@@ -651,6 +683,7 @@ async def agents_generate(
             "tech": tech,
             "catalog": catalog,
             "readiness": readiness,
+            "bundle": bundle,
             "rendered": render_agents_md(doc),
         },
     )
@@ -671,7 +704,7 @@ async def agents_download(
     for the file being true when it is downloaded.
     """
     normalised = normalise_site_url(site)
-    probe, doc, _tech, catalog, _readiness = await _agents_document(session, normalised)
+    probe, doc, _tech, catalog, _readiness, bundle = await _agents_document(session, normalised)
 
     if kind == "liquid":
         body, filename, media = render_agents_liquid(doc), "agents.md.liquid", "text/markdown"

@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 __all__ = [
     "ACTION_LABELS",
     "QUESTIONS",
+    "BotPolicy",
     "Drift",
     "Fact",
     "PrimaryAction",
@@ -75,6 +76,33 @@ class PrimaryAction(StrEnum):
     READ_AND_CITE = "read_and_cite"
     USE_THE_API = "use_the_api"
     UNDECIDED = ""
+
+
+class BotPolicy(StrEnum):
+    """What AI crawlers may do, as robots.txt and Content-Signal express it.
+
+    Named after outcomes rather than after bot names, because the bot list moves
+    monthly and the intent does not. The Cloudflare trap is worth stating in the
+    labels themselves: from 15 September 2026, blocking Training on Cloudflare
+    also blocks Googlebot, Bingbot and Applebot, because multi-purpose crawlers
+    are judged by their strictest rule. A tick-box aimed at AI quietly costs a
+    client Google, and nobody discovers it from the tick-box.
+    """
+
+    ALLOW_ALL = "allow_all"
+    ALLOW_SEARCH_ONLY = "allow_search_only"
+    BLOCK_ALL = "block_all"
+    UNDECIDED = ""
+
+
+BOT_POLICY_LABELS: dict[BotPolicy, str] = {
+    BotPolicy.ALLOW_ALL: "Allow everything — crawl, cite, and train",
+    BotPolicy.ALLOW_SEARCH_ONLY: (
+        "Allow search and citation, refuse training (note: on Cloudflare this can "
+        "also block Googlebot from 15 Sept 2026)"
+    ),
+    BotPolicy.BLOCK_ALL: "Block AI crawlers entirely",
+}
 
 
 ACTION_LABELS: dict[PrimaryAction, str] = {
@@ -183,6 +211,48 @@ QUESTIONS: tuple[Question, ...] = (
         ),
         placeholder="One request per second; identify yourself in the User-Agent",
     ),
+    # -- declared capabilities ------------------------------------------------
+    #
+    # These turn the tool from a detector into a generator. A probe can find an
+    # MCP server only if the site already advertises one, which is circular: the
+    # whole point of publishing a catalog is to advertise it. So the operator
+    # names the endpoint and we verify it answers -- declared *and* verified is
+    # what earns a line in a published file, which keeps the rule intact rather
+    # than trading it away for the feature.
+    Question(
+        key="mcp_server_url",
+        prompt="If you run an MCP server, what is its endpoint?",
+        kind="urls",
+        effect=(
+            "Published in ai-catalog.json and agents.md once it answers. Verified "
+            "before it is written; an endpoint that does not respond is refused."
+        ),
+        placeholder="https://mcp.example.com/",
+    ),
+    Question(
+        key="a2a_agent_url",
+        prompt="If this site is an agent, where is its A2A agent card?",
+        kind="urls",
+        effect="Catalogued once it answers as JSON. Verified before publishing.",
+        placeholder="https://example.com/.well-known/agent.json",
+    ),
+    Question(
+        key="openapi_url",
+        prompt="If you have a public API, where is its OpenAPI description?",
+        kind="urls",
+        effect="Catalogued and linked from agents.md once it answers.",
+        placeholder="https://example.com/openapi.json",
+    ),
+    Question(
+        key="ai_bot_policy",
+        prompt="What should AI crawlers be allowed to do?",
+        kind="choice",
+        effect=(
+            "Writes the robots.txt rules and the Content-Signal line. Blocking "
+            "training also blocks Googlebot on Cloudflare, which is the trap."
+        ),
+        choices=tuple(BOT_POLICY_LABELS.items()),
+    ),
     Question(
         key="facts",
         prompt="Facts the tool must never guess: founding year, locations, team size, awards.",
@@ -213,6 +283,11 @@ class SiteBrief:
     """The answers, structured. Persisted per domain under ``site_configs.plan``."""
 
     primary_action: PrimaryAction = PrimaryAction.UNDECIDED
+    # Declared capabilities. Each is a candidate until a probe confirms it.
+    mcp_server_url: tuple[str, ...] = ()
+    a2a_agent_url: tuple[str, ...] = ()
+    openapi_url: tuple[str, ...] = ()
+    ai_bot_policy: BotPolicy = BotPolicy.UNDECIDED
     found_for: str = ""
     audience: str = ""
     # Advertised in agents.md. Free text rather than a number: "one request per
@@ -235,6 +310,10 @@ class SiteBrief:
         return not any(
             (
                 self.primary_action,
+                self.mcp_server_url,
+                self.a2a_agent_url,
+                self.openapi_url,
+                self.ai_bot_policy,
                 self.found_for,
                 self.audience,
                 self.rate_limit_note,
@@ -250,6 +329,10 @@ class SiteBrief:
         """JSONB-safe. Sets and tuples become lists; Fact becomes a mapping."""
         return {
             "primary_action": self.primary_action.value,
+            "mcp_server_url": list(self.mcp_server_url),
+            "a2a_agent_url": list(self.a2a_agent_url),
+            "openapi_url": list(self.openapi_url),
+            "ai_bot_policy": self.ai_bot_policy.value,
             "found_for": self.found_for,
             "audience": self.audience,
             "rate_limit_note": self.rate_limit_note,
@@ -333,6 +416,13 @@ def fold_change(before: float, after: float) -> float:
     return hi / lo
 
 
+def _as_policy(raw) -> BotPolicy:
+    try:
+        return BotPolicy(str(raw or "").strip())
+    except ValueError:
+        return BotPolicy.UNDECIDED
+
+
 def _as_action(raw) -> PrimaryAction:
     """Tolerant: an unknown or absent answer is undecided, never a guess."""
     try:
@@ -405,6 +495,10 @@ def brief_from_answers(
 
     return SiteBrief(
         primary_action=_as_action(answers.get("primary_action")),
+        mcp_server_url=lines("mcp_server_url"),
+        a2a_agent_url=lines("a2a_agent_url"),
+        openapi_url=lines("openapi_url"),
+        ai_bot_policy=_as_policy(answers.get("ai_bot_policy")),
         found_for=str(answers.get("found_for") or "").strip(),
         audience=str(answers.get("audience") or "").strip(),
         rate_limit_note=str(answers.get("rate_limit_note") or "").strip(),
