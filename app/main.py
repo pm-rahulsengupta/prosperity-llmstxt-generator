@@ -395,10 +395,19 @@ async def save_brief(
     # Retroactive by design: an operator adding an embargo is normally reacting to
     # something already crawled, so a forward-only guarantee would miss the exact
     # pages that prompted the answer.
-    purged = await repo.purge_embargoed_pages(session, domain, brief.embargoed)
+    purge = await repo.purge_embargoed(session, domain, brief.embargoed)
     await session.commit()
-    if purged:
-        logger.info("purged %s stored page(s) for %s under embargo", purged, domain)
+    if purge.anything:
+        # Logged with the URLs, not just a count. "Three pages were removed" is
+        # not enough to confirm the right three went, and an embargo that removed
+        # the wrong thing needs to be answerable without a database session.
+        logger.info(
+            "embargo purge for %s by %s: %s | urls=%s",
+            domain,
+            user.email,
+            purge.summary(),
+            list(purge.urls),
+        )
 
     if run:
         return await _start_preflight(session, run)

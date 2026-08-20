@@ -30,7 +30,28 @@ from enum import StrEnum
 from typing import Literal, Protocol
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
-from app.core.onboarding import SiteBrief, matches_any
+from app.core.onboarding import SiteBrief, fold_change, matches_any
+
+# Re-exported deliberately. `fold_change` is a metrics idea that has to be
+# defined a layer down because this module imports that one; naming it here lets
+# callers import it from where it belongs. Without `__all__` a linter removes it
+# as unused, which is how the last silent no-op happened.
+__all__ = [
+    "CanonicalPolicy",
+    "DateRange",
+    "GroupMetrics",
+    "GroupVerdict",
+    "JoinReport",
+    "MetricsProvider",
+    "PageMetrics",
+    "Thresholds",
+    "canonical_metric_url",
+    "fold_change",
+    "join_metrics",
+    "merge_metrics",
+    "planning_table",
+    "summarise_group",
+]
 
 Confidence = Literal["high", "medium", "low"]
 

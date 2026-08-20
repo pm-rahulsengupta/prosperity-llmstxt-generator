@@ -7,7 +7,9 @@ is the cheapest structural guard against that happening again.
 
 from __future__ import annotations
 
+import re
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -18,6 +20,7 @@ from app.core.metrics import DateRange, PageMetrics
 from app.core.models import GenerationResult, PageEntry
 from app.core.onboarding import SiteBrief, matches_any
 from app.db.models import (
+    DocumentRevision,
     Page,
     Run,
     RunEvent,
@@ -345,33 +348,156 @@ async def metrics_summary(session: AsyncSession, domain: str) -> dict:
     }
 
 
-async def purge_embargoed_pages(
+@dataclass(frozen=True, slots=True)
+class PurgeReport:
+    """Exactly what an embargo removed, so it can be checked and explained."""
+
+    pages: int = 0
+    metric_rows: int = 0
+    index_lines: int = 0
+    full_documents: int = 0
+    revisions: int = 0
+    urls: tuple[str, ...] = ()
+
+    @property
+    def anything(self) -> bool:
+        return bool(
+            self.pages
+            or self.metric_rows
+            or self.index_lines
+            or self.full_documents
+            or self.revisions
+        )
+
+    def summary(self) -> str:
+        if not self.anything:
+            return "Nothing matched the embargo; nothing was removed."
+        return (
+            f"Embargo removed {self.pages} stored page(s), {self.metric_rows} metric row(s), "
+            f"{self.index_lines} line(s) from rendered index files, and blanked "
+            f"{self.full_documents} full-text document(s) across {self.revisions} revision(s)."
+        )
+
+
+async def purge_embargoed(
     session: AsyncSession, domain: str, patterns: tuple[str, ...]
-) -> int:
-    """Delete stored page bodies for a domain that match an embargo pattern.
+) -> PurgeReport:
+    """Remove everything an embargoed URL left behind, not just the page row.
 
-    Declaring an embargo has to be retroactive. The crawl filter only protects
-    runs that have not happened yet, and an operator adding a pattern is usually
-    reacting to something already crawled -- that is what prompted them. Leaving
-    the bodies in place would mean the tool reports a page as embargoed while its
-    content sits in Postgres, which is precisely the gap the wording promises is
-    closed.
+    Declaring an embargo has to be retroactive -- an operator adding one is
+    normally reacting to something already crawled -- and it has to reach the
+    derived artifacts, which is where the first version fell short. A page body
+    deleted from `pages` while the same content sits in a rendered
+    `llms-full.txt` that is still downloadable is not an embargo, it is a change
+    of filing.
 
-    Matching happens in Python rather than SQL because the patterns are globs and
-    `matches_any` is the one implementation of what they mean; a second, SQL
-    dialect of the same rule would eventually disagree with the first.
+    Four places hold it:
+
+    * `pages` -- the crawled body and metadata.
+    * `site_metrics` -- rows keyed by the URL. Less sensitive, but an embargoed
+      path should not be inferable from a metrics table either.
+    * `runs.llmstxt` and every `document_revisions.llmstxt` -- link lines are
+      removed individually, which is safe because the format is one line per page.
+    * `runs.llms_full` and its revisions -- **blanked entirely**, not edited.
+      That file is concatenated page bodies with no reliable per-page boundary to
+      cut on, and a partial removal that cannot be verified is worse than an
+      empty field. The run is left needing a re-render, which is recoverable.
+
+    Recovery from a mistyped pattern is by re-running: remove the pattern from
+    the brief and re-run the site. Nothing here is unrecoverable *from the
+    source*, because the source is the client's own live website -- which is
+    exactly why deleting our copy is safe to do eagerly.
     """
     if not patterns:
-        return 0
+        return PurgeReport()
 
     result = await session.execute(
         select(Page.id, Page.url).join(Run, Page.run_id == Run.id).where(Run.domain == domain)
     )
-    doomed = [pid for pid, url in result.all() if matches_any(url, patterns) is not None]
+    doomed = [(pid, url) for pid, url in result.all() if matches_any(url, patterns) is not None]
+    doomed_urls = sorted({url for _, url in doomed})
     if doomed:
-        await session.execute(delete(Page).where(Page.id.in_(doomed)))
-        await session.flush()
-    return len(doomed)
+        await session.execute(delete(Page).where(Page.id.in_([pid for pid, _ in doomed])))
+
+    metrics_result = await session.execute(
+        select(SiteMetric.id, SiteMetric.url).where(SiteMetric.domain == domain)
+    )
+    doomed_metrics = [
+        mid for mid, url in metrics_result.all() if matches_any(url, patterns) is not None
+    ]
+    if doomed_metrics:
+        await session.execute(delete(SiteMetric).where(SiteMetric.id.in_(doomed_metrics)))
+
+    index_lines = 0
+    full_docs = 0
+    revisions_touched = 0
+
+    runs = (await session.execute(select(Run).where(Run.domain == domain))).scalars().all()
+    for run in runs:
+        cleaned, removed = _strip_embargoed_lines(run.llmstxt, patterns)
+        if removed:
+            run.llmstxt = cleaned
+            index_lines += removed
+        if run.llms_full and _mentions_embargoed(run.llms_full, patterns):
+            run.llms_full = ""
+            full_docs += 1
+
+    run_ids = [run.id for run in runs]
+    if run_ids:
+        revs = (
+            (
+                await session.execute(
+                    select(DocumentRevision).where(DocumentRevision.run_id.in_(run_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for rev in revs:
+            touched = False
+            cleaned, removed = _strip_embargoed_lines(rev.llmstxt, patterns)
+            if removed:
+                rev.llmstxt = cleaned
+                index_lines += removed
+                touched = True
+            if rev.llms_full and _mentions_embargoed(rev.llms_full, patterns):
+                rev.llms_full = ""
+                full_docs += 1
+                touched = True
+            if touched:
+                revisions_touched += 1
+
+    await session.flush()
+    return PurgeReport(
+        pages=len(doomed),
+        metric_rows=len(doomed_metrics),
+        index_lines=index_lines,
+        full_documents=full_docs,
+        revisions=revisions_touched,
+        urls=tuple(doomed_urls[:50]),
+    )
+
+
+def _strip_embargoed_lines(text: str, patterns: tuple[str, ...]) -> tuple[str, int]:
+    """Drop link lines naming an embargoed URL. Line-oriented and therefore safe."""
+    if not text:
+        return text, 0
+    kept, removed = [], 0
+    for line in text.splitlines():
+        if _mentions_embargoed(line, patterns):
+            removed += 1
+            continue
+        kept.append(line)
+    if not removed:
+        return text, 0
+    return "\n".join(kept) + ("\n" if text.endswith("\n") else ""), removed
+
+
+_URL_IN_TEXT = re.compile(r"https?://[^\s<>\")\]]+")
+
+
+def _mentions_embargoed(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(matches_any(url, patterns) is not None for url in _URL_IN_TEXT.findall(text))
 
 
 async def is_cancelled(session: AsyncSession, run_id: uuid.UUID) -> bool:

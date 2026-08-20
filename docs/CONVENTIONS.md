@@ -65,3 +65,66 @@ because they tested behaviour rather than artifacts.
 Where the artifact is the deliverable — prompts, templates, rendered output —
 snapshot it. `UPDATE_GOLDEN=1` regenerates the snapshots, and a deliberate change
 then shows up as a reviewable diff instead of silence.
+
+## An override predicates on its condition, never on a verdict name
+
+The same collision has now appeared three times, each surviving only until the
+verdict taxonomy shifted under it:
+
+1. the low-coverage `EXCLUDE` branch structurally preempted the concentration
+   check, so `PROMOTE_EXEMPLARS` could never fire on the case it existed for;
+2. the facet override was then guarded with `verdict is not PROMOTE_EXEMPLARS`,
+   which held only while promotion was the sole verdict that identified winners;
+3. when an unmeasurable-but-material group started arriving as
+   `REVIEW`-with-exemplars, that guard stopped matching and the override ate the
+   hub again.
+
+A verdict name is an *output* of the rules an override exists to constrain, so
+predicating on one couples the override to a taxonomy that will keep moving.
+Predicate on the underlying condition instead — the presence of exemplars, a
+measured concentration, a declared pattern — which is what the rule actually
+means and does not change when a verdict is renamed or added.
+
+The facet override now reads `not group.exemplars`, and that phrasing survives
+any number of new verdicts.
+
+## Fold-change for two magnitudes, percentage for a share of a whole
+
+Percentage change is asymmetric: a quantity can grow without limit but can only
+ever fall by 100%. Any threshold at or above 1.0 therefore catches doubling and
+can never catch halving — drift shipped with exactly that, unable to see a
+sitemap group gutted from 4,000 URLs to 200.
+
+Use `fold_change(before, after)` for any before-and-after comparison: click
+trends, CTR movement, coverage across runs, group sizes. It is defined in
+`app.core.onboarding` and re-exported from `app.core.metrics`, which is where
+callers should import it from; it lives a layer down only because `metrics`
+imports `onboarding` and the dependency cannot run both ways.
+
+Do **not** use it for a share of a whole — coverage, orphan share, CTR itself.
+Those are bounded fractions, not two magnitudes, and a percentage is the right
+unit for them.
+
+Audited at the time of writing: drift was the only place in the codebase
+comparing two magnitudes. The helper exists so the next one is written correctly
+rather than discovered later.
+
+## Embargo means never crawled, never stored, and not left in derived artifacts
+
+Four surfaces hold an embargoed URL, and the first implementation cleared one:
+
+- `pages` — the crawled body;
+- `site_metrics` — rows keyed by the URL;
+- `runs.llmstxt` and each `document_revisions.llmstxt` — link lines, removed
+  individually, which is safe because the format is one line per page;
+- `runs.llms_full` and its revisions — **blanked entirely, never edited**. That
+  file is concatenated page bodies with no reliable per-page boundary to cut on,
+  and a partial removal nobody can verify is worse than an empty field.
+
+Purge is logged with the URLs, not a count: "three pages were removed" cannot
+confirm the right three went.
+
+A mistyped pattern is recoverable by removing it from the brief and re-running.
+Nothing purged is unrecoverable *from the source*, because the source is the
+client's own live website — which is precisely why deleting our copy can be
+eager rather than cautious.

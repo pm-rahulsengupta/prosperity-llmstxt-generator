@@ -36,6 +36,7 @@ __all__ = [
     "SiteBrief",
     "brief_from_answers",
     "detect_drift",
+    "fold_change",
     "matches_any",
     "site_shape",
     "split_embargoed",
@@ -222,6 +223,35 @@ class SiteBrief:
         return "\n".join(lines)
 
 
+def fold_change(before: float, after: float) -> float:
+    """How many times larger the bigger of two magnitudes is. Always >= 1.0.
+
+    The house measure for comparing two magnitudes, in place of percentage
+    change. A percentage is asymmetric: a quantity can grow without limit but can
+    only ever fall by 100%, so any threshold at or above 1.0 catches doubling and
+    can never catch halving. Drift shipped with exactly that bug -- a sitemap
+    group gutted from 4,000 URLs to 200 is a 95% loss that no percentage
+    threshold in the usable range would fire on, while the same group doubling
+    tripped immediately.
+
+    Use this for every before-and-after comparison: click trends, CTR movement,
+    coverage between runs, group sizes. Do *not* use it for shares of a whole --
+    coverage, orphan share, CTR itself -- which are bounded fractions rather than
+    two magnitudes being compared, and for which a percentage is the right unit.
+
+    It lives in this module rather than in `metrics`, which is where trends will
+    be written, only because `metrics` imports this one and the dependency
+    cannot run both ways. `metrics` re-exports it, so callers there need not know.
+
+    Returns `inf` when something appears from nothing, which is a real event and
+    not a division error; 1.0 when both are zero, since nothing changed.
+    """
+    lo, hi = sorted((abs(before), abs(after)))
+    if lo == 0:
+        return 1.0 if hi == 0 else float("inf")
+    return hi / lo
+
+
 def _normalise(pattern: str) -> str:
     """Accept what a person types.
 
@@ -396,7 +426,7 @@ def detect_drift(
         old, new = previous[name], current[name]
         if max(old, new) < count_floor:
             continue
-        if min(old, new) == 0 or max(old, new) / min(old, new) >= count_fold:
+        if fold_change(old, new) >= count_fold:
             resized.append((name, old, new))
 
     return Drift(added=added, removed=removed, resized=tuple(resized))
