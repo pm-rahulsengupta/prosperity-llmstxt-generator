@@ -9,6 +9,7 @@ wrong tab exported entirely.
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from datetime import date
 
@@ -64,7 +65,7 @@ def test_a_zip_with_no_pages_file_says_what_it_did_contain():
     with zipfile.ZipFile(buffer, "w") as bundle:
         bundle.writestr("Queries.csv", "Query,Clicks\nseo,10\n")
 
-    with pytest.raises(ValueError, match="Queries.csv"):
+    with pytest.raises(ValueError, match=re.escape("Queries.csv")):
         parse_gsc_export(buffer.getvalue())
 
 
