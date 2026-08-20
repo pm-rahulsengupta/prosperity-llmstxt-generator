@@ -351,9 +351,10 @@ def test_merging_sums_the_variants_rather_than_picking_one():
     ]
     merged = merge_metrics(rows)
 
-    assert set(merged) == {"https://x.com/", "https://x.com/seo/"}
-    assert merged["https://x.com/"].clicks == 100
-    assert merged["https://x.com/"].impressions == 1_300
+    home = canonical_metric_url("https://x.com/")
+    assert set(merged) == {home, canonical_metric_url("https://x.com/seo/")}
+    assert merged[home].clicks == 100
+    assert merged[home].impressions == 1_300
 
 
 def test_unmerged_tracking_urls_understate_coverage():
@@ -371,7 +372,13 @@ def test_unmerged_tracking_urls_understate_coverage():
     unmerged = summarise_group("g", sitemap, {m.url: m for m in raw})
     merged = summarise_group("g", sitemap, merge_metrics(raw))
 
-    assert unmerged.total_clicks == 10
-    assert unmerged.coverage == 0.5
+    # Skipping canonicalisation now loses the group entirely rather than merely
+    # halving it: the sitemap spells the homepage with a trailing slash, GSC
+    # spells it with a campaign tag, and neither matches the other as written.
+    # A group carrying 100 clicks reports as having no data at all.
+    assert unmerged.total_clicks == 0
+    assert unmerged.coverage == 0.0
+    assert "No metrics" in unmerged.rationale
+
     assert merged.total_clicks == 100
     assert merged.coverage == 1.0

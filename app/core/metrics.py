@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from enum import StrEnum
 from typing import Literal, Protocol
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 from app.core.onboarding import SiteBrief, matches_any
 
@@ -173,7 +173,45 @@ TRACKING_PARAMS = frozenset(
 )
 
 
-def canonical_metric_url(url: str) -> str:
+def _normalise_path(path: str) -> str:
+    """One spelling per path.
+
+    Percent-encoding is decoded and re-encoded so `/caf%C3%A9/` and `/café/`
+    become one key -- `unquote` first because a path may arrive either way, and
+    `quote` after so the result is a legal URL rather than raw bytes. `safe`
+    keeps the separators that carry meaning.
+
+    The trailing slash is dropped rather than added, because the root is the one
+    path that cannot lose it and a bare "" is not a path.
+    """
+    decoded = unquote(path or "/")
+    normalised = quote(decoded.lower(), safe="/~:@!$&'()*+,;=")
+    if len(normalised) > 1 and normalised.endswith("/"):
+        normalised = normalised.rstrip("/") or "/"
+    return normalised or "/"
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalPolicy:
+    """Per-site canonicalisation rules.
+
+    `meaningful_params` is the part that cannot be global. A blanket strip is as
+    wrong as no strip: `?page=2` and `?sort=price` are distinct pages on a
+    marketplace and noise everywhere else, so the allowlist is declared per site
+    rather than guessed. Default behaviour strips known tracking keys only.
+    """
+
+    meaningful_params: frozenset[str] = frozenset()
+    # The host the property reports under. GSC keys a URL-prefix property to one
+    # host, so `www.x.com` and `x.com` arrive as different pages when a site
+    # answers on both; folding to the property's own form is what rejoins them.
+    canonical_host: str = ""
+
+
+DEFAULT_POLICY = CanonicalPolicy()
+
+
+def canonical_metric_url(url: str, policy: CanonicalPolicy | None = None) -> str:
     """Strip tracking parameters and normalise the trailing slash.
 
     Measured on prosperitymedia.com.au: the homepage arrives from GSC as both
@@ -185,17 +223,55 @@ def canonical_metric_url(url: str) -> str:
     the truth. A metric that silently understates demand would exclude pages that
     are earning.
 
+    UTM was one of at least six ways the same join fails, and every one of them
+    fails quietly, so each is handled here explicitly:
+
+    * **scheme** -- `http` and `https` are the same page; fold to `https`.
+    * **host** -- `www.x.com` and `x.com` are the same page when the site answers
+      on both; fold to the property's host when the policy names one.
+    * **path case** -- servers commonly serve `/SEO-Melbourne/` and
+      `/seo-melbourne/` identically. The *query* is left alone: `?q=Sydney` and
+      `?q=sydney` are not reliably the same search.
+    * **trailing slash** -- GSC reports both forms.
+    * **percent-encoding** -- `/caf%C3%A9/` and `/café/` are one page.
+    * **fragment** -- never sent to a server; it cannot identify a page.
+
+    Query parameters are sorted and de-duplicated so that ordering, which no
+    client guarantees, cannot produce two keys for one page.
+
     Only known tracking keys are removed. Stripping every query string would
-    destroy real pages on any site that paginates or filters through one.
+    destroy real pages on any site that paginates or filters through one, which
+    is why `policy.meaningful_params` exists rather than a global rule.
     """
+    policy = policy or DEFAULT_POLICY
     parsed = urlparse(url)
+
+    scheme = "https" if parsed.scheme in ("http", "https", "") else parsed.scheme
+    host = parsed.netloc.lower()
+    if host.endswith(":443"):
+        host = host[:-4]
+    if host.endswith(":80"):
+        host = host[:-3]
+    if policy.canonical_host:
+        # Fold both directions to whatever the property reports under, rather
+        # than always stripping `www` -- plenty of properties *are* the www host.
+        wanted = policy.canonical_host.lower()
+        if host in (wanted, f"www.{wanted}") or f"www.{host}" == wanted:
+            host = wanted
+    elif host.startswith("www."):
+        host = host[4:]
+
     kept = [
         (key, value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
-        if key.lower() not in TRACKING_PARAMS
+        if key.lower() not in TRACKING_PARAMS or key.lower() in policy.meaningful_params
     ]
-    path = parsed.path or "/"
-    return urlunparse((parsed.scheme, parsed.netloc, path, "", urlencode(kept), ""))
+    # Sorted and de-duplicated: parameter order is not guaranteed by anything
+    # upstream, and `?a=1&a=1` is the same request as `?a=1`.
+    kept = sorted(set(kept))
+
+    path = _normalise_path(parsed.path)
+    return urlunparse((scheme, host, path, "", urlencode(kept), ""))
 
 
 def merge_metrics(rows: Iterable[PageMetrics]) -> dict[str, PageMetrics]:
@@ -216,6 +292,86 @@ def merge_metrics(rows: Iterable[PageMetrics]) -> dict[str, PageMetrics]:
                 impressions=(existing.impressions or 0) + (row.impressions or 0),
             )
     return merged
+
+
+@dataclass(frozen=True, slots=True)
+class JoinReport:
+    """How well the metrics joined the site's own URLs.
+
+    More canonicalisation rules cannot protect against the next unknown way the
+    join fails -- there were six known ones and the sixth was found by accident.
+    A visible number can. Three percent of rows failing to join is ordinary
+    noise: redirects, pages retired since the window, hosts we do not own.
+    Fourteen percent means something is broken, and the point of surfacing it is
+    that someone sees it the same day rather than after a client asks why a page
+    is missing from their file.
+    """
+
+    total_rows: int = 0
+    joined_rows: int = 0
+    orphan_rows: int = 0
+    orphan_clicks: int = 0
+    total_clicks: int = 0
+    # A capped sample, so the cause is diagnosable without re-running a fetch
+    # that costs quota and may not reproduce the same window.
+    orphan_sample: tuple[str, ...] = ()
+
+    @property
+    def orphan_share(self) -> float:
+        return self.orphan_rows / self.total_rows if self.total_rows else 0.0
+
+    @property
+    def orphan_click_share(self) -> float:
+        """Weighted by clicks, which is the half that matters.
+
+        Ten thousand orphaned rows earning nothing is tidy-up. Ten orphaned rows
+        holding a fifth of the site's traffic is a broken join wearing a small
+        row count as a disguise.
+        """
+        return self.orphan_clicks / self.total_clicks if self.total_clicks else 0.0
+
+    @property
+    def looks_broken(self) -> bool:
+        return self.orphan_share > 0.10 or self.orphan_click_share > 0.10
+
+    def summary(self) -> str:
+        if not self.total_rows:
+            return "No metric rows to join."
+        verdict = " — check the join" if self.looks_broken else ""
+        return (
+            f"{self.joined_rows:,} of {self.total_rows:,} metric rows matched a known URL; "
+            f"{self.orphan_rows:,} did not ({self.orphan_share:.1%} of rows, "
+            f"{self.orphan_click_share:.1%} of clicks){verdict}."
+        )
+
+
+def join_metrics(
+    known_urls: Iterable[str],
+    metrics: dict[str, PageMetrics],
+    sample_size: int = 20,
+) -> JoinReport:
+    """Report how many metric rows failed to match any URL the site declares.
+
+    Deliberately separate from `merge_metrics`: merging is about collapsing
+    spellings of one page, joining is about whether the result lines up with the
+    site at all. Conflating them would hide the second question inside a function
+    whose success is measured by the first.
+    """
+    canonical_known = {canonical_metric_url(url) for url in known_urls}
+    orphans = [m for url, m in sorted(metrics.items()) if url not in canonical_known]
+
+    return JoinReport(
+        total_rows=len(metrics),
+        joined_rows=len(metrics) - len(orphans),
+        orphan_rows=len(orphans),
+        orphan_clicks=sum(m.clicks or 0 for m in orphans),
+        total_clicks=sum(m.clicks or 0 for m in metrics.values()),
+        # Sampled by clicks, not arbitrarily: the orphans worth diagnosing are
+        # the ones carrying traffic.
+        orphan_sample=tuple(
+            m.url for m in sorted(orphans, key=lambda m: -(m.clicks or 0))[:sample_size]
+        ),
+    )
 
 
 def _head_share(clicks: list[int]) -> float | None:
@@ -269,7 +425,14 @@ def summarise_group(
     thresholds = thresholds or Thresholds()
     group = GroupMetrics(group_key=group_key, url_count=len(urls))
 
-    known = [metrics[url] for url in urls if url in metrics and metrics[url].has_search_data]
+    # Both sides of the join are canonicalised. Metrics arrive already keyed that
+    # way from `merge_metrics`; the group's URLs come from a sitemap and have not
+    # been touched, so looking them up raw would miss on nothing more exotic than
+    # a trailing slash -- and miss *silently*, reporting a group with real traffic
+    # as having none. That is the same failure the canonicalisation exists to
+    # prevent, one layer further in.
+    lookup = [(url, canonical_metric_url(url)) for url in urls]
+    known = [metrics[key] for _, key in lookup if key in metrics and metrics[key].has_search_data]
     if not known:
         group.verdict = GroupVerdict.REVIEW
         group.confidence = "low"

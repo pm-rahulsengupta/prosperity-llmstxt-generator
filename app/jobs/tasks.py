@@ -20,6 +20,7 @@ import uuid
 from datetime import UTC, datetime
 
 from app.config import get_settings
+from app.core.metrics import JoinReport, join_metrics
 from app.core.models import PageEntry, Section, ValidationIssue
 from app.core.onboarding import detect_drift, site_shape, split_embargoed
 from app.core.pipeline import FilterOptions, GenerateOptions, generate
@@ -136,6 +137,14 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
     current_shape = site_shape(dict(pre.recon.sitemap_groups()))
     drift = detect_drift(site_brief.shape if site_brief else None, current_shape)
 
+    # How well the site's own URLs line up with whatever metrics we hold. Computed
+    # here because it needs both, and reported whether or not it looks wrong: the
+    # number is only useful as a baseline someone has seen before, otherwise the
+    # first time anyone looks at it they have nothing to compare against.
+    async with session_scope() as session:
+        stored_metrics = await repo.load_site_metrics(session, domain)
+    join = join_metrics(pre.recon.urls, stored_metrics) if stored_metrics else JoinReport()
+
     usage = LLMUsage()
     client = LLMClient(settings, usage)
     plan = await plan_crawl(client, pre.planning_brief(), pre.recon, cap, site_brief)
@@ -163,11 +172,34 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
             # in a shared JSONB column. The groups a *person* re-approves are not
             # -- when verdicts start being persisted they need their own table.
             "drift": drift.to_dict() if drift.drifted else {},
+            "join": {
+                "total_rows": join.total_rows,
+                "joined_rows": join.joined_rows,
+                "orphan_metric_rows": join.orphan_rows,
+                "orphan_share": round(join.orphan_share, 4),
+                "orphan_click_share": round(join.orphan_click_share, 4),
+                "looks_broken": join.looks_broken,
+                "orphan_sample": list(join.orphan_sample),
+            },
             "size_check": {
                 "reason": str(pre.indexed.reason),
                 "detail": pre.indexed.detail,
             },
         }
+        if join.total_rows:
+            await repo.record_event(session, rid, "preflight", join.summary())
+        if join.looks_broken:
+            # Named, not just counted. The sample is what makes the cause
+            # diagnosable without paying for another fetch over a window that
+            # may not reproduce.
+            await repo.record_event(
+                session,
+                rid,
+                "preflight",
+                "Metrics not matching the sitemap: "
+                + ", ".join(join.orphan_sample[:5])
+                + (" ..." if len(join.orphan_sample) > 5 else ""),
+            )
         if drift.drifted:
             await repo.record_event(
                 session,

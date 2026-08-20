@@ -154,6 +154,36 @@
 </div>
 {% endif %}
 
+{% set join = (run.stats or {}).get('join') or {} %}
+{% if join.get('total_rows') %}
+<div class="panel">
+    <h3>Metrics join</h3>
+    <p class="{% if join.get('looks_broken') %}notice wait{% else %}muted{% endif %}">
+        {{ '{:,}'.format(join.joined_rows) }} of {{ '{:,}'.format(join.total_rows) }}
+        metric rows matched a URL in the sitemap.
+        {{ '{:,}'.format(join.orphan_metric_rows) }} did not
+        ({{ '%.1f'|format(join.orphan_share * 100) }}% of rows,
+        {{ '%.1f'|format(join.orphan_click_share * 100) }}% of clicks).
+        {% if join.get('looks_broken') %}
+        That is high enough to be worth a look &mdash; either the join is failing or
+        these pages are genuinely missing from the sitemap, and the sample below says
+        which.
+        {% endif %}
+    </p>
+    {% if join.get('orphan_sample') %}
+    <ul class="notes">
+        {% for url in join.orphan_sample[:8] %}
+        <li class="info"><span class="url">{{ url }}</span></li>
+        {% endfor %}
+    </ul>
+    <p class="hint">
+        Ranked by clicks. A page here earns search traffic and is not in the sitemap,
+        so nothing downstream will ever consider it.
+    </p>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="panel">
     <h3>Run actions</h3>
 

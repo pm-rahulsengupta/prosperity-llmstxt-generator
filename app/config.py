@@ -9,10 +9,16 @@ a variable that exists in deploy but not in the registry is a variable nobody ca
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+if TYPE_CHECKING:
+    # Imported for the annotation only. At runtime `canonical_policy` imports it
+    # inside the function: config is the lowest layer here and importing the core
+    # metrics module at module scope would make it depend upward.
+    from app.core.metrics import CanonicalPolicy
 
 AppTarget = Literal["web", "worker", "migrate"]
 
@@ -75,6 +81,12 @@ class Settings(BaseSettings):
     # on push, with rotation the only remedy.
     gsc_service_account_file: str = ""
     gsc_service_account_json: str = ""
+    # Query parameters that identify a distinct page on a given site and must
+    # survive canonicalisation. `?page=2` and `?sort=price` are real pages on a
+    # marketplace and noise everywhere else, so this cannot be a global constant:
+    # a blanket strip is exactly as wrong as no strip, just in the other
+    # direction. Format: "domain=param,param;domain=param".
+    canonical_meaningful_params: str = ""
 
     # --- Size pre-check (DataForSEO `site:` query, one SERP call per site) -
     dataforseo_login: str = ""
@@ -125,6 +137,27 @@ class Settings(BaseSettings):
     @property
     def size_check_enabled(self) -> bool:
         return bool(self.dataforseo_login and self.dataforseo_password)
+
+    def canonical_policy(self, domain: str) -> CanonicalPolicy:
+        """The canonicalisation rules for one site.
+
+        The host is taken from the domain rather than configured separately: a
+        run already knows which property it is for, and one more variable to
+        keep in sync is one more way for two of them to disagree.
+        """
+        from app.core.metrics import CanonicalPolicy
+
+        wanted = domain.lower().strip()
+        for clause in self.canonical_meaningful_params.split(";"):
+            name, _, params = clause.partition("=")
+            if name.strip().lower() == wanted and params.strip():
+                return CanonicalPolicy(
+                    meaningful_params=frozenset(
+                        p.strip().lower() for p in params.split(",") if p.strip()
+                    ),
+                    canonical_host=wanted,
+                )
+        return CanonicalPolicy(canonical_host=wanted)
 
     @property
     def gsc_enabled(self) -> bool:

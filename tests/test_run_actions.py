@@ -84,9 +84,7 @@ def test_a_cancelled_run_is_not_recorded_as_a_failure():
     # Comments only, stripped: the prose in this handler explains why it does not
     # re-raise, and searching it for "raise" finds the explanation rather than
     # the statement.
-    code = "\n".join(
-        line for line in block.splitlines() if not line.strip().startswith("#")
-    )
+    code = "\n".join(line for line in block.splitlines() if not line.strip().startswith("#"))
 
     assert "RunStatus.FAILED" not in code
     assert "raise" not in code
