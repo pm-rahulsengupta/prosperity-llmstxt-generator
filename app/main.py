@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import zipfile
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
+from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
@@ -37,6 +40,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.core.edits import EditTarget, apply_operations
+from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
 from app.core.pipeline import rebuild
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
@@ -48,6 +52,7 @@ from app.db.models import ChatMessage, DocumentRevision, RunStatus
 from app.llm.client import LLMClient
 from app.llm.prompts.plan import CrawlPlan
 from app.llm.stages import apply_chat_turn
+from app.metrics.gsc_csv import parse_gsc_export
 from app.scrape.discover import normalise_site_url
 
 logger = logging.getLogger(__name__)
@@ -360,6 +365,10 @@ async def brief_form(
             "answers": _brief_form_values(stored),
             "run_id": run,
             "drift_reason": request.query_params.get("drift"),
+            "metrics": await repo.metrics_summary(session, domain),
+            "imported": request.query_params.get("imported"),
+            "import_notes": request.query_params.get("notes"),
+            "gsc_enabled": settings.gsc_enabled,
         },
     )
 
@@ -411,6 +420,62 @@ async def _start_preflight(session: AsyncSession, run_id: str) -> RedirectRespon
 
     await preflight_task.defer_async(run_id=run_id, requested_max_pages=run.max_pages or 0)
     return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+MAX_METRICS_UPLOAD = 25 * 1024 * 1024
+
+
+@app.post("/sites/{domain}/metrics")
+async def upload_metrics(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Take a Search Console Pages export and use it as this domain's metrics.
+
+    The service-account path needs the client to grant access, which takes days
+    and is sometimes refused outright. This path works the same afternoon and on
+    properties we will never be granted -- which, on the agency side, is most of
+    them.
+    """
+    form = await request.form()
+    upload = form.get("export")
+    if upload is None or not getattr(upload, "filename", ""):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No file was chosen.")
+
+    payload = await upload.read()
+    if len(payload) > MAX_METRICS_UPLOAD:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"That file is {len(payload) / 1_048_576:.0f} MB; the limit is 25 MB.",
+        )
+
+    window = None
+    start, end = str(form.get("window_start") or ""), str(form.get("window_end") or "")
+    if start and end:
+        try:
+            window = DateRange(date.fromisoformat(start), date.fromisoformat(end))
+        except ValueError:
+            window = None
+
+    try:
+        imported = parse_gsc_export(payload, window=window)
+    except (ValueError, zipfile.BadZipFile) as exc:
+        # The parser's messages name the actual problem -- wrong export tab, no URL
+        # column -- so they are shown rather than replaced with a generic failure.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    written = await repo.replace_site_metrics(
+        session, domain, imported.metrics, source="gsc-upload", uploaded_by=user.email
+    )
+    await session.commit()
+
+    notes = "; ".join(imported.notes)
+    return RedirectResponse(
+        f"/sites/{domain}/brief?imported={written}" + (f"&notes={quote(notes)}" if notes else ""),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.get("/runs/{run_id}", response_class=HTMLResponse)

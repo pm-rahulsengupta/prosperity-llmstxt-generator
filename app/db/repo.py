@@ -11,12 +11,21 @@ import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.metrics import DateRange, PageMetrics
 from app.core.models import GenerationResult, PageEntry
 from app.core.onboarding import SiteBrief
-from app.db.models import Page, Run, RunEvent, RunStatus, SectionRow, SiteConfig
+from app.db.models import (
+    Page,
+    Run,
+    RunEvent,
+    RunStatus,
+    SectionRow,
+    SiteConfig,
+    SiteMetric,
+)
 
 
 def domain_of(site_url: str) -> str:
@@ -241,6 +250,99 @@ async def save_brief(session: AsyncSession, domain: str, brief: SiteBrief) -> No
         session.add(config)
     config.brief = brief.to_dict()
     await session.flush()
+
+
+async def replace_site_metrics(
+    session: AsyncSession,
+    domain: str,
+    metrics: dict[str, PageMetrics],
+    source: str,
+    uploaded_by: str = "",
+) -> int:
+    """Replace this domain's metrics from one source, leaving other sources alone.
+
+    Replace rather than merge: an operator re-uploading has almost always fixed a
+    bad export, and merging would leave the rows they were trying to correct in
+    place with no way to see them. Scoped to `source` so an upload does not delete
+    what the API pulled, and the reverse.
+    """
+    await session.execute(
+        delete(SiteMetric).where(SiteMetric.domain == domain, SiteMetric.source == source)
+    )
+    session.add_all(
+        [
+            SiteMetric(
+                domain=domain,
+                url=url,
+                clicks=m.clicks,
+                impressions=m.impressions,
+                ctr=m.ctr,
+                position=m.position,
+                source=source,
+                window_start=m.window.start if m.window else None,
+                window_end=m.window.end if m.window else None,
+                uploaded_by=uploaded_by,
+            )
+            for url, m in metrics.items()
+        ]
+    )
+    await session.flush()
+    return len(metrics)
+
+
+async def load_site_metrics(session: AsyncSession, domain: str) -> dict[str, PageMetrics]:
+    """Everything known about a domain's URLs, best source per URL.
+
+    When two sources cover the same URL the one with more clicks wins, which in
+    practice means the longer window. Averaging them would invent a number that
+    no source reported and that no window explains.
+    """
+    result = await session.execute(select(SiteMetric).where(SiteMetric.domain == domain))
+    best: dict[str, PageMetrics] = {}
+    for row in result.scalars():
+        candidate = PageMetrics(
+            url=row.url,
+            clicks=row.clicks,
+            impressions=row.impressions,
+            ctr=row.ctr,
+            position=row.position,
+            source=row.source,
+            window=(
+                DateRange(row.window_start, row.window_end)
+                if row.window_start and row.window_end
+                else None
+            ),
+        )
+        incumbent = best.get(row.url)
+        if incumbent is None or (candidate.clicks or 0) > (incumbent.clicks or 0):
+            best[row.url] = candidate
+    return best
+
+
+async def metrics_summary(session: AsyncSession, domain: str) -> dict:
+    """What the UI shows about a domain's metrics without loading them all."""
+    result = await session.execute(
+        select(
+            SiteMetric.source,
+            func.count(SiteMetric.id),
+            func.sum(SiteMetric.clicks),
+            func.min(SiteMetric.window_start),
+            func.max(SiteMetric.window_end),
+            func.max(SiteMetric.created_at),
+        )
+        .where(SiteMetric.domain == domain)
+        .group_by(SiteMetric.source)
+    )
+    return {
+        source: {
+            "urls": urls,
+            "clicks": clicks or 0,
+            "window_start": start,
+            "window_end": end,
+            "at": at,
+        }
+        for source, urls, clicks, start, end, at in result.all()
+    }
 
 
 async def cache_indexed_estimate(session: AsyncSession, domain: str, estimate: int | None) -> None:

@@ -18,11 +18,12 @@ Two shapes are worth pointing out:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -398,3 +399,45 @@ class DocumentRevision(Base):
     )
 
     __table_args__ = (Index("ix_document_revisions_run_at", "run_id", "at"),)
+
+
+class SiteMetric(Base):
+    """Per-URL search metrics for a domain, from an upload or from the API.
+
+    Its own table, not a JSONB blob hanging off `site_configs`. Two reasons, and
+    the second is the one that bites: a domain can carry tens of thousands of
+    rows, and human-supplied state must never live inside a column that a machine
+    replaces wholesale -- `save_site_config` overwrites `plan` outright, so
+    anything nested there is one plan approval away from being gone.
+
+    Keyed on the canonical URL, so tracking-tagged variants have already been
+    merged before anything is written. Storing them separately would recreate the
+    split this layer exists to remove.
+    """
+
+    __tablename__ = "site_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    clicks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ctr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    position: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Which adapter produced this, so a later API pull can be told apart from an
+    # operator's upload and the two are never silently averaged.
+    source: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    # The window the figures cover. Recorded rather than enforced: two runs are
+    # only comparable over the same range, and without this nobody can tell.
+    window_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    window_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    uploaded_by: Mapped[str] = mapped_column(String(320), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        # One row per URL per source: re-uploading replaces rather than accumulates,
+        # which is what an operator correcting a bad export expects.
+        UniqueConstraint("domain", "url", "source", name="uq_site_metrics_domain_url_source"),
+    )

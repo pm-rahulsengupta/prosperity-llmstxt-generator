@@ -346,6 +346,10 @@ def test_the_brief_form_renders_every_question_with_its_consequence():
             ),
             run_id="abc",
             drift_reason=None,
+            metrics={},
+            imported=None,
+            import_notes=None,
+            gsc_enabled=False,
         )
     finally:
         env.undefined = previous

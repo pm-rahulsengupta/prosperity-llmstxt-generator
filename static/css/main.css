@@ -502,3 +502,6 @@ pre.output {
 }
 
 .notice.wait { background: var(--pm-lime); color: var(--pm-gunmetal); }
+.notice.ok { background: var(--pm-emerald); color: var(--pm-gunmetal); }
+input[type="file"] { font-size: var(--pm-sm); padding: 0.4rem 0; }
+input[type="date"] { font-family: inherit; }
