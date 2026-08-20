@@ -50,12 +50,39 @@
     {% endif %}
 
     <div class="stat-grid" style="margin-top:1rem">
-        <div class="stat"><div class="k">Platform</div><div class="v">{{ probe.platform }}</div></div>
+        <div class="stat">
+            <div class="k">Platform</div>
+            <div class="v">{{ tech.platform.value if tech else probe.platform }}</div>
+        </div>
         <div class="stat">
             <div class="k">Endpoints we may cite</div>
-            <div class="v">{{ probe.verified_endpoints|length }}</div>
+            <div class="v">{{ (tech.endpoints|length if tech else 0) + probe.verified_endpoints|length }}</div>
         </div>
     </div>
+
+    {% if tech and tech.platform_evidence %}
+    <p class="hint">Platform evidence: {{ tech.platform_evidence }}</p>
+    {% endif %}
+
+    {% if tech and tech.endpoints %}
+    <h4>Machine-readable surfaces</h4>
+    <table>
+        <thead><tr><th>Surface</th><th>URL</th><th>Evidence</th></tr></thead>
+        <tbody>
+        {% for d in tech.endpoints %}
+        <tr>
+            <td>{{ d.name }}</td>
+            <td><span class="url">{{ d.url }}</span></td>
+            <td class="muted">{{ d.evidence }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <p class="hint">
+        Each answered with the expected content type. A path returning HTML is a page,
+        not an endpoint, and is not listed.
+    </p>
+    {% endif %}
 </div>
 {% endif %}
 

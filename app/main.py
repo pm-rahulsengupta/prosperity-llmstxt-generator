@@ -11,6 +11,7 @@ more than elegance.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import zipfile
@@ -39,14 +40,19 @@ from app.auth import (
     user_from_claims,
 )
 from app.config import get_settings
-from app.core.agents_doc import build_agents_doc, links_from_pages
+from app.core.agents_doc import Capability, build_agents_doc, links_from_pages
 from app.core.agents_render import render_agents_liquid, render_agents_md
 from app.core.edits import EditTarget, apply_operations
 from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
 from app.core.pipeline import rebuild
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
-from app.core.ranking import PATTERN_AGENCY, PATTERN_LABELS, PATTERN_TEMPLATES
+from app.core.ranking import (
+    PATTERN_AGENCY,
+    PATTERN_ECOMMERCE_RETAIL,
+    PATTERN_LABELS,
+    PATTERN_TEMPLATES,
+)
 from app.core.render import render_combined
 from app.db import repo
 from app.db.base import get_session, session_scope
@@ -58,6 +64,7 @@ from app.metrics.gsc_csv import parse_gsc_export
 from app.nav import build_nav
 from app.scrape.agents_probe import probe_site
 from app.scrape.discover import normalise_site_url
+from app.scrape.tech_probe import probe_tech
 
 logger = logging.getLogger(__name__)
 
@@ -516,7 +523,13 @@ async def _agents_document(session: AsyncSession, normalised: str):
     they reviewed is the kind of divergence nobody notices until a client does.
     """
     settings = get_settings()
-    probe = await probe_site(normalised, settings.crawl_user_agent)
+    # Both probes together: one asks what agent-facing files exist, the other what
+    # the site is built on and what machine-readable surfaces answer. Concurrent
+    # because neither depends on the other and the page waits on the slower.
+    probe, tech = await asyncio.gather(
+        probe_site(normalised, settings.crawl_user_agent),
+        probe_tech(normalised, settings.crawl_user_agent),
+    )
 
     domain = urlparse(normalised).netloc
     config = await repo.load_site_config(session, domain)
@@ -525,19 +538,34 @@ async def _agents_document(session: AsyncSession, normalised: str):
     # Links come from a completed llms.txt run for the same domain. The two files
     # describe one site, so pages that crawl already fetched are pages this one
     # can cite -- the evidence rule met by a different means rather than waived.
-    read_only: list = []
+    # Endpoints the tech probe confirmed are citable on the same terms as anything
+    # else here: each answered with the right content type, so each is a capability
+    # rather than a convention someone expects to exist.
+    read_only: list = [
+        Capability(label=d.name, url=d.url, evidence=f"answered {d.evidence}")
+        for d in tech.endpoints
+    ]
     policies: list = []
     contact = ""
     if (run := await repo.latest_complete_run(session, domain)) is not None:
         pages = await repo.get_pages(session, run.id)
-        read_only, policies, contact = links_from_pages(
+        crawled, policies, contact = links_from_pages(
             [(p.url, p.title or "") for p in pages if p.included]
         )
+        # Machine-readable endpoints first: an agent can parse those, and the
+        # crawled pages are the human-readable fallback behind them.
+        read_only = read_only + crawled
 
     # The profile comes from that same run when there is one: agents.md and
     # llms.txt describe the same site, and disagreeing about its shape would be
     # its own defect. Absent that, the agency profile wins, which cannot transact.
     profile = (config.plan or {}).get("site_pattern", "") if config else ""
+    # A detected shop overrides a stale or absent profile, but only towards
+    # commerce -- `build_agents_doc` still needs a verified UCP endpoint before it
+    # will describe a transaction, so this widens what may be said and never what
+    # is claimed.
+    if not profile and tech.sells:
+        profile = PATTERN_ECOMMERCE_RETAIL
 
     doc = build_agents_doc(
         probe,
@@ -550,13 +578,17 @@ async def _agents_document(session: AsyncSession, normalised: str):
     )
     doc.summary = f"> {brief.found_for}" if brief.found_for else ""
     doc.agent_guidance = f"Canonical site: {normalised}"
-    return probe, doc
+    doc.platform = tech.platform.value
+    doc.notes.extend(tech.notes)
+    return probe, doc, tech
 
 
 @app.get("/agents", response_class=HTMLResponse)
 async def agents_page(request: Request, user: User = Depends(require_user)):
     return templates.TemplateResponse(
-        request, "agents.html", {"user": user, "site_url": "", "probe": None, "doc": None}
+        request,
+        "agents.html",
+        {"user": user, "site_url": "", "probe": None, "doc": None, "tech": None},
     )
 
 
@@ -578,7 +610,7 @@ async def agents_generate(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    probe, doc = await _agents_document(session, normalised)
+    probe, doc, tech = await _agents_document(session, normalised)
 
     return templates.TemplateResponse(
         request,
@@ -588,6 +620,7 @@ async def agents_generate(
             "site_url": normalised,
             "probe": probe,
             "doc": doc,
+            "tech": tech,
             "rendered": render_agents_md(doc),
         },
     )
@@ -608,7 +641,7 @@ async def agents_download(
     for the file being true when it is downloaded.
     """
     normalised = normalise_site_url(site)
-    probe, doc = await _agents_document(session, normalised)
+    probe, doc, _tech = await _agents_document(session, normalised)
 
     if kind == "liquid":
         body, filename = render_agents_liquid(doc), "agents.md.liquid"

@@ -12,6 +12,7 @@ that work belongs in the QA stage and an unscored advisory list.
 
 from __future__ import annotations
 
+from app.core.rules.agents_rules import AGENTS_RULES, AgentsContext
 from app.core.rules.document import FullDoc, IndexDoc, parse_full, parse_index
 from app.core.rules.full_rules import FULL_RULES
 from app.core.rules.index_rules import INDEX_RULES
@@ -93,6 +94,15 @@ CROSS_RULES: list[Rule] = [
 ALL_RULES: list[Rule] = [*INDEX_RULES, *FULL_RULES, *CROSS_RULES]
 RULES_BY_ID: dict[str, Rule] = {rule.id: rule for rule in ALL_RULES}
 
+# The agents.md rules are registered apart from ALL_RULES on purpose: they judge a
+# different document and must not enter the llms.txt denominator.
+AGENTS_BY_ID: dict[str, Rule] = {rule.id: rule for rule in AGENTS_RULES}
+
+# For rendering only, which needs a rule's severity and title regardless of which
+# document it judged. Scoring deliberately does *not* use this: the denominators
+# stay separate, because one number covering both documents would describe neither.
+_RENDERABLE: dict[str, Rule] = {**RULES_BY_ID, **AGENTS_BY_ID}
+
 
 def audit(
     index_text: str = "",
@@ -126,6 +136,47 @@ def audit(
     return score_report(findings, RULES_BY_ID)
 
 
+def audit_agents(
+    text: str,
+    *,
+    site_url: str = "",
+    verified_urls: list[str] | None = None,
+    transactional: bool | None = None,
+    content_type: str | None = None,
+    link_status: dict[str, int | str] | None = None,
+    network_checked: bool = False,
+) -> Report:
+    """Run the AGT rules over an agents.md and score it.
+
+    Kept separate from `audit` rather than folded into it. The two documents share
+    an engine, a `Finding` and a scoring function, but not a denominator: an
+    agents.md scored against the IDX rules would be marked down for having no link
+    lines, and an llms.txt scored against AGT-004 would be asked for endpoints it
+    was never meant to name. One number covering both would describe neither.
+
+    Every optional argument is evidence. Where it is absent the dependent rule
+    skips and says so, rather than assuming the safe answer -- an unverified file
+    scoring the same as a verified one is exactly the inflation the skip rules
+    exist to prevent.
+    """
+    ctx = AgentsContext(
+        text=text,
+        site_url=site_url,
+        verified_urls=list(verified_urls or []),
+        # `probe_ran` is separate from a non-empty list because a probe that found
+        # nothing and a probe that never ran are different claims, and AGT-004
+        # would otherwise condemn every URL in a file it had no evidence about.
+        probe_ran=verified_urls is not None,
+        transactional=transactional,
+        content_type=content_type,
+        link_status=link_status or {},
+        network_checked=network_checked,
+    )
+
+    findings = [rule.run(ctx) for rule in AGENTS_RULES]
+    return score_report(findings, AGENTS_BY_ID)
+
+
 def render_text(report: Report, *, verbose: bool = False) -> str:
     """A human-readable report. The score is never shown without its coverage."""
     total = len(report.findings)
@@ -140,9 +191,9 @@ def render_text(report: Report, *, verbose: bool = False) -> str:
     ]
 
     order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
-    failures = sorted(report.failures, key=lambda f: order[RULES_BY_ID[f.rule_id].severity])
+    failures = sorted(report.failures, key=lambda f: order[_RENDERABLE[f.rule_id].severity])
     for finding in failures:
-        rule = RULES_BY_ID[finding.rule_id]
+        rule = _RENDERABLE[finding.rule_id]
         lines.append(f"  {rule.severity.value.upper():<8} {finding.rule_id}  {finding.message}")
         for example in finding.examples:
             lines.append(f"           - {example}")
