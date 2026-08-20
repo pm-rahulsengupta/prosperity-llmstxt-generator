@@ -9,8 +9,9 @@ and failed in a way worth remembering.
 
 ## What is deployed
 
-Railway project **llmstxt-generator**, workspace *prosperity-media's Projects*,
-project id `a9cb5c54-aa41-4b0d-ad36-40a3707a21af`.
+Railway project **llmstxt-generator**, workspace *prosperity-media's Projects*.
+(The project id is in the Railway dashboard; it is deliberately not recorded here,
+since this repository is public.)
 
 | Service  | `APP_TARGET` | `RUN_MIGRATIONS` | Domain | Notes |
 |----------|--------------|------------------|--------|-------|
