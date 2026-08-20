@@ -67,6 +67,8 @@ async def collect_sitemap_urls(
     """
     seen_sitemaps: set[str] = set()
     seen_urls: dict[str, str] = {}
+    # url -> every sitemap that listed it, resolved to one below.
+    memberships: dict[str, list[str]] = {}
     notes: list[str] = []
     queue = [(url, 0) for url in seeds]
     # Everything ever put on the queue, not just everything already fetched. A site
@@ -97,6 +99,12 @@ async def collect_sitemap_urls(
 
             pages, nested = parse_sitemap(response.text)
             for page in pages:
+                # First-wins would make the group key depend on fetch order, which
+                # is concurrent and therefore not stable between runs. Every
+                # membership is recorded and the most specific one chosen after the
+                # walk, so a URL listed in both `sitemap_1.xml` and
+                # `AllNew_BodyType.xml` lands in the group that means something.
+                memberships.setdefault(page, []).append(url)
                 seen_urls.setdefault(page, url)
 
             if nested and depth >= MAX_SITEMAP_DEPTH:
@@ -109,7 +117,38 @@ async def collect_sitemap_urls(
     if len(seen_sitemaps) >= MAX_SITEMAPS:
         notes.append(f"Stopped after reading {MAX_SITEMAPS} sitemaps; there may be more.")
 
+    shared = 0
+    for page, listed_in in memberships.items():
+        if len(listed_in) > 1:
+            shared += 1
+            seen_urls[page] = most_specific_sitemap(listed_in)
+    if shared:
+        notes.append(
+            f"{shared:,} URL(s) appear in more than one sitemap; each was assigned to the "
+            "most specific one."
+        )
+
     return seen_urls, len(seen_sitemaps), notes
+
+
+def most_specific_sitemap(candidates: list[str]) -> str:
+    """Pick the sitemap that says the most about a URL.
+
+    A generic `sitemap_1.xml` and a named `AllNew_BodyType.xml` can both list the
+    same URL, and only the second is a useful group key. Preference order: deepest
+    path, then longest filename, then alphabetical so the result is stable rather
+    than dependent on fetch order.
+    """
+
+    def rank(url: str) -> tuple[int, int, str]:
+        path = urlparse(url).path
+        name = path.rsplit("/", 1)[-1]
+        stem = name.rsplit(".", 1)[0]
+        # A purely numeric name carries no meaning -- rank it below any real name.
+        meaningful = 0 if stem.isdigit() else 1
+        return (meaningful, len([p for p in path.split("/") if p]) + len(stem), url)
+
+    return max(sorted(candidates), key=rank)
 
 
 async def discover(site_url: str, user_agent: str, timeout: float = DEFAULT_TIMEOUT) -> SiteRecon:
