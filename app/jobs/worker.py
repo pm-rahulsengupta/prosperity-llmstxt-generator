@@ -24,6 +24,32 @@ from app.jobs.queue import QUEUE_CRAWL, QUEUE_DEFAULT, app  # noqa: E402
 logger = logging.getLogger(__name__)
 
 
+async def serve_health(port: int) -> None:
+    """A liveness endpoint, so Railway can tell a wedged worker from a busy one.
+
+    `railway.json` is shared by every service in the repo, so the healthcheck it
+    declares applies to the worker too -- and a worker with no HTTP server fails
+    that check and never goes healthy. Answering it is the better resolution than
+    removing it: a worker whose event loop has stopped is exactly the condition
+    worth restarting, and without a check nothing notices.
+
+    Deliberately thin. It reports that the process is alive, not that the queue is
+    healthy; a check that queries Postgres would fail the whole service during a
+    database blip that the worker would otherwise ride out.
+    """
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    from uvicorn import Config, Server
+
+    async def healthz(_request):
+        return PlainTextResponse("ok")
+
+    health_app = Starlette(routes=[Route("/healthz", healthz)])
+    config = Config(health_app, host="0.0.0.0", port=port, log_level="warning", access_log=False)
+    await Server(config).serve()
+
+
 async def main() -> None:
     settings = get_settings()
     logging.basicConfig(
@@ -56,10 +82,13 @@ async def main() -> None:
         worker = asyncio.create_task(
             app.run_worker_async(queues=[QUEUE_DEFAULT, QUEUE_CRAWL], concurrency=1)
         )
+        health = asyncio.create_task(serve_health(settings.port))
+
         await stopping.wait()
-        worker.cancel()
+        for task in (worker, health):
+            task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await worker
+            await asyncio.gather(worker, health, return_exceptions=True)
 
 
 if __name__ == "__main__":

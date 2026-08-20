@@ -2,7 +2,7 @@
 
 Scrapling gives three fetchers at very different costs. `Fetcher` is plain HTTP over
 curl_cffi with TLS impersonation, ~40MB. `DynamicFetcher` and `StealthyFetcher` each
-instantiate full Playwright, at 800MB+ per concurrent session. On a 2GB worker that
+instantiate a full patchright browser, at 800MB+ per concurrent session. On a 2GB worker that
 is a hard ceiling of two browsers, so the ladder exists to keep almost every page on
 the cheap rung:
 
