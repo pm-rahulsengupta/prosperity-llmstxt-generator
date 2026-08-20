@@ -24,14 +24,17 @@ argument against pretending prompt text is an enforcement mechanism.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from fnmatch import fnmatchcase
 from typing import Literal
 from urllib.parse import urlparse
 
 __all__ = [
+    "ACTION_LABELS",
     "QUESTIONS",
     "Drift",
     "Fact",
+    "PrimaryAction",
     "Question",
     "SiteBrief",
     "brief_from_answers",
@@ -46,7 +49,49 @@ __all__ = [
 # verbatim into a generated file, which makes them deterministic despite being
 # prose -- a distinction worth a separate kind, because the rule that free text
 # has no automatic effect is real and this would quietly break it.
-FieldKind = Literal["globs", "urls", "text", "published", "facts"]
+FieldKind = Literal["globs", "urls", "text", "published", "choice", "facts"]
+
+
+class PrimaryAction(StrEnum):
+    """What the operator most wants an agent to do on this site.
+
+    The single most useful answer in the brief, because it is the one thing no
+    amount of crawling reveals. Two sites can be structurally identical and want
+    opposite things from an agent: a clinic wants a booking, a manufacturer with
+    the same page shapes wants a distributor enquiry. Everything downstream --
+    which agents.md profile is written, whether commerce endpoints are offered at
+    all, which resources are worth showing -- follows from this.
+
+    Deliberately actions rather than industries. "Legal services" says what a firm
+    is; "have an agent make contact" says what it wants, and only the second can
+    be written into an instruction file.
+    """
+
+    CONTACT_LOCAL = "contact_local_business"
+    CONTACT_AGENCY = "contact_agency"
+    BOOK_APPOINTMENT = "book_appointment"
+    SHOP_ON_STORE = "shop_on_store"
+    FIND_LOCAL_INVENTORY = "find_local_inventory"
+    READ_AND_CITE = "read_and_cite"
+    USE_THE_API = "use_the_api"
+    UNDECIDED = ""
+
+
+ACTION_LABELS: dict[PrimaryAction, str] = {
+    PrimaryAction.CONTACT_LOCAL: "Contact a local business (call, directions, opening hours)",
+    PrimaryAction.CONTACT_AGENCY: "Make an enquiry with an agency or firm",
+    PrimaryAction.BOOK_APPOINTMENT: "Book an appointment or consultation",
+    PrimaryAction.SHOP_ON_STORE: "Buy something on the store",
+    PrimaryAction.FIND_LOCAL_INVENTORY: "Find stock in a nearby location, then buy or reserve",
+    PrimaryAction.READ_AND_CITE: "Read and cite the content accurately",
+    PrimaryAction.USE_THE_API: "Use the API or documentation",
+}
+
+# The actions that involve money changing hands. This, not the platform, is what
+# opens the commerce sections of an agents.md -- a WooCommerce install on a site
+# whose real goal is enquiries should not be handed a checkout flow, and the
+# operator is the only one who can say which it is.
+TRANSACTIONAL_ACTIONS = frozenset({PrimaryAction.SHOP_ON_STORE, PrimaryAction.FIND_LOCAL_INVENTORY})
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,9 +109,22 @@ class Question:
     # operator cannot calibrate an answer without knowing its consequence.
     effect: str
     placeholder: str = ""
+    # (value, label) pairs for `choice` questions. Empty for every other kind.
+    choices: tuple[tuple[str, str], ...] = ()
 
 
 QUESTIONS: tuple[Question, ...] = (
+    Question(
+        key="primary_action",
+        prompt="What do you most want an AI agent to do on this site?",
+        kind="choice",
+        effect=(
+            "Chooses which agents.md is written and whether commerce endpoints are "
+            "offered at all. The one answer no amount of crawling can supply."
+        ),
+        placeholder="",
+        choices=tuple(ACTION_LABELS.items()),
+    ),
     Question(
         key="found_for",
         prompt="What should this site be found for?",
@@ -154,6 +212,7 @@ class Fact:
 class SiteBrief:
     """The answers, structured. Persisted per domain under ``site_configs.plan``."""
 
+    primary_action: PrimaryAction = PrimaryAction.UNDECIDED
     found_for: str = ""
     audience: str = ""
     # Advertised in agents.md. Free text rather than a number: "one request per
@@ -175,6 +234,7 @@ class SiteBrief:
     def is_empty(self) -> bool:
         return not any(
             (
+                self.primary_action,
                 self.found_for,
                 self.audience,
                 self.rate_limit_note,
@@ -189,6 +249,7 @@ class SiteBrief:
     def to_dict(self) -> dict:
         """JSONB-safe. Sets and tuples become lists; Fact becomes a mapping."""
         return {
+            "primary_action": self.primary_action.value,
             "found_for": self.found_for,
             "audience": self.audience,
             "rate_limit_note": self.rate_limit_note,
@@ -272,6 +333,14 @@ def fold_change(before: float, after: float) -> float:
     return hi / lo
 
 
+def _as_action(raw) -> PrimaryAction:
+    """Tolerant: an unknown or absent answer is undecided, never a guess."""
+    try:
+        return PrimaryAction(str(raw or "").strip())
+    except ValueError:
+        return PrimaryAction.UNDECIDED
+
+
 def _normalise(pattern: str) -> str:
     """Accept what a person types.
 
@@ -335,6 +404,7 @@ def brief_from_answers(
             facts[name] = Fact(str(value), "operator")
 
     return SiteBrief(
+        primary_action=_as_action(answers.get("primary_action")),
         found_for=str(answers.get("found_for") or "").strip(),
         audience=str(answers.get("audience") or "").strip(),
         rate_limit_note=str(answers.get("rate_limit_note") or "").strip(),

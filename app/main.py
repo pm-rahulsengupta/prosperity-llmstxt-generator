@@ -40,8 +40,15 @@ from app.auth import (
     user_from_claims,
 )
 from app.config import get_settings
-from app.core.agents_doc import Capability, build_agents_doc, links_from_pages
+from app.core.agents_doc import (
+    Capability,
+    build_agents_doc,
+    links_from_pages,
+    profile_for,
+)
 from app.core.agents_render import render_agents_liquid, render_agents_md
+from app.core.ai_catalog import CONTENT_TYPE as CATALOG_TYPE
+from app.core.ai_catalog import build_catalog, render_catalog
 from app.core.edits import EditTarget, apply_operations
 from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
@@ -49,7 +56,6 @@ from app.core.pipeline import rebuild
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import (
     PATTERN_AGENCY,
-    PATTERN_ECOMMERCE_RETAIL,
     PATTERN_LABELS,
     PATTERN_TEMPLATES,
 )
@@ -332,6 +338,7 @@ def _brief_form_values(brief: SiteBrief) -> dict[str, str]:
         for name, fact in sorted(brief.facts.items())
     )
     return {
+        "primary_action": brief.primary_action.value,
         "found_for": brief.found_for,
         "audience": brief.audience,
         "rate_limit_note": brief.rate_limit_note,
@@ -559,13 +566,15 @@ async def _agents_document(session: AsyncSession, normalised: str):
     # The profile comes from that same run when there is one: agents.md and
     # llms.txt describe the same site, and disagreeing about its shape would be
     # its own defect. Absent that, the agency profile wins, which cannot transact.
-    profile = (config.plan or {}).get("site_pattern", "") if config else ""
-    # A detected shop overrides a stale or absent profile, but only towards
-    # commerce -- `build_agents_doc` still needs a verified UCP endpoint before it
-    # will describe a transaction, so this widens what may be said and never what
-    # is claimed.
-    if not profile and tech.sells:
-        profile = PATTERN_ECOMMERCE_RETAIL
+    # The operator's stated goal first, then the profile a completed llms.txt run
+    # settled on, then the detected platform. A stated goal outranks a detected
+    # plugin because the plugin is a fact about the build and the goal is a fact
+    # about the business, and only the second belongs in an instruction file.
+    profile = profile_for(
+        brief.primary_action.value,
+        detected=(config.plan or {}).get("site_pattern", "") if config else "",
+        platform_sells=tech.sells,
+    )
 
     doc = build_agents_doc(
         probe,
@@ -580,7 +589,8 @@ async def _agents_document(session: AsyncSession, normalised: str):
     doc.agent_guidance = f"Canonical site: {normalised}"
     doc.platform = tech.platform.value
     doc.notes.extend(tech.notes)
-    return probe, doc, tech
+    catalog = build_catalog(probe, tech, site_name=doc.site_name)
+    return probe, doc, tech, catalog
 
 
 @app.get("/agents", response_class=HTMLResponse)
@@ -588,7 +598,7 @@ async def agents_page(request: Request, user: User = Depends(require_user)):
     return templates.TemplateResponse(
         request,
         "agents.html",
-        {"user": user, "site_url": "", "probe": None, "doc": None, "tech": None},
+        {"user": user, "site_url": "", "probe": None, "doc": None, "tech": None, "catalog": None},
     )
 
 
@@ -610,7 +620,7 @@ async def agents_generate(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    probe, doc, tech = await _agents_document(session, normalised)
+    probe, doc, tech, catalog = await _agents_document(session, normalised)
 
     return templates.TemplateResponse(
         request,
@@ -621,6 +631,7 @@ async def agents_generate(
             "probe": probe,
             "doc": doc,
             "tech": tech,
+            "catalog": catalog,
             "rendered": render_agents_md(doc),
         },
     )
@@ -641,17 +652,27 @@ async def agents_download(
     for the file being true when it is downloaded.
     """
     normalised = normalise_site_url(site)
-    probe, doc, _tech = await _agents_document(session, normalised)
+    probe, doc, _tech, catalog = await _agents_document(session, normalised)
 
     if kind == "liquid":
-        body, filename = render_agents_liquid(doc), "agents.md.liquid"
+        body, filename, media = render_agents_liquid(doc), "agents.md.liquid", "text/markdown"
+    elif kind == "catalog":
+        # Refused rather than emitted empty. A catalog listing one document is
+        # noise wearing a standard's clothes, and the operator needs to know that
+        # rather than receive a file that looks finished.
+        if not catalog.worth_publishing:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                catalog.notes[0] if catalog.notes else "Nothing verified to catalogue.",
+            )
+        body, filename, media = render_catalog(catalog), "ai-catalog.json", CATALOG_TYPE
     else:
-        body, filename = render_agents_md(doc), "agents.md"
+        body, filename, media = render_agents_md(doc), "agents.md", "text/markdown"
 
     return PlainTextResponse(
         body,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        media_type="text/markdown; charset=utf-8",
+        media_type=f"{media}; charset=utf-8",
     )
 
 

@@ -19,7 +19,14 @@
         {% for q in questions %}
         <div class="field">
             <label for="q_{{ q.key }}">{{ q.prompt }}</label>
-            {% if q.kind == 'text' %}
+            {% if q.kind == 'choice' %}
+            <select id="q_{{ q.key }}" name="{{ q.key }}">
+                <option value="">Not decided yet</option>
+                {% for value, label in q.choices %}
+                <option value="{{ value }}" {% if answers[q.key] == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            {% elif q.kind == 'text' %}
             <input type="text" id="q_{{ q.key }}" name="{{ q.key }}"
                    value="{{ answers[q.key] }}" placeholder="{{ q.placeholder }}">
             {% elif q.kind == 'facts' %}

@@ -624,3 +624,75 @@ def test_delete_is_hidden_from_a_non_admin():
     assert "Delete permanently" not in html
     # Re-running is safe, so it stays available to everyone.
     assert "Re-run from the start" in html
+
+
+# -- the primary action -------------------------------------------------------
+#
+# The single most useful answer in the brief: the one thing no amount of crawling
+# reveals. Two sites can be built identically and want opposite things from an
+# agent, and only the operator knows which.
+
+
+def test_the_stated_goal_beats_a_detected_platform():
+    """A WooCommerce install on a site whose goal is enquiries is a fact about the
+    build, not about the business. Only the second belongs in an instruction file.
+    """
+    from app.core.agents_doc import profile_for
+    from app.core.ranking import PATTERN_AGENCY, PATTERN_ECOMMERCE_RETAIL
+
+    assert profile_for("contact_agency", platform_sells=True) == PATTERN_AGENCY
+    assert profile_for("shop_on_store") == PATTERN_ECOMMERCE_RETAIL
+
+
+def test_a_detected_shop_is_used_only_when_nobody_has_said_otherwise():
+    from app.core.agents_doc import profile_for
+    from app.core.ranking import PATTERN_ECOMMERCE_RETAIL
+
+    assert profile_for("", platform_sells=True) == PATTERN_ECOMMERCE_RETAIL
+
+
+def test_knowing_nothing_falls_back_to_the_shape_that_cannot_transact():
+    from app.core.agents_doc import profile_for
+    from app.core.ranking import PATTERN_AGENCY
+
+    assert profile_for("") == PATTERN_AGENCY
+
+
+def test_only_the_buying_goals_are_transactional():
+    from app.core.onboarding import TRANSACTIONAL_ACTIONS, PrimaryAction
+
+    assert PrimaryAction.SHOP_ON_STORE in TRANSACTIONAL_ACTIONS
+    assert PrimaryAction.FIND_LOCAL_INVENTORY in TRANSACTIONAL_ACTIONS
+    for action in (
+        PrimaryAction.CONTACT_LOCAL,
+        PrimaryAction.CONTACT_AGENCY,
+        PrimaryAction.BOOK_APPOINTMENT,
+        PrimaryAction.READ_AND_CITE,
+        PrimaryAction.USE_THE_API,
+    ):
+        assert action not in TRANSACTIONAL_ACTIONS
+
+
+def test_an_unrecognised_answer_is_undecided_rather_than_a_guess():
+    from app.core.onboarding import PrimaryAction, brief_from_answers
+
+    assert brief_from_answers({"primary_action": "nonsense"}).primary_action is (
+        PrimaryAction.UNDECIDED
+    )
+    assert brief_from_answers({}).primary_action is PrimaryAction.UNDECIDED
+
+
+def test_every_action_maps_to_a_profile():
+    """A goal with no shape behind it would silently fall back to the default."""
+    from app.core.agents_doc import ACTION_PROFILES
+    from app.core.onboarding import ACTION_LABELS
+
+    for action in ACTION_LABELS:
+        assert action.value in ACTION_PROFILES, action
+
+
+def test_the_action_round_trips_through_storage():
+    from app.core.onboarding import PrimaryAction, SiteBrief
+
+    brief = SiteBrief(primary_action=PrimaryAction.FIND_LOCAL_INVENTORY)
+    assert SiteBrief.from_dict(brief.to_dict()).primary_action is PrimaryAction.FIND_LOCAL_INVENTORY

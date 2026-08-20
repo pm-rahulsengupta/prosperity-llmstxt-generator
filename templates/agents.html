@@ -54,6 +54,14 @@
             <div class="k">Platform</div>
             <div class="v">{{ tech.platform.value if tech else probe.platform }}</div>
         </div>
+        {% if doc and doc.transactional and probe.has_ucp %}
+        <div class="stat">
+            <div class="k">UCP</div>
+            <div class="v">
+                <a href="{{ probe.ucp.url }}" target="_blank" rel="noopener">{{ doc.ucp_version or 'declared' }}</a>
+            </div>
+        </div>
+        {% endif %}
         <div class="stat">
             <div class="k">Endpoints we may cite</div>
             <div class="v">{{ (tech.endpoints|length if tech else 0) + probe.verified_endpoints|length }}</div>
@@ -107,7 +115,38 @@
             Download agents.md.liquid
         </a>
         {% endif %}
+        {% if catalog and catalog.worth_publishing %}
+        <a class="button" href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind=catalog">
+            Download ai-catalog.json
+        </a>
+        {% endif %}
     </div>
+
+    {% if catalog %}
+    <h4>Agentic Resource Discovery</h4>
+    {% if catalog.worth_publishing %}
+    <p class="muted">
+        {{ catalog.entries|length }} verified capabilit{{ 'y' if catalog.entries|length == 1 else 'ies' }}
+        to publish at <code>/.well-known/ai-catalog.json</code>.
+    </p>
+    <ul class="notes">
+        {% for entry in catalog.entries %}
+        <li class="info">
+            <strong>{{ entry.display_name }}</strong> &mdash;
+            <span class="url">{{ entry.url }}</span>
+            <br><span class="muted">{{ entry.evidence }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">{{ catalog.notes[0] }}</p>
+    {% endif %}
+    <p class="hint">
+        Agentic Resource Discovery is a v0.9 draft published 17 June 2026 by Google
+        with ten partners. Adoption is near zero &mdash; publishing this is being
+        early, not being compliant.
+    </p>
+    {% endif %}
 
     {% if probe.is_shopify %}
     <p class="hint">

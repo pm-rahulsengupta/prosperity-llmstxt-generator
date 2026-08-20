@@ -45,6 +45,8 @@ from enum import StrEnum
 
 import httpx
 
+from app.scrape.fingerprints import detect
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 15.0
@@ -133,6 +135,10 @@ class TechProfile:
     endpoints: list[Detection] = field(default_factory=list)
     signals: list[Detection] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # Everything the fingerprint set matched, whether or not it changed a decision.
+    # Shown to the operator as context; only the ecommerce category decides anything.
+    technologies: list[str] = field(default_factory=list)
+    ecommerce_tech: list[str] = field(default_factory=list)
 
     @property
     def sells(self) -> bool:
@@ -143,7 +149,10 @@ class TechProfile:
         anything about how to buy, so this only widens what may be described, never
         what is claimed.
         """
-        return self.platform in COMMERCE_PLATFORMS
+        # Either source is sufficient. The built-in signs know eleven platforms
+        # precisely; the fingerprint set knows thousands and is the reason a
+        # BigCartel or PrestaShop store is recognised as a shop at all.
+        return self.platform in COMMERCE_PLATFORMS or bool(self.ecommerce_tech)
 
     @property
     def endpoint_urls(self) -> list[str]:
@@ -173,6 +182,39 @@ CANDIDATE_ENDPOINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("/openapi.json", "OpenAPI description", ("application/json",)),
     ("/.well-known/ai-plugin.json", "AI plugin manifest", ("application/json",)),
 )
+
+
+# Fingerprint names that map onto a platform this tool models. Anything else the
+# dataset finds is recorded but does not steer the profile: knowing a site runs
+# Cloudflare or jQuery changes nothing an agent would do.
+FINGERPRINT_PLATFORMS: dict[str, Platform] = {
+    "Shopify": Platform.SHOPIFY,
+    "WooCommerce": Platform.WOOCOMMERCE,
+    "WordPress": Platform.WORDPRESS,
+    "Wix": Platform.WIX,
+    "Squarespace": Platform.SQUARESPACE,
+    "Webflow": Platform.WEBFLOW,
+    "BigCommerce": Platform.BIGCOMMERCE,
+    "Magento": Platform.MAGENTO,
+    "Drupal": Platform.DRUPAL,
+    "HubSpot": Platform.HUBSPOT,
+    "Next.js": Platform.NEXTJS,
+}
+
+
+def _platform_from_matches(matches) -> tuple[Platform, str] | None:
+    """Pick the platform from fingerprint matches, commerce winning ties.
+
+    A WooCommerce site matches WordPress too, and the commerce answer is the one
+    that decides whether a transaction may be described -- so it is preferred
+    rather than left to dictionary order.
+    """
+    named = [(m, FINGERPRINT_PLATFORMS[m.name]) for m in matches if m.name in FINGERPRINT_PLATFORMS]
+    if not named:
+        return None
+    named.sort(key=lambda pair: pair[1] not in COMMERCE_PLATFORMS)
+    match, platform = named[0]
+    return platform, f"fingerprint {match.name} ({match.evidence})"
 
 
 def platform_from_headers(headers: dict[str, str]) -> tuple[Platform, str]:
@@ -243,7 +285,26 @@ async def probe_tech(
             profile.notes.append(f"Could not load the homepage: {type(exc).__name__}")
             return profile
 
+        # The community fingerprint set first, since it covers thousands of
+        # technologies against eleven here. The built-in signs stay as the
+        # fallback for when the dataset cannot be fetched -- an audit that runs
+        # with less is better than one that does not run.
+        try:
+            matches = detect(origin, dict(home.headers), home.text)
+        except Exception as exc:
+            matches = []
+            profile.notes.append(f"Technology fingerprints unavailable: {type(exc).__name__}")
+
+        profile.technologies = [m.name for m in matches]
+        profile.ecommerce_tech = [m.name for m in matches if m.is_ecommerce]
+        for match in matches:
+            profile.signals.append(Detection(name=match.name, evidence=match.evidence))
+
         platform, evidence = platform_from_headers(dict(home.headers))
+        if platform is Platform.UNKNOWN and matches:
+            named = _platform_from_matches(matches)
+            if named is not None:
+                platform, evidence = named
         if platform is Platform.UNKNOWN:
             # The whole document, not a window. Measured: the generator tag on
             # prosperitymedia.com.au sits at byte 301,922, behind ~300KB of

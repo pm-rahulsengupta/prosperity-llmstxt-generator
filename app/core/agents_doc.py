@@ -47,6 +47,7 @@ from app.core.ranking import (
 from app.scrape.agents_probe import ProbeResult
 
 __all__ = [
+    "ACTION_PROFILES",
     "PROFILE_SECTIONS",
     "AgentsDoc",
     "Capability",
@@ -54,6 +55,7 @@ __all__ = [
     "PolicyLink",
     "Section",
     "build_agents_doc",
+    "profile_for",
     "transacts",
 ]
 
@@ -186,6 +188,40 @@ TRANSACTIONAL_PROFILES = frozenset({PATTERN_ECOMMERCE_RETAIL, PATTERN_ECOMMERCE}
 TRANSACTIONAL_SECTIONS = frozenset(
     {Section.PERSONAL_SHOPPER, Section.COMMERCE_PROTOCOL, Section.AGENT_FLOW}
 )
+
+
+# The operator's stated goal maps onto a site shape. This is the strongest input
+# available, because it is the only one that describes intent rather than
+# structure: two sites can be built identically and want opposite things from an
+# agent, and no crawl distinguishes them.
+ACTION_PROFILES: dict[str, str] = {
+    "contact_local_business": PATTERN_LOCAL,
+    "contact_agency": PATTERN_AGENCY,
+    "book_appointment": PATTERN_PROFESSIONAL,
+    "shop_on_store": PATTERN_ECOMMERCE_RETAIL,
+    "find_local_inventory": PATTERN_ECOMMERCE_RETAIL,
+    "read_and_cite": PATTERN_PUBLISHER,
+    "use_the_api": PATTERN_SAAS,
+}
+
+
+def profile_for(action: str, detected: str = "", platform_sells: bool = False) -> str:
+    """Choose the agents.md shape, preferring what the operator said.
+
+    Order matters and is deliberate. A stated goal beats a detected platform,
+    because a WooCommerce install on a site whose actual objective is enquiries
+    should not be handed a checkout flow -- the plugin is a fact about the build,
+    the goal is a fact about the business, and only the second belongs in an
+    instruction file. A detected shop is used only when nobody has said otherwise.
+    """
+    if chosen := ACTION_PROFILES.get(action or ""):
+        return chosen
+    if detected:
+        return detected
+    if platform_sells:
+        return PATTERN_ECOMMERCE_RETAIL
+    # The shape that cannot transact. Safe by construction when nothing is known.
+    return PATTERN_AGENCY
 
 
 def transacts(profile: str) -> bool:
