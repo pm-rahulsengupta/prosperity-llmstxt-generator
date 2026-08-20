@@ -58,7 +58,7 @@ async def fetch_robots(client: httpx.AsyncClient, site_url: str) -> RobotsInfo:
 
 async def collect_sitemap_urls(
     client: httpx.AsyncClient, seeds: list[str]
-) -> tuple[dict[str, str], int, list[str]]:
+) -> tuple[dict[str, str], int, list[str], dict[str, int]]:
     """Walk the sitemap tree breadth-first.
 
     Returns ({url: sitemap that listed it}, sitemaps read, notes). The mapping
@@ -128,7 +128,7 @@ async def collect_sitemap_urls(
             "most specific one."
         )
 
-    return seen_urls, len(seen_sitemaps), notes
+    return seen_urls, len(seen_sitemaps), notes, {u: len(v) for u, v in memberships.items()}
 
 
 def most_specific_sitemap(candidates: list[str]) -> str:
@@ -161,7 +161,7 @@ async def discover(site_url: str, user_agent: str, timeout: float = DEFAULT_TIME
         headers={"User-Agent": user_agent},
     ) as client:
         robots = await fetch_robots(client, origin)
-        url_sources, sitemap_count, notes = await collect_sitemap_urls(
+        url_sources, sitemap_count, notes, memberships = await collect_sitemap_urls(
             client, sitemap_candidates(origin, robots)
         )
     urls = list(url_sources)
@@ -182,4 +182,5 @@ async def discover(site_url: str, user_agent: str, timeout: float = DEFAULT_TIME
         sitemap_count=sitemap_count,
         notes=notes,
         url_sources=url_sources,
+        url_memberships=memberships,
     )

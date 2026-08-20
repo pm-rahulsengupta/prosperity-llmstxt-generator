@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import Counter
 from datetime import UTC, datetime
 
 from app.config import get_settings
@@ -24,6 +25,7 @@ from app.core.metrics import JoinReport, join_metrics
 from app.core.models import PageEntry, Section, ValidationIssue
 from app.core.onboarding import detect_drift, site_shape, split_embargoed
 from app.core.pipeline import FilterOptions, GenerateOptions, generate
+from app.core.planning import build_planning_table
 from app.core.ranking import (
     importance_score,
     is_identity_page,
@@ -38,6 +40,7 @@ from app.jobs.queue import QUEUE_CRAWL, app
 from app.llm.client import LLMClient, LLMUsage
 from app.llm.prompts.plan import CrawlPlan
 from app.llm.stages import (
+    classify_groups,
     enforce_copy_rules,
     plan_crawl,
     review_output,
@@ -147,6 +150,16 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
 
     usage = LLMUsage()
     client = LLMClient(settings, usage)
+
+    # The group table is built before the plan and independently of it. Provenance
+    # is the planning axis now: CarsGuide's 11,909 URLs are 397 templates of
+    # placeholder soup and 167 sitemap names that are a clean taxonomy, and the
+    # planner was reading the soup. The table renders in full at tier D, so this
+    # costs one sitemap fetch and works with no client credentials at all.
+    table = build_planning_table(pre.recon, stored_metrics, brief=site_brief)
+    intents = await classify_groups(client, table)
+    table = build_planning_table(pre.recon, stored_metrics, brief=site_brief, intents=intents)
+
     plan = await plan_crawl(client, pre.planning_brief(), pre.recon, cap, site_brief)
 
     async with session_scope() as session:
@@ -172,6 +185,23 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
             # in a shared JSONB column. The groups a *person* re-approves are not
             # -- when verdicts start being persisted they need their own table.
             "drift": drift.to_dict() if drift.drifted else {},
+            "planning_table": [
+                {
+                    "group_key": row.group_key,
+                    "url_count": row.url_count,
+                    "template_diversity": row.template_diversity,
+                    "multi_listed": row.multi_listed,
+                    "intent": row.intent,
+                    "intent_reason": row.intent_reason,
+                    "verdict": row.verdict.value,
+                    "confidence": row.confidence,
+                    "declared": row.declared,
+                    "exemplars": row.exemplars[:5],
+                    "rationale": row.rationale,
+                    "sample_urls": row.sample_urls,
+                }
+                for row in table
+            ],
             "join": {
                 "total_rows": join.total_rows,
                 "joined_rows": join.joined_rows,
@@ -186,6 +216,16 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
                 "detail": pre.indexed.detail,
             },
         }
+        await repo.record_event(
+            session,
+            rid,
+            "plan",
+            f"{len(table)} sitemap group(s): "
+            + ", ".join(
+                f"{n} {intent}"
+                for intent, n in sorted(Counter(row.intent for row in table).items())
+            ),
+        )
         if join.total_rows:
             await repo.record_event(session, rid, "preflight", join.summary())
         if join.looks_broken:

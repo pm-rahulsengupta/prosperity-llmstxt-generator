@@ -19,6 +19,7 @@ from app.core.onboarding import SiteBrief
 from app.core.ranking import PATTERN_CATALOG, template_order
 from app.llm.client import LLMClient, Stage
 from app.llm.prompts import chat as chat_prompt
+from app.llm.prompts import intent as intent_prompt
 from app.llm.prompts import plan as plan_prompt
 from app.llm.prompts import qa as qa_prompt
 from app.llm.prompts import summarise as summarise_prompt
@@ -136,6 +137,61 @@ async def plan_crawl(
     ruled = {rule.template for rule in parsed.rules}
     parsed.rules.extend(rule for rule in fallback.rules if rule.template not in ruled)
     return parsed
+
+
+async def classify_groups(client: LLMClient, rows: list) -> dict[str, tuple[str, str]]:
+    """Label each sitemap group as editorial / faceted / hub / utility.
+
+    Degrades to the deterministic prior rather than to nothing, in keeping with
+    every other stage here: with no key, uniformity does the classifying, which
+    is the same signal the prompt tells the model to weight most heavily.
+    """
+    if not rows:
+        return {}
+    if not client.enabled:
+        return _heuristic_intents(rows)
+
+    data = await client.structured(
+        stage=Stage.PLAN,
+        system=intent_prompt.SYSTEM,
+        user=intent_prompt.build_user_message(rows),
+        schema=intent_prompt.schema(),
+        schema_name="group_intents",
+    )
+    if data is None:
+        return _heuristic_intents(rows)
+
+    parsed = intent_prompt.parse(data, {row.group_key for row in rows})
+    # A group the model skipped keeps the heuristic label rather than staying
+    # blank: an unlabelled group reads as "nothing known" when in fact its shape
+    # is known and was simply not commented on.
+    return {**_heuristic_intents(rows), **parsed}
+
+
+def _heuristic_intents(rows: list) -> dict[str, tuple[str, str]]:
+    """Intent from shape alone. No key required, and no guessing about value."""
+    out: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        name = row.group_key.lower()
+        if any(token in name for token in ("tag", "author", "search", "page-sitemap-")):
+            out[row.group_key] = ("utility", "sitemap name is an archive or utility one")
+        elif row.url_count >= 200 and row.url_count / max(1, row.template_diversity) >= 100:
+            # The ratio, not strict uniformity. A real facet group rarely
+            # collapses to exactly one template -- CarsGuide's `AllNew_Make`
+            # produces a handful as segment counts vary -- but thousands of URLs
+            # across a couple of shapes is still machine-generated, and the
+            # earlier `diversity == 1` test missed every such group.
+            out[row.group_key] = (
+                "faceted",
+                f"{row.url_count:,} URLs across only {row.template_diversity} path template(s)",
+            )
+        elif row.url_count <= 20 and row.template_diversity <= 3:
+            out[row.group_key] = ("hub", "a handful of pages, few shapes")
+        elif row.template_diversity > 3:
+            out[row.group_key] = ("editorial", f"{row.template_diversity} distinct URL shapes")
+        else:
+            out[row.group_key] = ("unknown", "shape alone is not conclusive")
+    return out
 
 
 def select_urls(recon: SiteRecon, plan: CrawlPlan, page_cap: int) -> list[str]:

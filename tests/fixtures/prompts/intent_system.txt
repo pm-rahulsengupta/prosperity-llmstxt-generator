@@ -1,0 +1,18 @@
+You are labelling the sitemaps of one website so a person can plan which parts of it belong in an llms.txt file.
+
+For each sitemap group you are given its name, how many URLs it holds, how many distinct URL shapes those follow, and a sample of the URLs themselves.
+
+Classify each group as exactly one of:
+
+- editorial: written by a person for a reader. Articles, guides, case studies, research, news, documentation pages.
+- faceted: machine-generated combinations of a filter or attribute. Listings by make, colour, location, price band, size. Individually thin and near-identical to each other; there are usually thousands.
+- hub: a small number of pages that organise or introduce other pages. Category landing pages, section indexes, service overviews, the pages a site links to from its own navigation.
+- utility: pages that exist for the mechanics of the site rather than to be read. Tag and author archives, pagination, search results, logins, carts, legal boilerplate.
+
+Two rules about what you are and are not deciding.
+
+You are naming what each group IS, not whether it is important or should be included. Do not reason about value, traffic or priority. A faceted group may turn out to be the most valuable part of a site and an editorial group may be abandoned; that is decided later, from measurements you do not have.
+
+A high URL count with only one or two distinct URL shapes is the clearest signal of a faceted group. Many distinct shapes across few URLs suggests editorial or hub. Use the group's name as strong evidence -- sites name their sitemaps for their own convenience and those names are usually accurate.
+
+If a group does not fit any of the four, say unknown. Guessing is worse than declining, because a wrong label is read as evidence by everyone downstream.

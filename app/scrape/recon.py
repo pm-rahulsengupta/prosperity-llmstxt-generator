@@ -65,6 +65,15 @@ class SiteRecon:
     # no signal at all, but the sitemap split does: post-sitemap, page-sitemap,
     # category-sitemap. Provenance is often the better planning axis of the two.
     url_sources: dict[str, str] = field(default_factory=dict)
+    # url -> how many sitemaps listed it. Kept alongside the resolved source
+    # rather than discarded once the collision is settled: a URL that appears in
+    # five named sitemaps is usually a genuine hub, and that is a promotion
+    # signal in its own right rather than only a tiebreak to be resolved away.
+    url_memberships: dict[str, int] = field(default_factory=dict)
+
+    def multi_listed(self, url: str) -> int:
+        """How many sitemaps list this URL. 1 when unknown, never 0."""
+        return self.url_memberships.get(url, 1)
 
     def sitemap_groups(self) -> list[tuple[str, int]]:
         """(sitemap name, url count), most populous first."""

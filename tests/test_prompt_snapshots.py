@@ -26,6 +26,7 @@ import pytest
 
 from app.core.onboarding import SiteBrief
 from app.llm.prompts import chat as chat_prompt
+from app.llm.prompts import intent as intent_prompt
 from app.llm.prompts import plan as plan_prompt
 from app.llm.prompts import qa as qa_prompt
 from app.llm.prompts import summarise as summarise_prompt
@@ -68,6 +69,38 @@ def test_plan_user_message_without_a_brief() -> None:
 def test_plan_user_message_with_a_brief() -> None:
     """The one that would have caught the silent no-op."""
     check("plan_user_briefed", plan_prompt.build_user_message("223 crawlable URLs", 400, BRIEF))
+
+
+def test_intent_system_prompt() -> None:
+    """Pinned because the distinction it draws is the whole design.
+
+    The prompt asks what a group *is* and forbids reasoning about what matters.
+    A regeneration that softens that turns the classifier into an unmeasured
+    importance judge, which is the failure the plan stage already shipped once.
+    """
+    check("intent_system", intent_prompt.SYSTEM)
+
+
+def test_intent_user_message() -> None:
+    from app.core.planning import build_planning_table
+    from app.scrape.recon import RobotsInfo, SiteRecon
+
+    urls = ["https://m.com/cars/make/" + str(i) for i in range(300)]
+    recon = SiteRecon(
+        site_url="https://m.com",
+        robots=RobotsInfo(),
+        urls=urls,
+        url_sources=dict.fromkeys(urls, "AllNew_Make.xml"),
+    )
+    check("intent_user", intent_prompt.build_user_message(build_planning_table(recon)))
+
+
+def test_the_intent_prompt_refuses_to_rank_importance() -> None:
+    """It is asked what a group is, never what it is worth."""
+    text = intent_prompt.SYSTEM.lower()
+
+    assert "not whether it is important" in text
+    assert "do not reason about value" in text
 
 
 def test_summarise_site_prompt() -> None:
@@ -117,6 +150,7 @@ def test_no_prompt_leaks_an_embargoed_path() -> None:
     "text",
     [
         plan_prompt.SYSTEM,
+        intent_prompt.SYSTEM,
         summarise_prompt.SITE_SYSTEM,
         summarise_prompt.PAGE_SYSTEM,
         triage_prompt.SYSTEM,

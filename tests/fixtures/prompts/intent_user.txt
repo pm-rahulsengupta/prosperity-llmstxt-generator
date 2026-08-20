@@ -1,0 +1,15 @@
+Classify each of these sitemap groups.
+
+- group_key: AllNew_Make.xml
+  urls: 300
+  distinct URL shapes: 1
+  listed in more than one sitemap: 0
+  sample:
+    https://m.com/cars/make/0
+    https://m.com/cars/make/50
+    https://m.com/cars/make/100
+    https://m.com/cars/make/150
+    https://m.com/cars/make/200
+    https://m.com/cars/make/250
+
+Return one entry per group, using the group_key exactly as given.
