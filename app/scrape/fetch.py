@@ -71,7 +71,11 @@ class FetchStats:
 
     def record(self, result: FetchResult) -> None:
         if result.tier and result.ok:
-            self.by_tier[result.tier] = self.by_tier.get(result.tier, 0) + 1
+            # `str(...)`, not the enum member: these counts are rendered into
+            # progress messages and stored as JSON, and a StrEnum key formats as
+            # "<Tier.HTTP: 'http'>" in both.
+            tier = str(result.tier)
+            self.by_tier[tier] = self.by_tier.get(tier, 0) + 1
         else:
             self.failed += 1
 

@@ -23,7 +23,7 @@ fi
 case "$APP_TARGET" in
 	web)
 		echo "[entrypoint] starting web on port ${PORT:-3000}"
-		exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-3000}"
+		exec python -m app.web
 		;;
 	worker)
 		echo "[entrypoint] starting worker"

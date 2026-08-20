@@ -1,0 +1,15 @@
+<h2>Progress</h2>
+{% if latest and latest.total %}
+<div class="bar"><span style="width: {{ (100 * latest.done / latest.total) | round(1) }}%"></span></div>
+<p class="muted">{{ latest.done }} of {{ latest.total }} &mdash; {{ latest.message }}</p>
+{% elif latest %}
+<p class="muted">{{ latest.message }}</p>
+{% else %}
+<p class="muted">Queued. Waiting for a worker.</p>
+{% endif %}
+
+<div class="log">
+    {% for event in events %}
+    <div><span class="stage">{{ event.stage }}</span>{{ event.message }}</div>
+    {% endfor %}
+</div>

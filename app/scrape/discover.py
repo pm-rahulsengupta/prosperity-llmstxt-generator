@@ -69,6 +69,13 @@ async def collect_sitemap_urls(
     seen_urls: dict[str, str] = {}
     notes: list[str] = []
     queue = [(url, 0) for url in seeds]
+    # Everything ever put on the queue, not just everything already fetched. A site
+    # commonly answers /sitemap.xml, /sitemaps.xml and /sitemap_index.xml with the
+    # same index, so each child sitemap gets queued once per parent. Checking only
+    # `seen_sitemaps` cannot catch that -- the duplicates are all queued before any
+    # of them is fetched. Measured on prosperitymedia.com.au: three fetches of every
+    # child sitemap, for three copies of the same 223 URLs.
+    queued: set[str] = {url for url in seeds}
 
     while queue and len(seen_sitemaps) < MAX_SITEMAPS:
         batch = [(u, d) for u, d in queue[:10] if u not in seen_sitemaps]
@@ -95,7 +102,9 @@ async def collect_sitemap_urls(
             if nested and depth >= MAX_SITEMAP_DEPTH:
                 notes.append(f"Stopped at sitemap depth {MAX_SITEMAP_DEPTH}: {url}")
                 continue
-            queue.extend((child, depth + 1) for child in nested if child not in seen_sitemaps)
+            fresh = [child for child in nested if child not in queued]
+            queued.update(fresh)
+            queue.extend((child, depth + 1) for child in fresh)
 
     if len(seen_sitemaps) >= MAX_SITEMAPS:
         notes.append(f"Stopped after reading {MAX_SITEMAPS} sitemaps; there may be more.")

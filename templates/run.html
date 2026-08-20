@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}{{ run.domain }}{% endblock %}
+
+{% block content %}
+
+<div class="panel">
+    <div class="spread">
+        <h2 style="margin:0">{{ run.domain }}</h2>
+        <span class="pill {% if run.status == 'complete' %}ok{% elif run.status == 'failed' %}bad{% elif run.status == 'awaiting_review' %}wait{% else %}run{% endif %}">
+            {{ run.status.replace('_', ' ') }}
+        </span>
+    </div>
+    <div class="stat-grid" style="margin-top:1rem">
+        <div class="stat"><div class="k">Sitemap URLs</div><div class="v">{{ run.sitemap_html or 0 }}</div></div>
+        <div class="stat"><div class="k">Google indexes</div><div class="v">{{ run.indexed_estimate if run.indexed_estimate is not none else '—' }}</div></div>
+        <div class="stat"><div class="k">Size tier</div><div class="v">{{ run.size_tier }}</div></div>
+        <div class="stat"><div class="k">Page cap</div><div class="v">{{ run.max_pages or '—' }}</div></div>
+        <div class="stat"><div class="k">Plan</div><div class="v">{{ run.plan_source }}</div></div>
+    </div>
+    {% if run.size_warnings %}
+    <ul class="notes">
+        {% for warning in run.size_warnings %}<li>{{ warning }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if run.error %}<ul class="notes"><li class="error">{{ run.error }}</li></ul>{% endif %}
+</div>
+
+{% if not status.is_terminal %}
+<div class="panel" id="progress"
+     hx-get="/runs/{{ run.id }}/progress"
+     hx-trigger="load, every 3s"
+     hx-swap="innerHTML">
+    {% include "partials/progress.html" with context %}
+</div>
+{% endif %}
+
+{% if run.status == 'awaiting_review' %}
+<div class="panel">
+    <h2>Crawl plan &mdash; review before anything is fetched</h2>
+    {% if plan.reasoning %}<p class="muted">{{ plan.reasoning }}</p>{% endif %}
+    <form method="post" action="/runs/{{ run.id }}/plan">
+        <table>
+            <thead>
+            <tr><th style="width:3rem">Crawl</th><th>URL template</th><th class="num">Pages</th><th class="num">Priority</th><th>Section</th><th>Why</th></tr>
+            </thead>
+            <tbody>
+            {% for rule in plan.rules %}
+            <tr>
+                <td><input type="checkbox" name="include" value="{{ rule.template }}" {% if rule.includes %}checked{% endif %}></td>
+                <td><code>{{ rule.template }}</code>{% if rule.action == 'sample' %} <span class="pill">sample</span>{% endif %}</td>
+                <td class="num">—</td>
+                <td class="num">{{ rule.priority }}</td>
+                <td>{{ rule.section or '—' }}</td>
+                <td class="muted">{{ rule.reason }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <div class="row" style="margin-top:1rem">
+            <div class="narrow">
+                <label for="max_pages">Page cap</label>
+                <input type="number" id="max_pages" name="max_pages" value="{{ run.max_pages }}" min="1">
+            </div>
+            <div class="narrow"><button class="primary" type="submit">Approve and crawl</button></div>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+{% if run.llmstxt %}
+<div class="panel">
+    <div class="spread">
+        <h2 style="margin:0">Output</h2>
+        <span>
+            <a class="button ghost" href="/runs/{{ run.id }}/download/llms.txt">llms.txt</a>
+            {% if run.llms_full %}<a class="button ghost" href="/runs/{{ run.id }}/download/llms-full.txt">llms-full.txt</a>{% endif %}
+            <a class="button ghost" href="/runs/{{ run.id }}/download/combined.txt">combined</a>
+        </span>
+    </div>
+    {% if run.issues %}
+    <h3>Checks</h3>
+    <ul class="notes">
+        {% for issue in run.issues %}
+        <li class="{{ 'error' if issue.level == 'error' else ('info' if issue.level == 'info' else '') }}">
+            {{ issue.message }}{% if issue.code == 'llm_review' %} <span class="pill">model review</span>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    <pre class="output">{{ run.llmstxt }}</pre>
+</div>
+
+<div class="panel">
+    <h2>Edit and re-render</h2>
+    <form method="post" action="/runs/{{ run.id }}/pages">
+        <div class="row">
+            <div>
+                <label for="site_name">Site name</label>
+                <input type="text" id="site_name" name="site_name" value="{{ run.site_name }}">
+            </div>
+        </div>
+        <div style="margin-top:0.75rem">
+            <label for="site_summary">Summary line</label>
+            <input type="text" id="site_summary" name="site_summary" value="{{ run.site_summary }}">
+        </div>
+        <h3>Pages</h3>
+        <table>
+            <thead>
+            <tr><th style="width:3rem">Keep</th><th>URL</th><th>Section</th><th class="num">Score</th><th>Tier</th></tr>
+            </thead>
+            <tbody>
+            {% for page in pages %}
+            <tr>
+                <td><input type="checkbox" name="keep" value="{{ page.url }}" {% if page.included %}checked{% endif %}></td>
+                <td><span class="url">{{ page.url }}</span><br><span class="muted">{{ page.title }}</span></td>
+                <td>{{ page.section_name or ('optional' if page.is_optional else '—') }}</td>
+                <td class="num">{{ '%.1f'|format(page.importance) }}</td>
+                <td class="muted">{{ page.fetch_tier }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <div style="margin-top:1rem"><button type="submit">Re-render</button></div>
+    </form>
+</div>
+{% endif %}
+
+{% if run.stats %}
+<div class="panel">
+    <h2>What this run cost</h2>
+    <pre class="output">{{ run.stats | tojson(indent=2) }}</pre>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -26,6 +26,19 @@ FROM base AS runtime
 
 COPY --from=deps /usr/local /usr/local
 
+# Scrapling's browser tiers do NOT run on the base image's browsers. DynamicFetcher
+# drives patchright and StealthyFetcher drives camoufox, and each ships its own
+# build; without this the ladder's top two rungs raise at runtime, on the worker,
+# only for the pages that needed them most. The base image is still the right
+# starting point -- it carries the system libraries (libgbm, libnss3,
+# libatk-bridge2.0, ...) that these builds link against.
+#
+# Caches go to a shared path rather than root's home, because the process runs as
+# an unprivileged user and cannot read /root/.cache.
+ENV XDG_CACHE_HOME=/opt/cache \
+	PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN mkdir -p /opt/cache && scrapling install && chmod -R a+rX /opt/cache /ms-playwright
+
 COPY app/ app/
 COPY templates/ templates/
 COPY static/ static/

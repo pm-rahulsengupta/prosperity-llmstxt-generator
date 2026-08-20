@@ -1,0 +1,154 @@
+/* Prosperity llms.txt Generator.
+   Written for this tool rather than ported: the source's stylesheet is Pattern's
+   brand sheet, and neither the colours nor the licence position belong here.
+   Palette follows geo-tracker -- zinc neutrals, one blue accent. */
+
+:root {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --ink: #18181b;
+    --ink-soft: #52525b;
+    --ink-muted: #a1a1aa;
+    --rule: #e4e4e7;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --ok: #10b981;
+    --warn: #f59e0b;
+    --bad: #dc2626;
+    --radius: 8px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--ink);
+    background: var(--bg);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header.top {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 1rem 2rem;
+    background: var(--ink);
+    color: #fafafa;
+}
+header.top h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+header.top .sub { color: var(--ink-muted); font-size: 0.8rem; }
+header.top .who { margin-left: auto; font-size: 0.8rem; color: var(--ink-muted); }
+header.top a { color: #fafafa; }
+
+main { max-width: 1080px; margin: 0 auto; padding: 2rem; }
+
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1.25rem;
+}
+.panel h2 { font-size: 0.95rem; margin: 0 0 0.75rem; letter-spacing: -0.01em; }
+.panel h3 { font-size: 0.85rem; margin: 1.25rem 0 0.5rem; color: var(--ink-soft); }
+
+label { display: block; font-size: 0.8rem; color: var(--ink-soft); margin-bottom: 0.25rem; }
+input[type="text"], input[type="url"], input[type="number"], select, textarea {
+    width: 100%;
+    padding: 0.5rem 0.65rem;
+    font: inherit;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+}
+textarea { font-family: var(--mono); font-size: 0.8rem; min-height: 8rem; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+.row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+.row > * { flex: 1 1 12rem; }
+.row > .narrow { flex: 0 0 9rem; }
+
+button, .button {
+    padding: 0.5rem 1rem;
+    font: inherit;
+    font-weight: 500;
+    color: #fafafa;
+    background: var(--ink);
+    border: 1px solid var(--ink);
+    border-radius: 6px;
+    cursor: pointer;
+}
+button:hover, .button:hover { background: #27272a; text-decoration: none; }
+button.primary, .button.primary { background: var(--accent); border-color: var(--accent); }
+button.ghost, .button.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 600; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td code, .url { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-soft); word-break: break-all; }
+
+.pill {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border-radius: 999px;
+    background: var(--rule);
+    color: var(--ink-soft);
+}
+.pill.ok { background: #d1fae5; color: #065f46; }
+.pill.run { background: var(--accent-soft); color: #1d4ed8; }
+.pill.wait { background: #fef3c7; color: #92400e; }
+.pill.bad { background: #fee2e2; color: #991b1b; }
+
+.notes { margin: 0.75rem 0 0; padding: 0; list-style: none; font-size: 0.82rem; }
+.notes li { padding: 0.4rem 0.6rem; border-left: 3px solid var(--warn); background: #fffbeb; margin-bottom: 0.35rem; }
+.notes li.error { border-color: var(--bad); background: #fef2f2; }
+.notes li.info { border-color: var(--accent); background: var(--accent-soft); }
+
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; }
+.stat { border: 1px solid var(--rule); border-radius: 6px; padding: 0.6rem 0.75rem; }
+.stat .k { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); }
+.stat .v { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.bar { height: 6px; background: var(--rule); border-radius: 999px; overflow: hidden; margin: 0.5rem 0; }
+.bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+
+.log { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-soft); max-height: 14rem; overflow-y: auto; }
+.log div { padding: 0.15rem 0; border-bottom: 1px dotted var(--rule); }
+.log .stage { color: var(--ink-muted); display: inline-block; min-width: 5.5rem; }
+
+pre.output {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    background: #fafafa;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1rem;
+    max-height: 32rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.muted { color: var(--ink-muted); font-size: 0.8rem; }
+.right { text-align: right; }
+.spread { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.empty { padding: 2rem; text-align: center; color: var(--ink-muted); }
+
+@media (max-width: 720px) {
+    main { padding: 1rem; }
+    header.top { padding: 0.75rem 1rem; flex-wrap: wrap; }
+}

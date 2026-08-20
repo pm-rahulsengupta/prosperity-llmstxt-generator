@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="panel">
+    <h2>Generate for a site</h2>
+    <form method="post" action="/runs">
+        <div class="row">
+            <div>
+                <label for="site_url">Site URL</label>
+                <input type="text" id="site_url" name="site_url" placeholder="carsguide.com.au" required>
+            </div>
+            <div class="narrow">
+                <label for="max_pages">Page cap</label>
+                <input type="number" id="max_pages" name="max_pages" min="0" placeholder="auto">
+            </div>
+            <div class="narrow">
+                <button class="primary" type="submit">Start</button>
+            </div>
+        </div>
+        <p class="muted">
+            Reads robots.txt and the sitemaps, checks how many pages Google indexes,
+            and proposes a crawl plan. Nothing is crawled until you approve the plan.
+            {% if not size_check_enabled %}
+            <br>DataForSEO credentials are not configured, so the indexed-page count
+            will be skipped and the sitemap will be the only size signal.
+            {% endif %}
+        </p>
+    </form>
+</div>
+
+<div class="panel">
+    <h2>Recent runs</h2>
+    {% if runs %}
+    <table>
+        <thead>
+        <tr>
+            <th>Site</th><th>Status</th><th class="num">Pages</th>
+            <th class="num">Indexed</th><th>Started</th><th>By</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for run in runs %}
+        <tr>
+            <td><a href="/runs/{{ run.id }}">{{ run.domain }}</a></td>
+            <td>
+                {% set s = run.status %}
+                <span class="pill {% if s == 'complete' %}ok{% elif s == 'failed' %}bad{% elif s == 'awaiting_review' %}wait{% else %}run{% endif %}">{{ s.replace('_', ' ') }}</span>
+            </td>
+            <td class="num">{{ run.sitemap_html or '—' }}</td>
+            <td class="num">{{ run.indexed_estimate or '—' }}</td>
+            <td class="muted">{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="muted">{{ run.created_by }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No runs yet.</p>
+    {% endif %}
+</div>
+{% endblock %}
