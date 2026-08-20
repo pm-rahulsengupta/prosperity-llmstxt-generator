@@ -1,0 +1,23 @@
+223 crawlable URLs
+
+What the site's own team says about it, which is better evidence of what matters here than anything inferable from the URLs:
+The operator wants this site found for: Digital PR and link building for Australian brands
+The audience is: Marketing managers evaluating agencies; not developers
+Patterns the operator considers most valuable: /services/*, /case-studies/*
+Patterns the operator considers low value: /tag/*
+
+Crawl budget: about 400 pages.
+
+Section templates available:
+- agency_services (Agency / services business (SEO, marketing, consulting)): Services, Locations, Industries, Guides and Research, Company, Contact, Optional
+- professional_services (Professional services (law, accounting, advisory)): Practice Areas, People, Insights, Company, Contact, Optional
+- local_multi_location (Local or multi-location business (trades, clinics, franchises)): Services, Locations, Company, Contact, Optional
+- ecommerce_retail (E-commerce / retail (product catalogue)): Categories, Buying Guides, Shipping and Returns, Brand, Contact, Optional
+- publisher_media (Publisher / media (news, magazine, editorial)): Sections, Flagship Reporting, About and Standards, Contact, Optional
+- saas_product (SaaS product site (product, pricing, docs)): Product, Documentation, API Reference, Guides, Pricing, Company, Contact, Optional
+- catalog (SaaS / API Platform (Stripe, Cloudflare)): Getting Started, Core Concepts, Guides, API Reference, Integrations, Resources, Contact, Optional
+- workflow (Developer Tool / IDE (Cursor, Windsurf)): Quickstart, Setup & Configuration, Features, Workflows, Troubleshooting, Reference, Contact, Optional
+- index_export (Documentation / AI-Native (Anthropic, LangGraph)): Overview, Documentation, Tutorials, API, Examples, Contact, Optional
+- ecommerce (E-Commerce / Retail (Strandbags, Nike)): Brand Overview, Product Categories, Brand Portfolio, Shopping Help, Customer Service, Store Locator, Important Pages, Contact, Optional
+
+Return one rule for every URL template listed above, using the template string exactly as given.

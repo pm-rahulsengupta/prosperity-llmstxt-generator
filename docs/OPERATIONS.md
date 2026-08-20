@@ -221,3 +221,23 @@ machine; start it with
 The test suite needs none of this: 122 tests, no network, no key, no database.
 `tests/conftest.py` cuts `.env` and the matching shell variables for every test, so
 the suite behaves the same here and in CI.
+
+## Migrations and rollback
+
+`RUN_MIGRATIONS=true` belongs on **exactly one service**. Two services racing
+`alembic upgrade` on the same database is how a half-applied schema happens.
+
+Downgrades were tested against populated rows and run cleanly, but they are
+**schema rollbacks, not data rollbacks**:
+
+| Revision | Drops | Data lost on downgrade |
+|---|---|---|
+| `b3e91f70c4aa` | `site_configs.brief` | every onboarding answer |
+| `d359a525827a` | `site_metrics` | all uploaded and fetched metrics |
+| `db6b5dbeeea3` | `site_configs.observed_shape` | the drift baseline |
+
+Each adds a `server_default`, so applying them to populated tables is safe --
+a `NOT NULL` column added without one fails on the existing rows, which is the
+failure this project has already hit once.
+
+Take a dump before rolling back anything a person typed.

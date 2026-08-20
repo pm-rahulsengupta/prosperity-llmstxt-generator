@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import DateRange, PageMetrics
 from app.core.models import GenerationResult, PageEntry
-from app.core.onboarding import SiteBrief
+from app.core.onboarding import SiteBrief, matches_any
 from app.db.models import (
     Page,
     Run,
@@ -343,6 +343,48 @@ async def metrics_summary(session: AsyncSession, domain: str) -> dict:
         }
         for source, urls, clicks, start, end, at in result.all()
     }
+
+
+async def purge_embargoed_pages(session: AsyncSession, domain: str, patterns: tuple[str, ...]) -> int:
+    """Delete stored page bodies for a domain that match an embargo pattern.
+
+    Declaring an embargo has to be retroactive. The crawl filter only protects
+    runs that have not happened yet, and an operator adding a pattern is usually
+    reacting to something already crawled -- that is what prompted them. Leaving
+    the bodies in place would mean the tool reports a page as embargoed while its
+    content sits in Postgres, which is precisely the gap the wording promises is
+    closed.
+
+    Matching happens in Python rather than SQL because the patterns are globs and
+    `matches_any` is the one implementation of what they mean; a second, SQL
+    dialect of the same rule would eventually disagree with the first.
+    """
+    if not patterns:
+        return 0
+
+    result = await session.execute(
+        select(Page.id, Page.url).join(Run, Page.run_id == Run.id).where(Run.domain == domain)
+    )
+    doomed = [pid for pid, url in result.all() if matches_any(url, patterns) is not None]
+    if doomed:
+        await session.execute(delete(Page).where(Page.id.in_(doomed)))
+        await session.flush()
+    return len(doomed)
+
+
+async def record_observed_shape(session: AsyncSession, domain: str, shape: dict[str, int]) -> None:
+    """Write what preflight just measured. Machine-owned; never the brief's copy."""
+    config = await load_site_config(session, domain)
+    if config is None:
+        config = SiteConfig(domain=domain)
+        session.add(config)
+    config.observed_shape = dict(shape)
+    await session.flush()
+
+
+async def load_observed_shape(session: AsyncSession, domain: str) -> dict[str, int]:
+    config = await load_site_config(session, domain)
+    return dict(config.observed_shape) if config else {}
 
 
 async def cache_indexed_estimate(session: AsyncSession, domain: str, estimate: int | None) -> None:

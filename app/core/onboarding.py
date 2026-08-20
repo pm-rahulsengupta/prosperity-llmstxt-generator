@@ -23,7 +23,6 @@ argument against pretending prompt text is an enforcement mechanism.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Literal
@@ -31,13 +30,15 @@ from urllib.parse import urlparse
 
 __all__ = [
     "QUESTIONS",
+    "Drift",
     "Fact",
     "Question",
     "SiteBrief",
     "brief_from_answers",
-    "fingerprint",
-    "has_drifted",
+    "detect_drift",
     "matches_any",
+    "site_shape",
+    "split_embargoed",
 ]
 
 FieldKind = Literal["globs", "urls", "text", "facts"]
@@ -145,9 +146,10 @@ class SiteBrief:
     must_appear: frozenset[str] = frozenset()
     embargoed: tuple[str, ...] = ()
     facts: dict[str, Fact] = field(default_factory=dict)
-    # What the site looked like when these answers were given, so a replatform
-    # does not run silently on a brief describing the old shape.
-    fingerprint: str = ""
+    # URL count per sitemap group when these answers were given, so a replatform
+    # does not run silently on a brief describing the old shape -- and so drift
+    # can name which groups moved rather than only that something did.
+    shape: dict[str, int] = field(default_factory=dict)
     answered_by: str = ""
 
     @property
@@ -177,7 +179,7 @@ class SiteBrief:
                 name: {"value": fact.value, "source": fact.source}
                 for name, fact in sorted(self.facts.items())
             },
-            "fingerprint": self.fingerprint,
+            "shape": dict(self.shape),
             "answered_by": self.answered_by,
         }
 
@@ -194,7 +196,7 @@ class SiteBrief:
         brief = brief_from_answers(
             data,
             answered_by=str(data.get("answered_by") or ""),
-            site_fingerprint=str(data.get("fingerprint") or ""),
+            shape=dict(data.get("shape") or {}),
         )
         return brief
 
@@ -261,7 +263,7 @@ def matches_any(candidate: str, patterns: tuple[str, ...]) -> str | None:
 
 
 def brief_from_answers(
-    answers: dict, answered_by: str = "", site_fingerprint: str = ""
+    answers: dict, answered_by: str = "", shape: dict[str, int] | None = None
 ) -> SiteBrief:
     """Build a brief from raw form input, tolerating the shapes a form produces."""
 
@@ -290,43 +292,136 @@ def brief_from_answers(
         must_appear=frozenset(lines("must_appear")),
         embargoed=lines("embargoed"),
         facts=facts,
-        fingerprint=site_fingerprint,
+        shape=site_shape(shape or {}),
         answered_by=answered_by,
     )
 
 
-# A site gains and loses sitemaps between runs without having changed shape.
-# Re-asking on any difference at all would make "once per domain" meaningless.
-DRIFT_URL_RATIO = 0.20
+# Drift detection.
+#
+# The first version summed URL counts across the whole site and re-asked on a 20%
+# swing. That is wrong in both directions on a real property. Gumtree's listing
+# count moves more than 20% on ordinary churn, so it would nag constantly; and a
+# group disappearing while another doubles nets to roughly zero, so the change
+# that actually matters -- the site being restructured -- would pass silently.
+#
+# Group names carry the signal. A group appearing or disappearing means the site
+# has been reorganised and the answers may no longer describe it, so tolerance
+# there is zero. Counts are noisy by nature and belong per-group behind a wide
+# band, where they catch a section being gutted or exploding rather than a
+# fortnight of publishing.
+# Fold-change, not percentage change. A percentage is asymmetric: a group can
+# grow without limit but can only ever shrink by 100%, so any threshold at or
+# above 1.0 makes shrinking undetectable -- a section gutted from 4,000 URLs to
+# 200 is a 95% loss and would never have fired. Fold-change treats halving and
+# doubling as the same size of event, which is what they are.
+DRIFT_COUNT_FOLD = 2.0
+DRIFT_COUNT_FLOOR = 50
 
 
-def fingerprint(group_names: list[str], url_count: int) -> str:
-    """A stable summary of site shape, cheap to store and compare."""
-    digest = hashlib.sha256("\n".join(sorted(set(group_names))).encode()).hexdigest()[:16]
-    return f"{digest}:{url_count}"
+@dataclass(frozen=True, slots=True)
+class Drift:
+    """What changed about a site's shape since the brief was answered.
 
-
-def has_drifted(previous: str, group_names: list[str], url_count: int) -> str | None:
-    """Say whether the answers should be re-confirmed, and why.
-
-    Returns the reason, so the UI can tell the operator what changed rather than
-    presenting the same form again with no explanation.
+    Carries the affected group names, not just a boolean. The action on drift is
+    to re-approve *the groups that moved* -- invalidating the whole plan would
+    discard every human decision on the groups that did not, which is the state
+    the storage rules exist to protect.
     """
-    if not previous or ":" not in previous:
-        return None
-    old_digest, _, old_count_text = previous.partition(":")
-    try:
-        old_count = int(old_count_text)
-    except ValueError:
-        return None
 
-    new_digest = fingerprint(group_names, url_count).partition(":")[0]
-    if new_digest != old_digest:
-        return "The site's sitemap groups have changed since these answers were given."
-    if old_count and abs(url_count - old_count) / old_count > DRIFT_URL_RATIO:
-        direction = "grown" if url_count > old_count else "shrunk"
-        return (
-            f"The site has {direction} from {old_count:,} to {url_count:,} URLs since these "
-            "answers were given."
+    added: tuple[str, ...] = ()
+    removed: tuple[str, ...] = ()
+    resized: tuple[tuple[str, int, int], ...] = ()
+
+    @property
+    def drifted(self) -> bool:
+        return bool(self.added or self.removed or self.resized)
+
+    @property
+    def affected(self) -> frozenset[str]:
+        """Exactly the groups needing another look. Everything else stands."""
+        return frozenset(
+            [*self.added, *self.removed, *(name for name, _, _ in self.resized)]
         )
-    return None
+
+    def reason(self) -> str:
+        """One line for the operator, naming what moved rather than that something did."""
+        parts = []
+        if self.added:
+            parts.append(f"{len(self.added)} new group(s): {', '.join(sorted(self.added)[:4])}")
+        if self.removed:
+            parts.append(
+                f"{len(self.removed)} group(s) gone: {', '.join(sorted(self.removed)[:4])}"
+            )
+        for name, old, new in self.resized[:3]:
+            direction = "grew" if new > old else "shrank"
+            parts.append(f"{name} {direction} from {old:,} to {new:,} URLs")
+        return "; ".join(parts)
+
+    def to_dict(self) -> dict:
+        return {
+            "added": list(self.added),
+            "removed": list(self.removed),
+            "resized": [list(item) for item in self.resized],
+        }
+
+
+def site_shape(group_counts: dict[str, int]) -> dict[str, int]:
+    """The stored shape: URL count per sitemap group.
+
+    Per-group rather than a digest plus a total, because a digest cannot say
+    *which* group moved and the action on drift needs exactly that.
+    """
+    return {str(name): int(count) for name, count in group_counts.items()}
+
+
+def detect_drift(
+    previous: dict[str, int] | None,
+    current: dict[str, int],
+    count_fold: float = DRIFT_COUNT_FOLD,
+    count_floor: int = DRIFT_COUNT_FLOOR,
+) -> Drift:
+    """Compare two site shapes.
+
+    `count_floor` keeps small groups quiet: a group going from 2 URLs to 5 is a
+    150% change and means nothing, and without a floor every such group would be
+    reported on every run until the operator stopped reading the warnings.
+    """
+    if not previous:
+        return Drift()
+
+    added = tuple(sorted(set(current) - set(previous)))
+    removed = tuple(sorted(set(previous) - set(current)))
+
+    resized = []
+    for name in sorted(set(previous) & set(current)):
+        old, new = previous[name], current[name]
+        if max(old, new) < count_floor:
+            continue
+        if min(old, new) == 0 or max(old, new) / min(old, new) >= count_fold:
+            resized.append((name, old, new))
+
+    return Drift(added=added, removed=removed, resized=tuple(resized))
+
+
+def split_embargoed(urls: list[str], brief: SiteBrief | None) -> tuple[list[str], dict[str, int]]:
+    """Partition a crawl list into what may be fetched and what may not.
+
+    Returns the survivors and a count per pattern. The counts exist so the
+    suppression can be reported: the patterns are deliberately hidden from the
+    model, which means the planner can propose an embargoed group in good faith
+    and watch it vanish with no explanation anywhere. Hidden from the model is
+    not the same as hidden from the operator, and conflating the two turns "why
+    does this page never appear" into a debugging session with no trail.
+    """
+    if brief is None or not brief.embargoed:
+        return urls, {}
+
+    kept: list[str] = []
+    counts: dict[str, int] = {}
+    for url in urls:
+        if (pattern := matches_any(url, brief.embargoed)) is not None:
+            counts[pattern] = counts.get(pattern, 0) + 1
+        else:
+            kept.append(url)
+    return kept, counts

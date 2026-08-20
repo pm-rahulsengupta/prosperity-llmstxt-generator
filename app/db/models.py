@@ -300,6 +300,13 @@ class SiteConfig(Base):
     # `CrawlPlan.from_dict` keeps only the keys it knows, so a brief stored there
     # would be erased by the next plan approval without anything reporting it.
     brief: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
+    # URL count per sitemap group as of the last preflight. Machine-owned, and
+    # kept apart from `brief["shape"]`, which records what the site looked like
+    # when a person answered. Drift is the difference; one writer each is what
+    # keeps that difference meaningful.
+    observed_shape: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
     max_pages: Mapped[int] = mapped_column(Integer, default=0)
     # Cached `site:` count, with its date, so a monthly rerun does not buy the same
     # SERP call again for no new information.

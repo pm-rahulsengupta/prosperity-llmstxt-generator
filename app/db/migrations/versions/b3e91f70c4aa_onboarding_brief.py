@@ -34,4 +34,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    """Reverses the schema, not the data.
+
+    Dropping site_configs.brief discards every answer stored in it. Tested against
+    populated rows: the migration runs cleanly and the content is gone. Treat
+    this as a schema rollback only -- take a dump first if the rows matter.
+    """
     op.drop_column("site_configs", "brief")

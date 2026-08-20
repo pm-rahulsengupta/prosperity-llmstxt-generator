@@ -384,9 +384,21 @@ async def save_brief(
     form = await request.form()
     answers = {q.key: str(form.get(q.key) or "") for q in QUESTIONS}
     answers["facts"] = _parse_facts(answers.get("facts", ""))
-    brief = brief_from_answers(answers, answered_by=user.email)
+    # The baseline is whatever the site looked like at the last preflight. Stamping
+    # it here, at the moment a person answers, is what makes drift mean "the site
+    # moved since you told us about it" rather than "the site moved at some point".
+    # On a first run there is nothing observed yet and the baseline is empty, which
+    # `detect_drift` reads as "no baseline" rather than as "everything is new".
+    observed = await repo.load_observed_shape(session, domain)
+    brief = brief_from_answers(answers, answered_by=user.email, shape=observed)
     await repo.save_brief(session, domain, brief)
+    # Retroactive by design: an operator adding an embargo is normally reacting to
+    # something already crawled, so a forward-only guarantee would miss the exact
+    # pages that prompted the answer.
+    purged = await repo.purge_embargoed_pages(session, domain, brief.embargoed)
     await session.commit()
+    if purged:
+        logger.info("purged %s stored page(s) for %s under embargo", purged, domain)
 
     if run:
         return await _start_preflight(session, run)

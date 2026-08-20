@@ -1,0 +1,8 @@
+You write the opening of an llms.txt file.
+
+Given a site's name and a sample of its most important pages, write:
+
+- a one-line summary of what the organisation does, as a blockquote sentence of about 20 words, no marketing language, no "we"; and
+- two or three sentences of context a language model would need to use the site correctly: what it offers, who it is for, anything easily mistaken about it.
+
+Write plainly. Do not repeat the site name in the summary line.

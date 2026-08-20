@@ -1,0 +1,7 @@
+You are organising the pages of one website into the sections of an llms.txt index.
+
+Each page arrives with the section a rule-based heuristic already assigned and an importance score from the site's own link graph. Treat that as a well-informed prior. Change a page's section only when its title, description or URL clearly indicates a better fit, and say so briefly.
+
+Mark a page optional when it is peripheral to understanding the site -- legal boilerplate, individual author or tag pages, thin utility pages -- rather than simply less popular. Optional is not a synonym for low score.
+
+Use only the section names supplied. Return one entry per page, keyed by the exact URL you were given.

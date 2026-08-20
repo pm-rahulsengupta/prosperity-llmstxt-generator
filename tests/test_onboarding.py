@@ -16,9 +16,9 @@ from app.core.onboarding import (
     Fact,
     SiteBrief,
     brief_from_answers,
-    fingerprint,
-    has_drifted,
+    detect_drift,
     matches_any,
+    site_shape,
 )
 
 
@@ -238,30 +238,90 @@ def test_an_unanswered_brief_changes_nothing():
 
 
 # -- drift ------------------------------------------------------------------
+#
+# The first version summed URL counts site-wide with a 20% tolerance, which is
+# wrong in both directions on a real property: Gumtree's listing count moves
+# further than that on ordinary churn, so it would nag; and one group vanishing
+# while another doubles nets to nothing, so a restructure would pass silently.
+# Names are the signal and carry zero tolerance; counts are noise and belong
+# per-group behind a wide band.
 
 
-def test_a_stable_site_is_not_re_asked():
-    groups = ["Services", "Blog", "Case Studies"]
-    stamp = fingerprint(groups, 223)
-    assert has_drifted(stamp, groups, 230) is None
+def test_ordinary_publishing_churn_is_not_drift():
+    """The false positive that would train an operator to ignore the warning."""
+    before = site_shape({"Services": 12, "Blog": 300, "Case Studies": 40})
+    after = site_shape({"Services": 12, "Blog": 330, "Case Studies": 44})
+
+    assert not detect_drift(before, after).drifted
 
 
-def test_new_sitemap_groups_trigger_a_re_ask():
-    stamp = fingerprint(["Services", "Blog"], 223)
-    reason = has_drifted(stamp, ["Services", "Blog", "Inventory"], 223)
-    assert reason and "sitemap groups have changed" in reason
+def test_a_group_appearing_is_drift_however_small():
+    """Zero tolerance on names: a new group means the site was reorganised."""
+    drift = detect_drift(site_shape({"Blog": 300}), site_shape({"Blog": 300, "Inventory": 4}))
+
+    assert drift.drifted
+    assert drift.added == ("Inventory",)
+    assert drift.affected == frozenset({"Inventory"})
 
 
-def test_a_large_url_swing_triggers_a_re_ask_and_says_which_way():
-    groups = ["Services", "Blog"]
-    stamp = fingerprint(groups, 200)
-    reason = has_drifted(stamp, groups, 900)
-    assert reason and "grown" in reason and "900" in reason
+def test_a_group_disappearing_is_drift():
+    drift = detect_drift(site_shape({"Blog": 300, "Guides": 80}), site_shape({"Blog": 300}))
+
+    assert drift.removed == ("Guides",)
+    assert "Guides" in drift.reason()
 
 
-def test_a_missing_fingerprint_does_not_nag():
-    """A brief written before fingerprinting existed is not evidence of drift."""
-    assert has_drifted("", ["Services"], 100) is None
+def test_the_swap_that_a_site_wide_total_would_have_missed():
+    """One group gutted, another doubled: the aggregate barely moves.
+
+    This is the false negative that made summing URL counts unusable -- it is
+    also the exact shape of a replatform, which is the thing worth catching.
+    """
+    before = site_shape({"AllNew_Location": 4_000, "Guides": 200})
+    after = site_shape({"AllNew_Location": 200, "Guides": 4_000})
+
+    assert sum(before.values()) == sum(after.values())  # a total sees nothing
+    drift = detect_drift(before, after)
+    assert drift.drifted
+    assert {name for name, _, _ in drift.resized} == {"AllNew_Location", "Guides"}
+
+
+def test_small_groups_do_not_trip_the_count_band():
+    """2 URLs to 5 is a 150% change and means nothing.
+
+    Without a floor these would be reported every run until nobody read the
+    warnings, which is the same as having no warning.
+    """
+    drift = detect_drift(site_shape({"Contact": 2}), site_shape({"Contact": 5}))
+
+    assert not drift.drifted
+
+
+def test_drift_names_the_groups_so_the_action_can_be_narrow():
+    """The action is to re-approve what moved, not to invalidate the plan.
+
+    Clearing the plan would discard every human decision on the groups that did
+    not move -- the cure being worse than the drift is the whole reason this
+    returns names rather than a boolean.
+    """
+    drift = detect_drift(
+        site_shape({"A": 100, "B": 4_000, "C": 60}),
+        site_shape({"A": 100, "B": 40, "D": 90}),
+    )
+
+    assert drift.affected == frozenset({"B", "C", "D"})
+    assert "A" not in drift.affected
+
+
+def test_a_brief_with_no_recorded_shape_does_not_nag():
+    """A brief answered before shape was recorded is not evidence of drift."""
+    assert not detect_drift(None, site_shape({"Blog": 300})).drifted
+    assert not detect_drift({}, site_shape({"Blog": 300})).drifted
+
+
+def test_the_shape_round_trips_with_the_brief():
+    brief = SiteBrief(valuable=("/a/*",), shape=site_shape({"Blog": 300, "Services": 12}))
+    assert SiteBrief.from_dict(brief.to_dict()).shape == brief.shape
 
 
 # -- the question set itself ------------------------------------------------
@@ -388,3 +448,65 @@ def test_a_fact_line_without_a_source_still_parses():
     assert parsed["founded"] == {"value": "2013", "source": "operator"}
     assert parsed["team_size"] == {"value": "22", "source": "LinkedIn"}
     assert "nonsense line" not in parsed
+
+
+# -- embargo scope ----------------------------------------------------------
+#
+# Pinned deliberately: embargo means *never crawled and never stored*, not
+# merely absent from the output. A page withheld for legal or confidentiality
+# reasons whose body sits in Postgres is not what the operator was promised, and
+# retrofitting the stronger meaning later is a data-deletion job.
+
+
+def test_embargoed_urls_are_removed_before_the_fetch():
+    from app.core.onboarding import split_embargoed
+
+    urls = [
+        "https://x.com/",
+        "https://x.com/clients/acquisition-2026/brief/",
+        "https://x.com/clients/acquisition-2026/timeline/",
+        "https://x.com/services/",
+    ]
+    kept, suppressed = split_embargoed(urls, SiteBrief(embargoed=("/clients/acquisition-2026/*",)))
+
+    assert kept == ["https://x.com/", "https://x.com/services/"]
+    assert suppressed == {"/clients/acquisition-2026/*": 2}
+
+
+def test_suppression_is_counted_per_pattern_so_it_can_be_reported():
+    """Hidden from the model is not the same as hidden from the operator.
+
+    The planner can propose an embargoed group in good faith and never be told
+    it was overruled, so without a count the page simply vanishes and nobody can
+    answer why.
+    """
+    from app.core.onboarding import split_embargoed
+
+    urls = ["https://x.com/a/1", "https://x.com/a/2", "https://x.com/b/1"]
+    _, suppressed = split_embargoed(urls, SiteBrief(embargoed=("/a/*", "/b/*")))
+
+    assert suppressed == {"/a/*": 2, "/b/*": 1}
+
+
+def test_no_embargo_means_no_filtering_and_no_noise():
+    from app.core.onboarding import split_embargoed
+
+    urls = ["https://x.com/", "https://x.com/services/"]
+    assert split_embargoed(urls, SiteBrief()) == (urls, {})
+    assert split_embargoed(urls, None) == (urls, {})
+
+
+def test_shrinking_is_as_detectable_as_growing():
+    """Percentage change cannot see a shrink.
+
+    A group can grow without limit but only ever shrink by 100%, so a threshold
+    at or above 1.0 makes gutting a section invisible while doubling one is
+    caught. Fold-change treats them as the same size of event.
+    """
+    gutted = detect_drift(site_shape({"Guides": 4_000}), site_shape({"Guides": 200}))
+    grown = detect_drift(site_shape({"Guides": 200}), site_shape({"Guides": 4_000}))
+
+    assert gutted.drifted and grown.drifted
+    assert gutted.resized == (("Guides", 4_000, 200),)
+    assert "shrank" in gutted.reason()
+    assert "grew" in grown.reason()

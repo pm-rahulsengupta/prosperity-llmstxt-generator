@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 
 from app.config import get_settings
 from app.core.models import PageEntry, Section, ValidationIssue
+from app.core.onboarding import detect_drift, site_shape, split_embargoed
 from app.core.pipeline import FilterOptions, GenerateOptions, generate
 from app.core.ranking import (
     importance_score,
@@ -102,6 +103,15 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
         run = await repo.get_run(session, rid)
         site_brief = await repo.load_brief(session, run.domain) if run else None
 
+    # Drift is checked here because this is the first point at which the site's
+    # current shape is known. The action is deliberately narrow: warn, record
+    # which groups moved, and change nothing else. Re-running the plan or
+    # clearing it would discard every human decision on the groups that did not
+    # move, which is the state the storage rules exist to protect -- the cure
+    # would be worse than the drift.
+    current_shape = site_shape(dict(pre.recon.sitemap_groups()))
+    drift = detect_drift(site_brief.shape if site_brief else None, current_shape)
+
     usage = LLMUsage()
     client = LLMClient(settings, usage)
     plan = await plan_crawl(client, pre.planning_brief(), pre.recon, cap, site_brief)
@@ -125,11 +135,25 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
             **(run.stats or {}),
             "llm": usage.as_dict(),
             "serp_calls": pre.serp_calls,
+            # Machine-derived, and written with the merge pattern, so it is safe
+            # in a shared JSONB column. The groups a *person* re-approves are not
+            # -- when verdicts start being persisted they need their own table.
+            "drift": drift.to_dict() if drift.drifted else {},
             "size_check": {
                 "reason": str(pre.indexed.reason),
                 "detail": pre.indexed.detail,
             },
         }
+        if drift.drifted:
+            await repo.record_event(
+                session,
+                rid,
+                "plan",
+                f"Site shape changed since the brief was answered — {drift.reason()}. "
+                f"{len(drift.affected)} group(s) need another look; the rest of the plan "
+                "stands.",
+            )
+        await repo.record_observed_shape(session, domain, current_shape)
         await repo.cache_indexed_estimate(session, domain, pre.size.indexed_estimate)
         await repo.set_status(session, run, RunStatus.AWAITING_REVIEW)
         await repo.record_event(
@@ -155,8 +179,10 @@ async def generate_task(run_id: str) -> None:
         if run is None:
             return
         site_url = run.site_url
+        domain = run.domain
         plan = CrawlPlan.from_dict(run.plan or {})
         cap = run.max_pages or settings.crawl_default_max_pages
+        site_brief = await repo.load_brief(session, domain)
         await repo.set_status(session, run, RunStatus.CRAWLING)
         await repo.record_event(session, rid, "crawl", "Re-reading sitemaps")
 
@@ -164,7 +190,27 @@ async def generate_task(run_id: str) -> None:
         pre = await run_preflight(site_url, settings)
         urls = select_urls(pre.recon, plan, cap)
 
+        # Embargo is enforced here, before the fetch, because "excluded from the
+        # output" is not what anyone means by it. A page withheld for legal or
+        # confidentiality reasons must not have its body sitting in our database
+        # either, and the only point at which that is cheap to guarantee is
+        # before it is requested. Filtering later would leave the content stored
+        # and make the fix a deletion job.
+        urls, suppressed = split_embargoed(urls, site_brief)
+
         async with session_scope() as session:
+            # Logged even though the patterns are withheld from the model. The
+            # operator has to be able to answer "why does this page never
+            # appear", and a silent disappearance leaves no trail to answer it
+            # with -- especially since the planner can propose an embargoed group
+            # on its own and never be told it was overruled.
+            for pattern, count in sorted(suppressed.items()):
+                await repo.record_event(
+                    session,
+                    rid,
+                    "crawl",
+                    f"Embargo {pattern!r}: {count} URL(s) not crawled and not stored",
+                )
             await repo.record_event(
                 session, rid, "crawl", f"Fetching {len(urls)} pages", done=0, total=len(urls)
             )
