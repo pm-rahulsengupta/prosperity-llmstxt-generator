@@ -28,7 +28,10 @@ from datetime import date
 from enum import StrEnum
 from typing import Literal, Protocol
 
+from app.core.onboarding import SiteBrief, matches_any
+
 Confidence = Literal["high", "medium", "low"]
+
 Tier = Literal["A", "B", "C", "D"]
 
 
@@ -124,6 +127,9 @@ class GroupMetrics:
     rationale: str = ""
     # True when a rule overrode what the numbers alone would have said.
     overridden: bool = False
+    # The onboarding answer that moved this verdict, verbatim, so the planning
+    # table can show which declaration is responsible for which group.
+    declared: str = ""
 
     @property
     def coverage(self) -> float:
@@ -162,6 +168,7 @@ def summarise_group(
     *,
     thresholds: Thresholds | None = None,
     identity_urls: set[str] | None = None,
+    brief: SiteBrief | None = None,
     exemplar_limit: int = 5,
 ) -> GroupMetrics:
     """Roll a sitemap group up and decide what to do with it.
@@ -247,7 +254,7 @@ def summarise_group(
             "on coverage alone."
         )
 
-    return _apply_overrides(group, urls, known, thresholds, identity_urls or set())
+    return _apply_overrides(group, urls, known, thresholds, identity_urls or set(), brief)
 
 
 def _apply_overrides(
@@ -256,8 +263,27 @@ def _apply_overrides(
     known: list[PageMetrics],
     thresholds: Thresholds,
     identity_urls: set[str],
+    brief: SiteBrief | None = None,
 ) -> GroupMetrics:
     """Rules that beat the arithmetic, applied after it."""
+
+    # Embargo is not evidence to be weighed against clicks. It comes first and
+    # nothing below can undo it.
+    if brief and brief.embargoed:
+        embargo = matches_any(group.group_key, brief.embargoed) or next(
+            (m for url in urls if (m := matches_any(url, brief.embargoed))), None
+        )
+        if embargo:
+            group.verdict = GroupVerdict.EXCLUDE
+            group.overridden = True
+            group.declared = embargo
+            group.rationale = f"Excluded under embargo: matches {embargo!r}."
+            return group  # Absolute: the one verdict the brief itself cannot revisit.
+
+    if brief and brief.must_appear:
+        identity_urls = identity_urls | {
+            url for url in urls if matches_any(url, tuple(brief.must_appear))
+        }
 
     # Identity pages are low-traffic by nature and are exactly what a model needs to
     # answer "who is this company and how do I contact them". We shipped a file for
@@ -271,7 +297,7 @@ def _apply_overrides(
                 "Contains identity pages (about / contact / case studies), which are "
                 "low-traffic by nature and cannot be excluded on traffic."
             )
-        return group
+        return _apply_brief(group, urls, brief)
 
     # Impressions without clicks, at scale, is faceted search even when coverage is
     # borderline: Google indexes the pages and nobody picks them.
@@ -295,7 +321,7 @@ def _apply_overrides(
             f"{group.total_impressions:,} impressions at {group.mean_ctr:.2%} CTR across "
             f"{group.url_count:,} URLs — indexed but never chosen."
         )
-        return group
+        return _apply_brief(group, urls, brief)
 
     # Never exclude on the absence of history. A page published last week has had no
     # opportunity to rank, and excluding it is how a site's newest work disappears.
@@ -303,6 +329,66 @@ def _apply_overrides(
         group.verdict = GroupVerdict.REVIEW
         group.overridden = True
         group.rationale += " Too little of the group was measured to exclude it outright."
+
+    return _apply_brief(group, urls, brief)
+
+
+def _apply_brief(
+    group: GroupMetrics,
+    urls: list[str],
+    brief: SiteBrief | None,
+) -> GroupMetrics:
+    """What the operator declared, applied last, as a floor and a ceiling.
+
+    Last because it should move a verdict the evidence actually reached, not
+    pre-empt the arithmetic. And bounded in both directions: a declaration
+    changes how far a verdict may travel, never where it lands. An operator who
+    declares a pattern valuable stops it being deleted on traffic alone and buys
+    nothing else; one who declares a pattern noise stops it being swallowed
+    wholesale without deleting the page in it that earns real clicks.
+    """
+    if brief is None:
+        return group
+
+    def declared(patterns: tuple[str, ...]) -> str | None:
+        return matches_any(group.group_key, patterns) or next(
+            (m for url in urls if (m := matches_any(url, patterns))), None
+        )
+
+    # The floor. Exclusion is the only verdict it blocks, because it is the only
+    # one that removes pages without a human seeing them.
+    if group.verdict is GroupVerdict.EXCLUDE and (pattern := declared(brief.valuable)):
+        group.overridden = True
+        group.declared = pattern
+        if group.exemplars:
+            group.verdict = GroupVerdict.PROMOTE_EXEMPLARS
+            group.rationale = (
+                f"You declared {pattern!r} valuable, so it is not excluded on traffic. "
+                f"{len(group.exemplars)} page(s) here earn clicks and carry the group."
+            )
+        else:
+            group.verdict = GroupVerdict.REVIEW
+            group.rationale = (
+                f"You declared {pattern!r} valuable, so it is not excluded on traffic — but "
+                f"{group.url_count:,} URLs earn {group.total_clicks} clicks between them. "
+                "Held for you to look at."
+            )
+        return group
+
+    # The ceiling, its mirror. It stops wholesale inclusion without deleting a
+    # page that has demonstrably earned its place.
+    if group.verdict is GroupVerdict.INCLUDE_GROUP and (pattern := declared(brief.noise)):
+        group.overridden = True
+        group.declared = pattern
+        if group.exemplars:
+            group.verdict = GroupVerdict.PROMOTE_EXEMPLARS
+            group.rationale = (
+                f"You declared {pattern!r} low value, so the group is not included wholesale. "
+                f"{len(group.exemplars)} page(s) in it earn real clicks and are kept."
+            )
+        else:
+            group.verdict = GroupVerdict.REVIEW
+            group.rationale = f"You declared {pattern!r} low value. Held rather than included."
 
     return group
 
