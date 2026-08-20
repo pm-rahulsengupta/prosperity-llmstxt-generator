@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Sign in{% endblock %}
 
+{% block chrome %}{% endblock %}
+
 {% block content %}
+<img class="auth-mark" src="/static/img/pm-logo-green.svg" alt="Prosperity Media">
 <div class="panel" style="max-width: 24rem; margin: 4rem auto">
     <h2>Sign in</h2>
     {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}

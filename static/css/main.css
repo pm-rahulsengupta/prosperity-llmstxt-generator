@@ -1,154 +1,412 @@
-/* Prosperity llms.txt Generator.
-   Written for this tool rather than ported: the source's stylesheet is Pattern's
-   brand sheet, and neither the colours nor the licence position belong here.
-   Palette follows geo-tracker -- zinc neutrals, one blue accent. */
+/* Prosperity Media — llms.txt Generator
+   ---------------------------------------------------------------------------
+   Palette and type from the 2026 Brand Guidelines.
+
+   Two notes for whoever edits this next, so neither gets "fixed" by accident:
+
+   1. TYPEFACE. The guidelines contradict themselves — p19 "Typography" says DM
+      Sans for all copy, p21 "Ideal Type Stack" says Poppins. Poppins was chosen
+      by the brand owner. Do not switch to DM Sans on the strength of p19.
+
+   2. WHITE TEXT NEVER GOES ON EMERALD. It measures 2.03:1. The guidelines say
+      to use "only gunmetal or white text on core colours" and not to interchange
+      them by preference, because the pairings are chosen for accessibility.
+      Gunmetal on emerald is 6.92:1 and is the approved one. The instinctive
+      green-button-white-label is the single most likely mistake here.
+
+   The working rule the whole sheet follows:
+      emerald and lime are FILLS with gunmetal on them;
+      teal and imperial red are STROKES;
+      gunmetal and white do all the text.
+   --------------------------------------------------------------------------- */
+
+/* Self-hosted rather than Google Fonts, for the same reason htmx is vendored:
+   the container must not need outbound access to a third party to render its
+   own UI. Latin + latin-ext, because client page titles carry accents. */
+@font-face {
+    font-family: "Poppins"; font-style: normal; font-weight: 300; font-display: swap;
+    src: url("/static/fonts/poppins-300-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: "Poppins"; font-style: normal; font-weight: 300; font-display: swap;
+    src: url("/static/fonts/poppins-300-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: "Poppins"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/static/fonts/poppins-400-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: "Poppins"; font-style: normal; font-weight: 400; font-display: swap;
+    src: url("/static/fonts/poppins-400-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+    font-family: "Poppins"; font-style: normal; font-weight: 500; font-display: swap;
+    src: url("/static/fonts/poppins-500-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+    font-family: "Poppins"; font-style: normal; font-weight: 500; font-display: swap;
+    src: url("/static/fonts/poppins-500-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 :root {
-    --bg: #fafafa;
-    --panel: #ffffff;
-    --ink: #18181b;
-    --ink-soft: #52525b;
-    --ink-muted: #a1a1aa;
-    --rule: #e4e4e7;
-    --accent: #2563eb;
-    --accent-soft: #eff6ff;
-    --ok: #10b981;
-    --warn: #f59e0b;
-    --bad: #dc2626;
-    --radius: 8px;
-    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
-    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* ── Core brand ─────────────────────────────────────────────────────── */
+    --pm-white:        #ffffff;
+    --pm-gunmetal:     #232d33;   /* white on it 14.05:1 */
+    --pm-emerald:      #01d081;   /* gunmetal on it 6.92:1 · FILL ONLY */
+    --pm-lime:         #c5e258;   /* gunmetal on it 9.63:1 · FILL ONLY */
+    --pm-teal:         #02a1a7;   /* gunmetal on it 4.45:1 · stroke, not small text */
+
+    /* ── Functional — reserved meanings, never decorative ───────────────── */
+    --pm-red:          #f71735;   /* negative outcome · has NO accessible text pairing */
+    --pm-forest:       #306b34;   /* positive change · unused until the app shows a delta */
+    --pm-pale-grey:    #eeeeee;   /* background / anchor-block fill only */
+
+    /* ── Derived: deepened accents, for the places a bright fill can't go ─ */
+    --pm-emerald-deep: #01b872;   /* button hover · gunmetal on it 5.42:1 */
+    --pm-teal-deep:    #0c7e84;   /* 4.85:1 on white · the teal that MAY be text */
+
+    /* ── Derived: washes ────────────────────────────────────────────────── */
+    --pm-emerald-wash: #e1f9f0;
+    --pm-teal-wash:    #e1f4f4;
+    --pm-red-wash:     #fee8eb;
+
+    /* ── Neutral ramp, mixed FROM gunmetal rather than from black. This is
+          what stops the rebrand looking like the old zinc sheet with new
+          accents — every hairline carries gunmetal's blue-green cast. ───── */
+    --pm-ink:          var(--pm-gunmetal);
+    --pm-ink-soft:     #5a6266;   /* 6.22:1 */
+    --pm-ink-muted:    #656d72;   /* 5.27:1 — the old #a1a1aa was 2.58:1 and failed */
+    --pm-rule:         #dfe2e4;   /* decorative hairlines */
+    --pm-rule-strong:  #7f868a;   /* 3.70:1 — control boundaries, WCAG 1.4.11 */
+    --pm-on-dark-soft: #aab3b8;   /* 6.59:1 on gunmetal */
+    --pm-on-dark-veil: rgba(255, 255, 255, 0.12);
+    --pm-on-dark-edge: rgba(255, 255, 255, 0.28);
+
+    /* ── Surfaces ───────────────────────────────────────────────────────── */
+    --pm-bg:           var(--pm-pale-grey);
+    --pm-surface:      var(--pm-white);
+    --pm-sunken:       #f4f5f6;
+    /* Generated output is machine text, not UI. Inverting it separates "what
+       the tool produced" from "the tool". Flip these two to go back to light. */
+    --pm-code-bg:      var(--pm-gunmetal);
+    --pm-code-ink:     #e6eaec;   /* 11.60:1 on gunmetal */
+
+    /* ── Type ───────────────────────────────────────────────────────────── */
+    --pm-sans: "Poppins", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --pm-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+
+    /* px, not rem. The old sheet set body to 15px then sized everything in rem,
+       which resolves against the 16px root — so the whole scale was silently
+       6.7% larger than it read. */
+    --pm-2xs:  11px;
+    --pm-xs:   12px;
+    --pm-sm:   13px;
+    --pm-base: 15px;
+    --pm-md:   16px;   /* brand H3 */
+    --pm-lg:   20px;   /* brand H2 */
+    --pm-xl:   26px;
+
+    --pm-radius:    10px;
+    --pm-radius-sm:  6px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 
 body {
     margin: 0;
-    font-family: var(--sans);
-    font-size: 15px;
+    font-family: var(--pm-sans);
+    /* Body is 400, not the brand's Light 300. At 13–15px on Windows, Poppins
+       Light produces hairline stems that break down — Light is kept for display
+       sizes (h1) where it looks as the brand intends. */
+    font-weight: 400;
+    font-size: var(--pm-base);
     line-height: 1.55;
-    color: var(--ink);
-    background: var(--bg);
+    color: var(--pm-ink);
+    background: var(--pm-bg);
+    -webkit-font-smoothing: antialiased;
 }
 
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+/* Gunmetal text with an emerald underline. The brand has no accent that can
+   legally be a link colour on white — emerald 2.03, lime 1.46, teal 3.15 — so
+   the colour goes in the underline and the text stays at 14:1. */
+a {
+    color: var(--pm-ink);
+    text-decoration: underline;
+    text-decoration-color: var(--pm-emerald);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 3px;
+}
+a:hover { background: var(--pm-emerald-wash); text-decoration-thickness: 3px; }
+
+:focus-visible {
+    outline: 2px solid var(--pm-gunmetal);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 5px rgba(1, 208, 129, 0.45);
+    border-radius: 2px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
 
 header.top {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 1rem;
-    padding: 1rem 2rem;
-    background: var(--ink);
-    color: #fafafa;
+    padding: 12px 24px;
+    background: var(--pm-gunmetal);
+    color: var(--pm-white);
+    border-bottom: 3px solid var(--pm-emerald);
 }
-header.top h1 { font-size: 1rem; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-header.top .sub { color: var(--ink-muted); font-size: 0.8rem; }
-header.top .who { margin-left: auto; font-size: 0.8rem; color: var(--ink-muted); }
-header.top a { color: #fafafa; }
+header.top .brand { display: block; line-height: 0; text-decoration: none; background: none; }
+header.top .brand img { height: 44px; width: auto; display: block; }
+header.top .tool {
+    font-size: var(--pm-base);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+header.top .bar-divider {
+    width: 1px; height: 24px;
+    background: var(--pm-on-dark-edge);
+}
+header.top .who { margin-left: auto; font-size: var(--pm-xs); color: var(--pm-on-dark-soft); }
+header.top a { color: var(--pm-white); text-decoration-color: var(--pm-emerald); }
+header.top a:hover { background: var(--pm-on-dark-veil); }
 
-main { max-width: 1080px; margin: 0 auto; padding: 2rem; }
+/* A solid lime chip inside the dark bar is a bright blob competing with the
+   logo. On a dark ground the core colours work as dots instead. */
+.top .pill {
+    background: var(--pm-on-dark-veil);
+    color: var(--pm-white);
+    border: 1px solid var(--pm-on-dark-edge);
+}
+.top .pill::before {
+    content: ""; display: inline-block;
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 1px;
+    background: var(--pm-lime);
+}
+
+main { max-width: 1180px; margin: 0 auto; padding: 2rem; }
+
+/* ── Panels ─────────────────────────────────────────────────────────────── */
 
 .panel {
-    background: var(--panel);
-    border: 1px solid var(--rule);
-    border-radius: var(--radius);
+    background: var(--pm-surface);
+    border: 1px solid var(--pm-rule);
+    border-radius: var(--pm-radius);
     padding: 1.25rem 1.5rem;
     margin-bottom: 1.25rem;
 }
-.panel h2 { font-size: 0.95rem; margin: 0 0 0.75rem; letter-spacing: -0.01em; }
-.panel h3 { font-size: 0.85rem; margin: 1.25rem 0 0.5rem; color: var(--ink-soft); }
+.panel h2 {
+    font-size: var(--pm-lg);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.75rem;
+}
+.panel h3 {
+    font-size: var(--pm-md);
+    font-weight: 500;
+    color: var(--pm-ink-soft);
+    margin: 1.5rem 0 0.5rem;
+}
 
-label { display: block; font-size: 0.8rem; color: var(--ink-soft); margin-bottom: 0.25rem; }
-input[type="text"], input[type="url"], input[type="number"], select, textarea {
+/* ── Forms ──────────────────────────────────────────────────────────────── */
+
+label {
+    display: block;
+    font-size: var(--pm-xs);
+    font-weight: 500;
+    color: var(--pm-ink-soft);
+    margin-bottom: 0.3rem;
+}
+input[type="text"], input[type="url"], input[type="number"],
+input[type="password"], select, textarea {
     width: 100%;
     padding: 0.5rem 0.65rem;
     font: inherit;
-    color: var(--ink);
-    background: var(--panel);
-    border: 1px solid var(--rule);
-    border-radius: 6px;
+    font-size: var(--pm-base);
+    color: var(--pm-ink);
+    background: var(--pm-surface);
+    /* 3.70:1. The old --rule at 1.2:1 made the field boundary effectively
+       invisible — a pre-existing WCAG 1.4.11 failure, fixed here. */
+    border: 1px solid var(--pm-rule-strong);
+    border-radius: var(--pm-radius-sm);
 }
-textarea { font-family: var(--mono); font-size: 0.8rem; min-height: 8rem; }
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+textarea { font-family: var(--pm-mono); font-size: var(--pm-sm); min-height: 8rem; }
+input:focus, select:focus, textarea:focus { border-color: var(--pm-gunmetal); }
 
-.row { display: flex; gap: 0.75rem; align-items: flex-end; flex-wrap: wrap; }
+/* Gunmetal, not emerald: a native checkbox draws a WHITE tick on the accent
+   fill, and white-on-emerald is the one pairing the brand forbids. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--pm-gunmetal); }
+
+.row { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
 .row > * { flex: 1 1 12rem; }
-.row > .narrow { flex: 0 0 9rem; }
+.row > .narrow { flex: 0 0 10rem; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
 
 button, .button {
-    padding: 0.5rem 1rem;
+    display: inline-block;
+    padding: 0.5rem 1.1rem;
     font: inherit;
+    font-size: var(--pm-base);
     font-weight: 500;
-    color: #fafafa;
-    background: var(--ink);
-    border: 1px solid var(--ink);
-    border-radius: 6px;
+    color: var(--pm-white);
+    background: var(--pm-gunmetal);
+    border: 1px solid var(--pm-gunmetal);
+    border-radius: var(--pm-radius-sm);
     cursor: pointer;
+    text-decoration: none;
 }
-button:hover, .button:hover { background: #27272a; text-decoration: none; }
-button.primary, .button.primary { background: var(--accent); border-color: var(--accent); }
-button.ghost, .button.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+button:hover, .button:hover { background: #2e3a41; text-decoration: none; }
+
+/* The flagship control gets the brand's flagship approved pair. */
+button.primary, .button.primary {
+    background: var(--pm-emerald);
+    border-color: var(--pm-emerald);
+    color: var(--pm-gunmetal);
+}
+button.primary:hover, .button.primary:hover { background: var(--pm-emerald-deep); }
+
+button.ghost, .button.ghost {
+    background: transparent;
+    color: var(--pm-ink);
+    border-color: var(--pm-rule-strong);
+}
+button.ghost:hover, .button.ghost:hover { background: var(--pm-sunken); }
+/* Disabled drops emerald/gunmetal to ~2.6:1. Disabled controls are exempt from
+   contrast minimums — this is deliberate, do not "fix" it. */
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-th, td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
-th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 600; }
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+
+table { width: 100%; border-collapse: collapse; font-size: var(--pm-sm); }
+th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--pm-rule); vertical-align: top; }
+th {
+    font-size: var(--pm-2xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--pm-ink-muted);
+    border-bottom: 2px solid var(--pm-rule);
+}
+tbody tr:hover { background: var(--pm-sunken); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
-td code, .url { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-soft); word-break: break-all; }
+td code, .url {
+    font-family: var(--pm-mono);
+    font-size: 12.5px;
+    color: var(--pm-ink-soft);
+    word-break: break-all;
+}
+
+/* ── Pills ──────────────────────────────────────────────────────────────── */
 
 .pill {
     display: inline-block;
-    padding: 0.1rem 0.5rem;
-    font-size: 0.7rem;
+    padding: 0.15rem 0.55rem;
+    font-size: var(--pm-2xs);
     font-weight: 600;
     letter-spacing: 0.02em;
     border-radius: 999px;
-    background: var(--rule);
-    color: var(--ink-soft);
+    background: var(--pm-pale-grey);
+    color: var(--pm-ink-soft);
 }
-.pill.ok { background: #d1fae5; color: #065f46; }
-.pill.run { background: var(--accent-soft); color: #1d4ed8; }
-.pill.wait { background: #fef3c7; color: #92400e; }
-.pill.bad { background: #fee2e2; color: #991b1b; }
+/* Solid where the brand's approved pair passes; wash + stroke where it doesn't. */
+.pill.ok   { background: var(--pm-emerald); color: var(--pm-gunmetal); }
+.pill.wait { background: var(--pm-lime);    color: var(--pm-gunmetal); }
+/* Teal can't be a solid chip — gunmetal on it is 4.45:1, under AA for 11px. */
+.pill.run  { background: var(--pm-teal-wash); border: 1px solid var(--pm-teal); color: var(--pm-gunmetal); }
+/* Imperial Red has no accessible text pairing at all, so it is a stroke only. */
+.pill.bad  { background: var(--pm-red-wash); border: 1.5px solid var(--pm-red); color: var(--pm-gunmetal); }
 
-.notes { margin: 0.75rem 0 0; padding: 0; list-style: none; font-size: 0.82rem; }
-.notes li { padding: 0.4rem 0.6rem; border-left: 3px solid var(--warn); background: #fffbeb; margin-bottom: 0.35rem; }
-.notes li.error { border-color: var(--bad); background: #fef2f2; }
-.notes li.info { border-color: var(--accent); background: var(--accent-soft); }
+/* ── Notes — same colour logic as the pills ─────────────────────────────── */
+
+.notes { margin: 0.75rem 0 0; padding: 0; list-style: none; font-size: var(--pm-sm); }
+.notes li {
+    padding: 0.45rem 0.65rem;
+    margin-bottom: 0.35rem;
+    border-radius: var(--pm-radius-sm);
+    background: var(--pm-lime);
+    color: var(--pm-gunmetal);
+}
+.notes li.error { background: var(--pm-red-wash); border-left: 4px solid var(--pm-red); }
+.notes li.info  { background: var(--pm-teal-wash); border-left: 4px solid var(--pm-teal); }
+
+/* ── Stats ──────────────────────────────────────────────────────────────── */
 
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; }
-.stat { border: 1px solid var(--rule); border-radius: 6px; padding: 0.6rem 0.75rem; }
-.stat .k { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); }
-.stat .v { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat { background: var(--pm-sunken); border-radius: var(--pm-radius-sm); padding: 0.65rem 0.8rem; }
+.stat .k {
+    font-size: var(--pm-2xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--pm-ink-muted);
+}
+.stat .v { font-size: var(--pm-lg); font-weight: 500; font-variant-numeric: tabular-nums; }
 
-.bar { height: 6px; background: var(--rule); border-radius: 999px; overflow: hidden; margin: 0.5rem 0; }
-.bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+/* ── Progress ───────────────────────────────────────────────────────────── */
 
-.log { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-soft); max-height: 14rem; overflow-y: auto; }
-.log div { padding: 0.15rem 0; border-bottom: 1px dotted var(--rule); }
-.log .stage { color: var(--ink-muted); display: inline-block; min-width: 5.5rem; }
+/* Teal, not emerald: the bar only exists while a run is in flight, so it
+   matches .pill.run — and teal reads at 2.6:1 against the track versus
+   emerald's 1.5:1. The count printed underneath is the accessible carrier. */
+.bar { height: 8px; background: var(--pm-rule); border-radius: 999px; overflow: hidden; margin: 0.6rem 0; }
+.bar > span { display: block; height: 100%; background: var(--pm-teal); transition: width 0.4s ease; }
+
+.log {
+    font-family: var(--pm-mono);
+    font-size: var(--pm-xs);
+    line-height: 1.5;
+    color: var(--pm-ink-soft);
+    background: var(--pm-sunken);
+    border: 1px solid var(--pm-rule);
+    border-radius: var(--pm-radius-sm);
+    padding: 0.5rem 0.65rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+.log div { padding: 0.15rem 0; border-bottom: 1px dotted var(--pm-rule); }
+/* The one text position where a brand hue survives on a light ground. */
+.log .stage { color: var(--pm-teal-deep); display: inline-block; min-width: 88px; }
+
+/* ── Generated output ───────────────────────────────────────────────────── */
 
 pre.output {
-    font-family: var(--mono);
-    font-size: 0.78rem;
+    font-family: var(--pm-mono);
+    font-size: var(--pm-sm);
     line-height: 1.5;
-    background: #fafafa;
-    border: 1px solid var(--rule);
-    border-radius: 6px;
-    padding: 1rem;
+    background: var(--pm-code-bg);
+    color: var(--pm-code-ink);
+    border-radius: var(--pm-radius);
+    padding: 1rem 1.15rem;
     max-height: 32rem;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;
 }
 
-.muted { color: var(--ink-muted); font-size: 0.8rem; }
+/* ── Utilities ──────────────────────────────────────────────────────────── */
+
+.muted { color: var(--pm-ink-muted); font-size: var(--pm-xs); }
 .right { text-align: right; }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-.empty { padding: 2rem; text-align: center; color: var(--ink-muted); }
+.empty {
+    padding: 2rem;
+    text-align: center;
+    color: var(--pm-ink-muted);
+    background: var(--pm-sunken);
+    border-radius: var(--pm-radius-sm);
+}
+
+.auth-mark { display: block; margin: 0 auto 1.5rem; width: 240px; max-width: 70%; }
 
 @media (max-width: 720px) {
     main { padding: 1rem; }
-    header.top { padding: 0.75rem 1rem; flex-wrap: wrap; }
+    header.top { padding: 10px 1rem; flex-wrap: wrap; gap: 0.6rem; }
+    header.top .brand img { height: 34px; }
+    header.top .bar-divider { display: none; }
 }

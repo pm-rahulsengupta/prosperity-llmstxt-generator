@@ -3,21 +3,30 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}llms.txt Generator{% endblock %} &middot; Prosperity</title>
-    <link rel="stylesheet" href="/static/css/main.css">
+    <title>{% block title %}llms.txt generator{% endblock %} &middot; Prosperity Media</title>
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <!-- crossorigin is required even same-origin: font fetches are CORS-mode, and
+         without it the browser downloads the file twice. -->
+    <link rel="preload" href="/static/fonts/poppins-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/static/css/main.css?v=3">
     <!-- Vendored, not CDN-loaded: the container must not need outbound access to
          a third party to render its own UI. -->
     <script src="/static/js/htmx.min.js" defer></script>
 </head>
 <body>
+{% block chrome %}
 <header class="top">
-    <h1><a href="/">llms.txt Generator</a></h1>
-    <span class="sub">Prosperity Media</span>
+    <a class="brand" href="/" aria-label="Prosperity Media — home">
+        <img src="/static/img/pm-logo-white.svg" alt="" width="99" height="44">
+    </a>
+    <span class="bar-divider" aria-hidden="true"></span>
+    <span class="tool">llms.txt generator</span>
     <span class="who">
         {% if not llm_enabled %}<span class="pill wait">no LLM key &mdash; heuristics only</span>{% endif %}
         {% if user %}{{ user.email }}{% if user.is_admin %} &middot; <a href="/accounts">accounts</a>{% endif %} &middot; <a href="/logout">sign out</a>{% endif %}
     </span>
 </header>
+{% endblock %}
 <main>
     {% block content %}{% endblock %}
 </main>

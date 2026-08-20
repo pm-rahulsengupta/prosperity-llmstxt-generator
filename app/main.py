@@ -12,6 +12,7 @@ more than elegance.
 from __future__ import annotations
 
 import logging
+import mimetypes
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID
@@ -35,6 +36,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.core.pipeline import rebuild
+from app.core.ranking import PATTERN_LABELS, PATTERN_TEMPLATES
 from app.core.render import render_combined
 from app.db import repo
 from app.db.base import get_session
@@ -81,9 +83,17 @@ app.add_middleware(
     https_only=settings.app_url.startswith("https://"),
     same_site="lax",
 )
+# Python's mimetypes table has no woff2 on a stock Windows install, so StaticFiles
+# serves it as application/octet-stream -- which makes the browser discard the
+# `<link rel=preload as=font>` hint and fetch the file a second time.
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("image/svg+xml", ".svg")
+
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
+templates.env.globals["pattern_labels"] = PATTERN_LABELS
+templates.env.globals["pattern_sections"] = PATTERN_TEMPLATES
 templates.env.globals["sso_enabled"] = settings.sso_enabled
 templates.env.globals["allow_anonymous"] = settings.allow_anonymous
 templates.env.globals["llm_enabled"] = settings.llm_enabled
@@ -356,6 +366,14 @@ async def save_plan(
         rule.action = "include" if rule.template in included else "exclude"
     plan.source = "manual"
 
+    # The site type decides which section template the file is built from, so a
+    # human override here has to reach both the plan and the run -- `generate_task`
+    # reads it back off the plan, and the renderer reads it off the run.
+    chosen = str(form.get("site_pattern") or "").strip()
+    if chosen in PATTERN_TEMPLATES:
+        plan.site_pattern = chosen
+        run.pattern = chosen
+
     run.plan = plan.to_dict()
     run.plan_source = "manual"
     if (cap := form.get("max_pages")) and str(cap).isdigit() and int(cap) > 0:
@@ -402,6 +420,13 @@ async def edit_pages(
 
     for page in pages:
         page.included = page.url not in excluded
+
+    # Changing the site type re-orders the whole file, and re-crawling to do that
+    # would be absurd -- the pages are already in Postgres. Apply it before the
+    # result is rebuilt so `order_sections` sees the new template.
+    chosen = str(form.get("site_pattern") or "").strip()
+    if chosen in PATTERN_TEMPLATES:
+        run.pattern = chosen
 
     order = [name for name in form.getlist("section_order") if name]
     result = _result_from_rows(run, pages)

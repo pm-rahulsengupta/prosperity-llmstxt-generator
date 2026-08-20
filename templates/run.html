@@ -57,12 +57,25 @@
             </tbody>
         </table>
         <div class="row" style="margin-top:1rem">
+            <div>
+                <label for="site_pattern">Site type</label>
+                <select id="site_pattern" name="site_pattern">
+                    {% for key, label in pattern_labels.items() %}
+                    <option value="{{ key }}" {% if key == run.pattern %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="narrow">
                 <label for="max_pages">Page cap</label>
                 <input type="number" id="max_pages" name="max_pages" value="{{ run.max_pages }}" min="1">
             </div>
             <div class="narrow"><button class="primary" type="submit">Approve and crawl</button></div>
         </div>
+        <p class="muted">
+            Site type decides which section template the file is built from and the order
+            the sections appear in &mdash; {{ pattern_sections.get(run.pattern, []) | join(' &rarr; ') | safe }}.
+            {% if plan.source == 'llm' %}Chosen by the model from the URL inventory; change it if it read the site wrong.{% endif %}
+        </p>
     </form>
 </div>
 {% endif %}
@@ -95,13 +108,21 @@
     <form method="post" action="/runs/{{ run.id }}/pages">
         <div class="row">
             <div>
-                <label for="site_name">Site name</label>
-                <input type="text" id="site_name" name="site_name" value="{{ run.site_name }}">
+                <label for="edit_site_name">Site name</label>
+                <input type="text" id="edit_site_name" name="site_name" value="{{ run.site_name }}">
+            </div>
+            <div>
+                <label for="edit_site_pattern">Site type &mdash; changes the section template and order</label>
+                <select id="edit_site_pattern" name="site_pattern">
+                    {% for key, label in pattern_labels.items() %}
+                    <option value="{{ key }}" {% if key == run.pattern %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
             </div>
         </div>
         <div style="margin-top:0.75rem">
-            <label for="site_summary">Summary line</label>
-            <input type="text" id="site_summary" name="site_summary" value="{{ run.site_summary }}">
+            <label for="edit_site_summary">Summary line</label>
+            <input type="text" id="edit_site_summary" name="site_summary" value="{{ run.site_summary }}">
         </div>
         <h3>Pages</h3>
         <table>

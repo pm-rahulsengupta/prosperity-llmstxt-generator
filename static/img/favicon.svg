@@ -1,0 +1,12 @@
+<!-- INTERIM. The delivered logo is a stacked lockup that is illegible at 16px, and
+     deriving a monogram from it is a brand decision rather than a developer one.
+     This is a placeholder so the tab has an icon and /favicon.ico stops 404ing:
+     brand gunmetal ground, brand emerald letterform, no invented mark.
+     Replace with the official icon/monogram asset when it is available. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+    <rect width="64" height="64" rx="14" fill="#232d33"/>
+    <text x="32" y="33" fill="#01d081"
+          font-family="Poppins, 'Segoe UI', system-ui, sans-serif"
+          font-size="42" font-weight="500"
+          text-anchor="middle" dominant-baseline="central">P</text>
+</svg>
