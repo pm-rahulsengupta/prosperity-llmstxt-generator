@@ -405,3 +405,71 @@ def _section_available(section: Section, doc: AgentsDoc, probe: ProbeResult) -> 
             return True, ""
 
     return False, ""
+
+
+# Policy pages an agent is expected to respect, matched on URL path. Kept apart
+# from `ranking.CONTACT_URL_KEYWORDS`, which answers a different question -- that
+# set includes store locators and help centres, which are contact routes but not
+# policies, and conflating the two would list a store finder as terms of service.
+POLICY_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("privacy", "Privacy"),
+    ("terms", "Terms"),
+    ("refund", "Refunds"),
+    ("returns", "Returns"),
+    ("shipping", "Shipping"),
+    ("delivery", "Delivery"),
+    ("cookie", "Cookies"),
+    ("accessibility", "Accessibility"),
+    ("disclaimer", "Disclaimer"),
+)
+
+
+def links_from_pages(
+    pages: list[tuple[str, str]], limit: int = 12
+) -> tuple[list[Capability], list[PolicyLink], str]:
+    """Split a completed crawl's pages into read-only links, policies and contact.
+
+    `pages` is (url, title). Every URL here was fetched successfully during that
+    run, which is what makes it citable: the same evidence rule as the probe, met
+    by a different means.
+
+    Returns the three in the shapes `build_agents_doc` expects. Ordering follows
+    the input, so the caller's ranking decides what an agent sees first.
+    """
+    # The keyword sets directly rather than `ranking.is_contact_page`, which takes
+    # a full `PageEntry`. Building one from a (url, title) pair just to ask a
+    # keyword question would invent the twenty other fields it does not use.
+    from app.core.ranking import CONTACT_TITLE_KEYWORDS, CONTACT_URL_KEYWORDS
+
+    def looks_like_contact(url: str, title: str) -> bool:
+        low_url, low_title = url.lower(), (title or "").lower()
+        return any(k in low_url for k in CONTACT_URL_KEYWORDS) or any(
+            k in low_title for k in CONTACT_TITLE_KEYWORDS
+        )
+
+    policies: list[PolicyLink] = []
+    read_only: list[Capability] = []
+    contact = ""
+    seen_policies: set[str] = set()
+
+    for url, title in pages:
+        lowered = url.lower()
+        matched = next((label for key, label in POLICY_KEYWORDS if key in lowered), "")
+        if matched:
+            if matched not in seen_policies:
+                seen_policies.add(matched)
+                policies.append(PolicyLink(matched, url))
+            continue
+        if not contact and looks_like_contact(url, title):
+            contact = url
+            continue
+        if len(read_only) < limit:
+            read_only.append(
+                Capability(
+                    label=title or url,
+                    url=url,
+                    evidence="fetched successfully during the site crawl",
+                )
+            )
+
+    return read_only, policies, contact

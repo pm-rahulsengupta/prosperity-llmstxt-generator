@@ -27,8 +27,16 @@
     </span>
 </header>
 {% endblock %}
-<main>
-    {% block content %}{% endblock %}
-</main>
+<div class="shell">
+    {% set nav_groups = build_nav(
+        request.url.path if request else "/",
+        domain if domain is defined else (run.domain if run is defined and run else ""),
+        user.is_admin if user else False,
+    ) %}
+    {% include "partials/sidebar.html" %}
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</div>
 </body>
 </html>

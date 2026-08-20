@@ -555,6 +555,23 @@ async def clone_run(session: AsyncSession, run_id: uuid.UUID, created_by: str) -
     return fresh
 
 
+async def latest_complete_run(session: AsyncSession, domain: str) -> Run | None:
+    """The most recent finished run for a domain, if there is one.
+
+    agents.md and llms.txt describe the same site, so the pages one already found
+    are the pages the other should link to. Re-crawling to answer "does this site
+    have a privacy policy" when a completed crawl already knows would be paying
+    twice for the same fact.
+    """
+    result = await session.execute(
+        select(Run)
+        .where(Run.domain == domain, Run.status == RunStatus.COMPLETE)
+        .order_by(desc(Run.created_at))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def record_observed_shape(session: AsyncSession, domain: str, shape: dict[str, int]) -> None:
     """Write what preflight just measured. Machine-owned; never the brief's copy."""
     config = await load_site_config(session, domain)

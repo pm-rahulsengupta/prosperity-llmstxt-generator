@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}agents.md{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <h2>Generate an agents.md</h2>
+    <form method="post" action="/agents">
+        <div class="row">
+            <div>
+                <label for="site_url">Site URL</label>
+                <input type="text" id="site_url" name="site_url"
+                       placeholder="carsguide.com.au" value="{{ site_url or '' }}" required>
+            </div>
+            <div class="narrow">
+                <button class="primary" type="submit">Check the site</button>
+            </div>
+        </div>
+        <p class="muted">
+            Checks what the site already publishes &mdash; <code>/agents.md</code>,
+            <code>/.well-known/ucp</code>, <code>/llms.txt</code> &mdash; before writing
+            anything. Nothing is claimed in the generated file that was not found here.
+        </p>
+    </form>
+</div>
+
+{% if probe %}
+<div class="panel">
+    <h3>What {{ probe.site_url }} publishes today</h3>
+    <table>
+        <thead><tr><th>Surface</th><th>State</th><th>Detail</th></tr></thead>
+        <tbody>
+        {% for surface in probe.surfaces() %}
+        <tr>
+            <td><span class="url">{{ surface.url }}</span></td>
+            <td>
+                <span class="pill {% if surface.state.value == 'present' %}ok{% elif surface.state.value == 'absent' %}wait{% else %}bad{% endif %}">
+                    {{ surface.state.value.replace('_', ' ') }}
+                </span>
+            </td>
+            <td class="muted">{{ surface.content_type or surface.detail or surface.status or '' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    {% if probe.notes %}
+    <ul class="notes">
+        {% for note in probe.notes %}<li class="info">{{ note }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+
+    <div class="stat-grid" style="margin-top:1rem">
+        <div class="stat"><div class="k">Platform</div><div class="v">{{ probe.platform }}</div></div>
+        <div class="stat">
+            <div class="k">Endpoints we may cite</div>
+            <div class="v">{{ probe.verified_endpoints|length }}</div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if doc %}
+<div class="panel">
+    <h3>Generated file</h3>
+    <p class="muted">
+        Profile: <strong>{{ doc.profile }}</strong>.
+        {% if not doc.transactional %}
+        This shape does not transact, so the file says so explicitly rather than
+        describing a checkout it does not have.
+        {% endif %}
+    </p>
+    <pre class="doc">{{ rendered }}</pre>
+
+    <div class="row">
+        <a class="button" href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind=md">
+            Download agents.md
+        </a>
+        {% if probe.is_shopify %}
+        <a class="button" href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind=liquid">
+            Download agents.md.liquid
+        </a>
+        {% endif %}
+    </div>
+
+    {% if probe.is_shopify %}
+    <p class="hint">
+        This store is on Shopify, which serves its own <code>/agents.md</code>. Take the
+        Liquid template and place it at <code>templates/agents.md.liquid</code> in the
+        theme; a static file has nowhere to go on a Shopify store.
+    </p>
+    {% endif %}
+</div>
+
+{% if doc.omitted %}
+<div class="panel">
+    <h3>Left out, and why</h3>
+    <p class="muted">
+        Each of these would suit this kind of site. They were omitted because nothing
+        verified them &mdash; not because they were forgotten.
+    </p>
+    <ul class="notes">
+        {% for omission in doc.omitted %}
+        <li class="info"><strong>{{ omission.section.value.replace('_', ' ') }}</strong> &mdash; {{ omission.reason }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

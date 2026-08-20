@@ -335,9 +335,24 @@ def test_every_question_states_its_consequence():
 
 
 def test_the_free_text_questions_say_they_have_no_automatic_effect():
+    """Only the answers that reach a model and nothing else.
+
+    A `published` answer is prose too, but it is written verbatim into a
+    generated file, so it is deterministic and must not claim otherwise. The
+    kinds are separate because this invariant is real and folding them would
+    quietly break it.
+    """
     for question in QUESTIONS:
         if question.kind == "text":
             assert "No automatic effect" in question.effect
+
+
+def test_a_published_answer_does_not_claim_to_be_inert():
+    published = [q for q in QUESTIONS if q.kind == "published"]
+
+    assert published, "the kind exists to describe at least one question"
+    for question in published:
+        assert "No automatic effect" not in question.effect
 
 
 # -- the brief reaching the plan stage --------------------------------------

@@ -17,7 +17,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
@@ -39,12 +39,14 @@ from app.auth import (
     user_from_claims,
 )
 from app.config import get_settings
+from app.core.agents_doc import build_agents_doc, links_from_pages
+from app.core.agents_render import render_agents_liquid, render_agents_md
 from app.core.edits import EditTarget, apply_operations
 from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
 from app.core.pipeline import rebuild
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
-from app.core.ranking import PATTERN_LABELS, PATTERN_TEMPLATES
+from app.core.ranking import PATTERN_AGENCY, PATTERN_LABELS, PATTERN_TEMPLATES
 from app.core.render import render_combined
 from app.db import repo
 from app.db.base import get_session, session_scope
@@ -53,6 +55,8 @@ from app.llm.client import LLMClient
 from app.llm.prompts.plan import CrawlPlan
 from app.llm.stages import apply_chat_turn
 from app.metrics.gsc_csv import parse_gsc_export
+from app.nav import build_nav
+from app.scrape.agents_probe import probe_site
 from app.scrape.discover import normalise_site_url
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,10 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 templates.env.globals["usd"] = usd
+# Called from base.html on every render. A global rather than a context key each
+# route must remember: sixteen routes render templates, and the one that forgot
+# would 500 on a page that has nothing to do with navigation.
+templates.env.globals["build_nav"] = build_nav
 templates.env.globals["pattern_labels"] = PATTERN_LABELS
 templates.env.globals["pattern_sections"] = PATTERN_TEMPLATES
 templates.env.globals["sso_enabled"] = settings.sso_enabled
@@ -319,6 +327,7 @@ def _brief_form_values(brief: SiteBrief) -> dict[str, str]:
     return {
         "found_for": brief.found_for,
         "audience": brief.audience,
+        "rate_limit_note": brief.rate_limit_note,
         "valuable": "\n".join(brief.valuable),
         "noise": "\n".join(brief.noise),
         "must_appear": "\n".join(sorted(brief.must_appear)),
@@ -496,6 +505,120 @@ async def upload_metrics(
     return RedirectResponse(
         f"/sites/{domain}/brief?imported={written}" + (f"&notes={quote(notes)}" if notes else ""),
         status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+async def _agents_document(session: AsyncSession, normalised: str):
+    """Probe a site and build its document. Shared by the page and the download.
+
+    Both paths must produce the same file. Duplicating the assembly is how they
+    would come to differ, and an operator downloading something other than what
+    they reviewed is the kind of divergence nobody notices until a client does.
+    """
+    settings = get_settings()
+    probe = await probe_site(normalised, settings.crawl_user_agent)
+
+    domain = urlparse(normalised).netloc
+    config = await repo.load_site_config(session, domain)
+    brief = await repo.load_brief(session, domain)
+
+    # Links come from a completed llms.txt run for the same domain. The two files
+    # describe one site, so pages that crawl already fetched are pages this one
+    # can cite -- the evidence rule met by a different means rather than waived.
+    read_only: list = []
+    policies: list = []
+    contact = ""
+    if (run := await repo.latest_complete_run(session, domain)) is not None:
+        pages = await repo.get_pages(session, run.id)
+        read_only, policies, contact = links_from_pages(
+            [(p.url, p.title or "") for p in pages if p.included]
+        )
+
+    # The profile comes from that same run when there is one: agents.md and
+    # llms.txt describe the same site, and disagreeing about its shape would be
+    # its own defect. Absent that, the agency profile wins, which cannot transact.
+    profile = (config.plan or {}).get("site_pattern", "") if config else ""
+
+    doc = build_agents_doc(
+        probe,
+        profile or PATTERN_AGENCY,
+        site_name=(config.label if config and config.label else domain),
+        read_only=read_only,
+        policies=policies,
+        contact_url=contact,
+        rate_limit_note=brief.rate_limit_note,
+    )
+    doc.summary = f"> {brief.found_for}" if brief.found_for else ""
+    doc.agent_guidance = f"Canonical site: {normalised}"
+    return probe, doc
+
+
+@app.get("/agents", response_class=HTMLResponse)
+async def agents_page(request: Request, user: User = Depends(require_user)):
+    return templates.TemplateResponse(
+        request, "agents.html", {"user": user, "site_url": "", "probe": None, "doc": None}
+    )
+
+
+@app.post("/agents", response_class=HTMLResponse)
+async def agents_generate(
+    request: Request,
+    site_url: str = Form(...),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Probe first, then write only what the probe confirmed.
+
+    Synchronous rather than queued: this is four HTTP requests, not a crawl, and
+    putting it behind the job queue would add a status page to something that
+    finishes before the operator lets go of the mouse.
+    """
+    try:
+        normalised = normalise_site_url(site_url)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    probe, doc = await _agents_document(session, normalised)
+
+    return templates.TemplateResponse(
+        request,
+        "agents.html",
+        {
+            "user": user,
+            "site_url": normalised,
+            "probe": probe,
+            "doc": doc,
+            "rendered": render_agents_md(doc),
+        },
+    )
+
+
+@app.get("/agents/download")
+async def agents_download(
+    site: str,
+    kind: str = "md",
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-probe and re-render rather than serving something remembered.
+
+    A cached document could name an endpoint the site has since withdrawn, and
+    handing a client a file that instructs agents to call a dead endpoint is the
+    failure this whole feature is built to avoid. Four requests is a cheap price
+    for the file being true when it is downloaded.
+    """
+    normalised = normalise_site_url(site)
+    probe, doc = await _agents_document(session, normalised)
+
+    if kind == "liquid":
+        body, filename = render_agents_liquid(doc), "agents.md.liquid"
+    else:
+        body, filename = render_agents_md(doc), "agents.md"
+
+    return PlainTextResponse(
+        body,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        media_type="text/markdown; charset=utf-8",
     )
 
 

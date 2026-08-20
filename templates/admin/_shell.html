@@ -1,9 +1,0 @@
-{% extends "base.html" %}
-
-{% macro admin_nav(active) %}
-<nav class="admin-nav">
-    <a href="/admin" class="{{ 'on' if active == 'costs' }}">Costs</a>
-    <a href="/admin/runs" class="{{ 'on' if active == 'runs' }}">Runs</a>
-    <a href="/accounts" class="{{ 'on' if active == 'accounts' }}">Accounts</a>
-</nav>
-{% endmacro %}

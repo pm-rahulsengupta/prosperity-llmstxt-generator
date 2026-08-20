@@ -42,7 +42,11 @@ __all__ = [
     "split_embargoed",
 ]
 
-FieldKind = Literal["globs", "urls", "text", "facts"]
+# `text` answers reach a model and nothing else. `published` answers are written
+# verbatim into a generated file, which makes them deterministic despite being
+# prose -- a distinction worth a separate kind, because the rule that free text
+# has no automatic effect is real and this would quietly break it.
+FieldKind = Literal["globs", "urls", "text", "published", "facts"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +116,16 @@ QUESTIONS: tuple[Question, ...] = (
         placeholder="/clients/acquisition-2026/*",
     ),
     Question(
+        key="rate_limit_note",
+        prompt="What request rate should automated agents keep to?",
+        kind="published",
+        effect=(
+            "Published in agents.md as guidance for agents. Left out entirely when "
+            "blank -- we do not invent a limit a client never agreed to advertise."
+        ),
+        placeholder="One request per second; identify yourself in the User-Agent",
+    ),
+    Question(
         key="facts",
         prompt="Facts the tool must never guess: founding year, locations, team size, awards.",
         kind="facts",
@@ -142,6 +156,10 @@ class SiteBrief:
 
     found_for: str = ""
     audience: str = ""
+    # Advertised in agents.md. Free text rather than a number: "one request per
+    # second, identify yourself" is the useful form, and a bare integer would need
+    # a unit, a scope and a burst allowance to mean the same thing.
+    rate_limit_note: str = ""
     valuable: tuple[str, ...] = ()
     noise: tuple[str, ...] = ()
     must_appear: frozenset[str] = frozenset()
@@ -159,6 +177,7 @@ class SiteBrief:
             (
                 self.found_for,
                 self.audience,
+                self.rate_limit_note,
                 self.valuable,
                 self.noise,
                 self.must_appear,
@@ -172,6 +191,7 @@ class SiteBrief:
         return {
             "found_for": self.found_for,
             "audience": self.audience,
+            "rate_limit_note": self.rate_limit_note,
             "valuable": list(self.valuable),
             "noise": list(self.noise),
             "must_appear": sorted(self.must_appear),
@@ -317,6 +337,7 @@ def brief_from_answers(
     return SiteBrief(
         found_for=str(answers.get("found_for") or "").strip(),
         audience=str(answers.get("audience") or "").strip(),
+        rate_limit_note=str(answers.get("rate_limit_note") or "").strip(),
         valuable=lines("valuable"),
         noise=lines("noise"),
         must_appear=frozenset(lines("must_appear")),

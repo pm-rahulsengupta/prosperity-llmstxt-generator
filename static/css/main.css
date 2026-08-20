@@ -539,3 +539,66 @@ button.destructive {
     color: #ffffff;
     border-color: var(--pm-red);
 }
+
+/* -- left-hand navigation ---------------------------------------------------
+   Mirrors GEO Tracker's grouped sidebar. Server-rendered, so there is no state
+   to keep in sync and no flash of the wrong active item on load.
+
+   Below the breakpoint it becomes a horizontal strip above the content rather
+   than a drawer: a drawer needs JavaScript to open, and a nav that cannot be
+   opened when a script fails is worse than one that simply wraps. */
+
+.shell { display: flex; align-items: flex-start; gap: 1.5rem; }
+
+.side {
+    flex: 0 0 13rem;
+    position: sticky;
+    top: 1.5rem;
+    padding: 0.5rem 0;
+}
+
+.side-group + .side-group { margin-top: 1.25rem; }
+
+.side-label {
+    margin: 0 0 0.4rem;
+    padding-left: 0.7rem;
+    font-size: var(--pm-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--pm-ink-muted);
+}
+
+.side ul { list-style: none; margin: 0; padding: 0; }
+
+.side a {
+    display: block;
+    padding: 0.4rem 0.7rem;
+    border-radius: var(--pm-radius-sm);
+    border-left: 3px solid transparent;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink);
+    text-decoration: none;
+}
+
+.side a:hover { background: var(--pm-sunken); }
+
+.side a.on {
+    background: var(--pm-emerald-wash);
+    border-left-color: var(--pm-emerald);
+    font-weight: 500;
+}
+
+/* Reachable, and honest that it needs something first. Hiding it would leave an
+   operator hunting for a page that exists. */
+.side a.off { color: var(--pm-ink-muted); }
+.side a.off:hover { background: transparent; cursor: help; }
+
+.shell > main { flex: 1 1 auto; min-width: 0; }
+
+@media (max-width: 60rem) {
+    .shell { display: block; }
+    .side { position: static; padding-bottom: 1rem; }
+    .side-group { display: inline-block; margin-right: 1.5rem; vertical-align: top; }
+    .side-group + .side-group { margin-top: 0; }
+    .side ul { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+}
