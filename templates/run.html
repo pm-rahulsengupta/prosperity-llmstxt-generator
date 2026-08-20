@@ -154,11 +154,4 @@
 </div>
 {% endif %}
 
-{% if run.stats %}
-<div class="panel">
-    <h2>What this run cost</h2>
-    <pre class="output">{{ run.stats | tojson(indent=2) }}</pre>
-</div>
-{% endif %}
-
 {% endblock %}

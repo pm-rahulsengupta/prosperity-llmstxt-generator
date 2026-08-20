@@ -140,3 +140,18 @@ def require_admin(request: Request) -> User:
     if not user.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only an admin can manage accounts.")
     return user
+
+
+def require_admin_or_404(request: Request) -> User:
+    """Admin, or the page does not exist.
+
+    404 rather than 403, copied from geo-tracker's `/admin` layout. A 403 confirms
+    there is an admin area worth attacking; a 404 says nothing at all. The cost of
+    the lie is that a genuine admin who has lost their flag sees a puzzling 404 --
+    worth it for a surface that exposes spend and account management.
+    """
+    user = require_user(request)
+    if not user.is_admin:
+        logger.info("non-admin %s probed an admin route", user.email)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+    return user

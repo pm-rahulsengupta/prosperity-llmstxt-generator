@@ -112,3 +112,32 @@ def test_https_deploy_is_allowed_without_google():
 def test_session_identity_carries_the_admin_flag():
     assert User(email="a@b.com", is_admin=True).is_admin
     assert not User(email="a@b.com").is_admin
+
+
+# -- the admin surface ------------------------------------------------------
+
+
+def test_a_non_admin_gets_404_not_403_from_an_admin_route():
+    """Copied from geo-tracker: a 403 confirms there is an admin area worth
+    attacking, a 404 says nothing. The surface exposes spend and accounts."""
+    from fastapi import HTTPException
+
+    from app.auth import require_admin_or_404
+
+    class FakeRequest:
+        session = {"user": {"email": "member@prosperitymedia.com.au", "is_admin": False}}
+
+    with pytest.raises(HTTPException) as excinfo:
+        require_admin_or_404(FakeRequest())
+    assert excinfo.value.status_code == 404
+    # And it must not name the real reason.
+    assert "admin" not in str(excinfo.value.detail).lower()
+
+
+def test_an_admin_passes_through():
+    from app.auth import require_admin_or_404
+
+    class FakeRequest:
+        session = {"user": {"email": "owner@prosperitymedia.com.au", "is_admin": True}}
+
+    assert require_admin_or_404(FakeRequest()).is_admin

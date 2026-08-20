@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% from "admin/_shell.html" import admin_nav %}
+{% block title %}Runs{% endblock %}
+
+{% block content %}
+{{ admin_nav('runs') }}
+
+<div class="panel">
+    <h2>All runs</h2>
+    <p class="muted">
+        Every run on this instance, newest first, with what it cost and what it
+        produced. The run pages themselves show no cost &mdash; it is an internal
+        number and does not belong next to a client's file.
+    </p>
+    {% if rows %}
+    <table>
+        <thead>
+        <tr>
+            <th>Site</th><th>Status</th><th class="num">Sitemap</th><th class="num">Indexed</th>
+            <th class="num">Pages</th><th class="num">Issues</th><th class="num">Cost</th>
+            <th>Plan</th><th>Started</th><th>By</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for run, cost in rows %}
+        <tr>
+            <td><a href="/runs/{{ run.id }}">{{ run.domain }}</a></td>
+            <td>
+                <span class="pill {% if run.status == 'complete' %}ok{% elif run.status == 'failed' %}bad{% elif run.status == 'awaiting_review' %}wait{% else %}run{% endif %}">{{ run.status.replace('_', ' ') }}</span>
+            </td>
+            <td class="num">{{ run.sitemap_html or '—' }}</td>
+            <td class="num">{{ run.indexed_estimate if run.indexed_estimate is not none else '—' }}</td>
+            <td class="num">{{ run.pages | length }}</td>
+            <td class="num">{{ run.issues | length }}</td>
+            <td class="num">{{ usd(cost.total_usd, 4) }}{% if not cost.fully_priced %}<span class="muted">+</span>{% endif %}</td>
+            <td class="muted">{{ run.plan_source }}</td>
+            <td class="muted">{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="muted">{{ run.created_by }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No runs yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -23,7 +23,7 @@
     <span class="tool">llms.txt generator</span>
     <span class="who">
         {% if not llm_enabled %}<span class="pill wait">no LLM key &mdash; heuristics only</span>{% endif %}
-        {% if user %}{{ user.email }}{% if user.is_admin %} &middot; <a href="/accounts">accounts</a>{% endif %} &middot; <a href="/logout">sign out</a>{% endif %}
+        {% if user %}{{ user.email }}{% if user.is_admin %} &middot; <a href="/admin">admin</a>{% endif %} &middot; <a href="/logout">sign out</a>{% endif %}
     </span>
 </header>
 {% endblock %}

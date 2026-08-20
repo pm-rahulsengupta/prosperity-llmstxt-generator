@@ -72,11 +72,20 @@ class LLMUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     fallbacks: list[str] = field(default_factory=list)
+    # Tokens broken down by the model that actually served the call. Costing needs
+    # this: the configured model can change between a run and the day someone adds
+    # up what it cost, and a stage-name-to-model guess made later would be wrong.
+    by_model: dict[str, dict[str, int]] = field(default_factory=dict)
 
-    def record(self, stage: Stage, prompt: int, completion: int) -> None:
+    def record(self, stage: Stage, prompt: int, completion: int, model: str = "") -> None:
         self.calls[stage] = self.calls.get(stage, 0) + 1
         self.prompt_tokens += prompt
         self.completion_tokens += completion
+        if model:
+            entry = self.by_model.setdefault(model, {"calls": 0, "prompt": 0, "completion": 0})
+            entry["calls"] += 1
+            entry["prompt"] += prompt
+            entry["completion"] += completion
 
     def record_fallback(self, stage: Stage, reason: str) -> None:
         message = f"{stage}: {reason}"
@@ -90,6 +99,7 @@ class LLMUsage:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "fallbacks": list(self.fallbacks),
+            "by_model": {model: dict(counts) for model, counts in self.by_model.items()},
         }
 
 
@@ -168,7 +178,14 @@ class LLMClient:
 
         choice = response.choices[0]
         if usage := getattr(response, "usage", None):
-            self.usage.record(stage, usage.prompt_tokens or 0, usage.completion_tokens or 0)
+            self.usage.record(
+                stage,
+                usage.prompt_tokens or 0,
+                usage.completion_tokens or 0,
+                # The model the API says served it, not the one we asked for --
+                # an alias like `gpt-4o` resolves to a dated snapshot.
+                model=getattr(response, "model", "") or self.model_for(stage),
+            )
 
         # The specific failure the source could not see. `length` means the budget
         # was too small for what was asked, and the JSON is truncated -- so say that,

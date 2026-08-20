@@ -239,3 +239,14 @@ async def recent_chat(session: AsyncSession, run_id: uuid.UUID, limit: int = 40)
         .limit(limit)
     )
     return list(reversed(list(result.scalars())))
+
+
+async def runs_since(session: AsyncSession, days: int = 30) -> list[Run]:
+    """Runs created in the last `days`, newest first. For the admin cost view."""
+    from datetime import timedelta
+
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    result = await session.execute(
+        select(Run).where(Run.created_at >= cutoff).order_by(desc(Run.created_at))
+    )
+    return list(result.scalars())

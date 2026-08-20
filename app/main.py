@@ -30,6 +30,7 @@ from app.auth import (
     build_oauth,
     current_user,
     require_admin,
+    require_admin_or_404,
     require_user,
     sign_in,
     user_from_claims,
@@ -37,6 +38,7 @@ from app.auth import (
 from app.config import get_settings
 from app.core.edits import EditTarget, apply_operations
 from app.core.pipeline import rebuild
+from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import PATTERN_LABELS, PATTERN_TEMPLATES
 from app.core.render import render_combined
 from app.db import repo
@@ -95,6 +97,7 @@ mimetypes.add_type("image/svg+xml", ".svg")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
+templates.env.globals["usd"] = usd
 templates.env.globals["pattern_labels"] = PATTERN_LABELS
 templates.env.globals["pattern_sections"] = PATTERN_TEMPLATES
 templates.env.globals["sso_enabled"] = settings.sso_enabled
@@ -644,6 +647,78 @@ async def _chat_panel(request: Request, session: AsyncSession, run_id: UUID, use
         "partials/chat.html",
         {"user": user, "run": run, "messages": messages},
     )
+
+
+# -- admin ------------------------------------------------------------------
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_home(
+    request: Request,
+    days: int = 30,
+    user: User = Depends(require_admin_or_404),
+    session: AsyncSession = Depends(get_session),
+):
+    """Spend and activity. Admin only, and invisible to everyone else.
+
+    Cost used to sit on the run page, where anyone looking at a client's file also
+    saw what the agency paid to produce it. geo-tracker moved the same number off
+    its client-facing overview for the same reason; this follows it.
+    """
+    window = max(1, min(days, 365))
+    runs = await repo.runs_since(session, days=window)
+
+    costs = [cost_of(run.stats) for run in runs]
+    totals = totals_of(costs)
+    rows = sorted(zip(runs, costs, strict=True), key=lambda pair: pair[1].total_usd, reverse=True)
+
+    by_day: dict[str, dict[str, float]] = {}
+    for run, cost in zip(runs, costs, strict=True):
+        key = run.created_at.date().isoformat()
+        day = by_day.setdefault(key, {"runs": 0, "usd": 0.0})
+        day["runs"] += 1
+        day["usd"] += cost.total_usd
+
+    by_model: dict[str, dict[str, float]] = {}
+    for run in runs:
+        for model, counts in ((run.stats or {}).get("llm") or {}).get("by_model", {}).items():
+            entry = by_model.setdefault(
+                model, {"calls": 0, "prompt": 0, "completion": 0, "usd": 0.0}
+            )
+            entry["calls"] += int(counts.get("calls") or 0)
+            entry["prompt"] += int(counts.get("prompt") or 0)
+            entry["completion"] += int(counts.get("completion") or 0)
+            if (rates := rate_for(model)) is not None:
+                entry["usd"] += (int(counts.get("prompt") or 0) / 1_000_000) * rates[0]
+                entry["usd"] += (int(counts.get("completion") or 0) / 1_000_000) * rates[1]
+            else:
+                entry["usd"] = -1.0  # sentinel: unpriced, rendered as em dash
+
+    return templates.TemplateResponse(
+        request,
+        "admin/costs.html",
+        {
+            "user": user,
+            "days": window,
+            "rows": rows[:60],
+            "totals": totals,
+            "by_day": sorted(by_day.items()),
+            "by_model": sorted(by_model.items(), key=lambda kv: -kv[1]["usd"]),
+            "serp_rate": SERP_CALL_USD,
+        },
+    )
+
+
+@app.get("/admin/runs", response_class=HTMLResponse)
+async def admin_runs(
+    request: Request,
+    user: User = Depends(require_admin_or_404),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every run, with what it cost and what it produced."""
+    runs = await repo.list_runs(session, limit=200)
+    rows = [(run, cost_of(run.stats)) for run in runs]
+    return templates.TemplateResponse(request, "admin/runs.html", {"user": user, "rows": rows})
 
 
 def _result_from_rows(run, pages) -> GenerationResult:  # noqa: F821 -- forward ref for brevity

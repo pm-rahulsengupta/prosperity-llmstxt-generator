@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Accounts{% endblock %}
 
+{% from "admin/_shell.html" import admin_nav %}
+
 {% block content %}
+{{ admin_nav('accounts') }}
 <div class="panel">
     <h2>Accounts</h2>
     <p class="muted">

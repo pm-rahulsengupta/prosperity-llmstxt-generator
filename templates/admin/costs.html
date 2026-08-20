@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% from "admin/_shell.html" import admin_nav %}
+{% block title %}Costs{% endblock %}
+
+{% block content %}
+{{ admin_nav('costs') }}
+
+<div class="panel">
+    <div class="spread">
+        <h2 style="margin:0">What this has cost to run</h2>
+        <form method="get" action="/admin" class="inline-form">
+            <select name="days" onchange="this.form.submit()">
+                {% for option in [7, 30, 90] %}
+                <option value="{{ option }}" {% if option == days %}selected{% endif %}>Last {{ option }} days</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+
+    <div class="stat-grid" style="margin-top:1rem">
+        <div class="stat"><div class="k">Total</div><div class="v">{{ usd(totals.total_usd, 2) }}</div></div>
+        <div class="stat"><div class="k">Per run</div><div class="v">{{ usd(totals.cost_per_run, 4) }}</div></div>
+        <div class="stat"><div class="k">Runs</div><div class="v">{{ totals.runs }}</div></div>
+        <div class="stat"><div class="k">LLM calls</div><div class="v">{{ totals.llm_calls }}</div></div>
+        <div class="stat"><div class="k">Tokens</div><div class="v">{{ '{:,}'.format(totals.prompt_tokens + totals.completion_tokens) }}</div></div>
+        <div class="stat"><div class="k">SERP calls</div><div class="v">{{ totals.serp_calls }}</div></div>
+    </div>
+
+    <ul class="notes">
+        <li class="info">
+            These are <strong>estimates from published rates</strong>, not billed amounts.
+            OpenAI returns token counts rather than money, so the figures are computed
+            from the rate table in <code>app/core/pricing.py</code> &mdash; check it
+            against current pricing before quoting a number to anyone. SERP calls are
+            costed at a flat {{ usd(serp_rate, 4) }}, which varies by DataForSEO plan.
+        </li>
+        {% if totals.runs != totals.priced_runs %}
+        <li>
+            {{ totals.runs - totals.priced_runs }} of {{ totals.runs }} runs could not be
+            fully priced{% if totals.unpriced_models %} &mdash;
+            {{ totals.unpriced_models | join(', ') }}{% endif %}. Their tokens are counted
+            and their money is not, so the total is a floor. Per-run cost is averaged over
+            the {{ totals.priced_runs }} priced run{{ '' if totals.priced_runs == 1 else 's' }} only; dividing by all of them would be
+            wrong by however much is unpriced.
+        </li>
+        {% endif %}
+    </ul>
+</div>
+
+<div class="panel">
+    <h2>By day</h2>
+    {% if by_day %}
+    {% set peak = by_day | map(attribute='1') | map(attribute='usd') | max %}
+    <table>
+        <thead><tr><th>Date</th><th class="num">Runs</th><th class="num">Cost</th><th style="width:45%"></th></tr></thead>
+        <tbody>
+        {% for date, day in by_day %}
+        <tr>
+            <td>{{ date }}</td>
+            <td class="num">{{ day.runs | int }}</td>
+            <td class="num">{{ usd(day.usd, 4) }}</td>
+            <td>
+                <div class="bar" style="margin:0.35rem 0">
+                    <span style="width: {{ (100 * day.usd / peak) if peak else 0 }}%"></span>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No runs in this window.</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>By model</h2>
+    {% if by_model %}
+    <table>
+        <thead><tr><th>Model</th><th class="num">Calls</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cost</th></tr></thead>
+        <tbody>
+        {% for model, m in by_model %}
+        <tr>
+            <td><code>{{ model }}</code>{% if m.usd < 0 %} <span class="pill bad">no rate</span>{% endif %}</td>
+            <td class="num">{{ m.calls | int }}</td>
+            <td class="num">{{ '{:,}'.format(m.prompt | int) }}</td>
+            <td class="num">{{ '{:,}'.format(m.completion | int) }}</td>
+            <td class="num">{{ '—' if m.usd < 0 else usd(m.usd, 4) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty">No model usage recorded in this window.</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Most expensive runs</h2>
+    {% if rows %}
+    <table>
+        <thead>
+        <tr><th>Site</th><th>Status</th><th class="num">Tokens</th><th class="num">SERP</th><th class="num">Cost</th><th>When</th><th>By</th></tr>
+        </thead>
+        <tbody>
+        {% for run, cost in rows %}
+        <tr>
+            <td><a href="/runs/{{ run.id }}">{{ run.domain }}</a></td>
+            <td>
+                <span class="pill {% if run.status == 'complete' %}ok{% elif run.status == 'failed' %}bad{% elif run.status == 'awaiting_review' %}wait{% else %}run{% endif %}">{{ run.status.replace('_', ' ') }}</span>
+            </td>
+            <td class="num">{{ '{:,}'.format(cost.total_tokens) }}</td>
+            <td class="num">{{ cost.serp_calls }}</td>
+            <td class="num">{{ usd(cost.total_usd, 4) }}{% if not cost.fully_priced %}<span class="muted">+</span>{% endif %}</td>
+            <td class="muted">{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="muted">{{ run.created_by }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <p class="muted">A <strong>+</strong> means part of that run could not be priced, so its figure is a floor.</p>
+    {% else %}
+    <p class="empty">No runs in this window.</p>
+    {% endif %}
+</div>
+{% endblock %}

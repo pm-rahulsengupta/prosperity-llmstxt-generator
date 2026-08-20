@@ -438,3 +438,27 @@ pre.output {
     color: var(--pm-ink-muted);
     word-break: break-word;
 }
+
+/* ── Admin ──────────────────────────────────────────────────────────────── */
+
+.admin-nav { display: flex; gap: 0.35rem; margin-bottom: 1.25rem; }
+.admin-nav a {
+    padding: 0.35rem 0.85rem;
+    font-size: var(--pm-sm);
+    font-weight: 500;
+    border-radius: 999px;
+    text-decoration: none;
+    color: var(--pm-ink-soft);
+    background: var(--pm-surface);
+    border: 1px solid var(--pm-rule);
+}
+.admin-nav a:hover { background: var(--pm-sunken); }
+/* The current tab is the one place a solid emerald fill earns its keep --
+   gunmetal on it is 6.92:1 and it is a single small block per screen. */
+.admin-nav a.on {
+    background: var(--pm-emerald);
+    border-color: var(--pm-emerald);
+    color: var(--pm-gunmetal);
+}
+.inline-form { display: inline-block; }
+.inline-form select { width: auto; }
