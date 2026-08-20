@@ -125,6 +125,8 @@ def test_the_sidebar_does_not_break_existing_pages(template):
             suggested=[],
             reasoning="",
             llm_used=False,
+            dropped=[],
+            readiness=None,
             users=[],
             accounts=[],
             error=None,

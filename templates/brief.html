@@ -88,6 +88,57 @@
     </form>
 </div>
 
+{% if readiness %}
+<div class="panel">
+    <h3>Agent readiness &mdash; {{ readiness.score }}/100</h3>
+    <p class="muted">
+        {{ readiness.summary() }} Checked while reading the site for the answers above.
+    </p>
+
+    {% if readiness.failures %}
+    <table>
+        <thead><tr><th>Priority</th><th>Component</th><th>What we found</th></tr></thead>
+        <tbody>
+        {% for r in readiness.failures %}
+        <tr>
+            <td><span class="pill {% if r.item.priority.value == 'Must' %}bad{% else %}wait{% endif %}">{{ r.item.priority.value }}</span></td>
+            <td>{{ r.item.component }}</td>
+            <td class="muted">{{ r.detail }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    {% if readiness.manual %}
+    <h4>Check these yourself</h4>
+    <p class="muted">
+        These need a rendered page. Excluded from the score rather than assumed to
+        pass &mdash; run the command and record the answer.
+    </p>
+    <ul class="notes">
+        {% for r in readiness.manual %}
+        <li class="info">{{ r.item.component }}<br><code>{{ r.detail }}</code></li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if dropped %}
+<div class="panel">
+    <h3>Suggestions that were discarded</h3>
+    <p class="muted">
+        The model proposed these URL patterns and none of them match a single URL
+        on the site, so they were dropped rather than shown as answers. A pattern
+        matching nothing reads as a considered decision and gets approved untested.
+    </p>
+    <ul class="notes">
+        {% for pattern in dropped %}<li class="info"><code>{{ pattern }}</code></li>{% endfor %}
+    </ul>
+</div>
+{% endif %}
+
 <div class="panel">
     <h3>Search Console data</h3>
 

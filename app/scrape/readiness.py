@@ -385,6 +385,72 @@ class ReadinessReport:
 # small site responsive and still finishes in about a second.
 MAX_CONCURRENCY = 4
 
+# Three Layer 1 items are visible in the HTML without rendering it. A static
+# parse is weaker than Lighthouse -- it cannot see what CSS or JavaScript does at
+# runtime -- but "no <main> element anywhere in the document" is a fact, and
+# reporting it as needing a browser was giving up on a check we can make. The
+# four that genuinely need rendering (layout shift, tap-target size, cursor
+# styles, ghost overlays) stay manual, because guessing at them from source is
+# how a passing score gets handed to a site that fails.
+SEMANTIC_TAGS = ("<main", "<nav", "<article", "<section", "<header", "<footer")
+CLICKABLE_DIV = re.compile(r"<div[^>]*\bonclick\b[^>]*>", re.I)
+DIV_WITH_ROLE = re.compile(r"<div[^>]*\brole\s*=", re.I)
+INPUT_TAG = re.compile(r"<input[^>]*>", re.I)
+INPUT_TYPE_HIDDEN = re.compile(r"type\s*=\s*[\"']?(hidden|submit|button)", re.I)
+INPUT_ID = re.compile(r"\bid\s*=\s*[\"']?([^\"' >]+)", re.I)
+LABEL_FOR = re.compile(r"<label[^>]*\bfor\s*=\s*[\"']?([^\"' >]+)", re.I)
+ARIA_LABELLED = re.compile(r"\baria-label(?:ledby)?\s*=", re.I)
+
+
+def _semantic_html(html: str) -> tuple[CheckState, str]:
+    found = [tag.lstrip("<") for tag in SEMANTIC_TAGS if tag in html.lower()]
+    if len(found) >= 3:
+        return CheckState.PASS, f"uses {', '.join(found)}"
+    return CheckState.FAIL, (
+        f"only {', '.join(found) or 'none'} found; agents walking the accessibility "
+        "tree have little structure to navigate"
+    )
+
+
+def _clickable_divs(html: str) -> tuple[CheckState, str]:
+    clickable = CLICKABLE_DIV.findall(html)
+    if not clickable:
+        return CheckState.PASS, "no divs with inline onclick"
+    unroled = [d for d in clickable if not DIV_WITH_ROLE.search(d)]
+    if not unroled:
+        return CheckState.PASS, f"{len(clickable)} clickable div(s), all with a role"
+    return CheckState.FAIL, (
+        f"{len(unroled)} clickable div(s) with no role; an agent walking the tree "
+        "cannot tell they are buttons"
+    )
+
+
+def _form_labels(html: str) -> tuple[CheckState, str]:
+    inputs = [i for i in INPUT_TAG.findall(html) if not INPUT_TYPE_HIDDEN.search(i)]
+    if not inputs:
+        return CheckState.NOT_APPLICABLE, "no form inputs on the homepage"
+
+    labelled = set(LABEL_FOR.findall(html))
+    unlabelled = []
+    for tag in inputs:
+        if ARIA_LABELLED.search(tag):
+            continue
+        found_id = INPUT_ID.search(tag)
+        if not found_id or found_id.group(1) not in labelled:
+            unlabelled.append(tag[:60])
+    if not unlabelled:
+        return CheckState.PASS, f"{len(inputs)} input(s), all labelled"
+    return CheckState.FAIL, f"{len(unlabelled)} of {len(inputs)} input(s) have no label"
+
+
+# Only the homepage is parsed, so a pass is evidence about one page rather than
+# the site. Said plainly in the detail rather than implied by the score.
+STATIC_LAYER1 = {
+    "semantic-html": _semantic_html,
+    "roles": _clickable_divs,
+    "labels": _form_labels,
+}
+
 CONTENT_SIGNAL = re.compile(r"content-signal\s*:", re.I)
 AGENT_RELS = ("describedby", "sitemap", "api-catalog", "service-desc", "alternate")
 
@@ -450,6 +516,13 @@ async def audit_readiness(
                 CheckResult(
                     item, CheckState.NOT_APPLICABLE, f"not expected on a {site_type.value} site"
                 )
+            )
+            continue
+
+        if item.key in STATIC_LAYER1 and home is not None:
+            state, detail = STATIC_LAYER1[item.key](home.text)
+            report.results.append(
+                CheckResult(item, state, f"{detail} (homepage only)", origin + "/")
             )
             continue
 

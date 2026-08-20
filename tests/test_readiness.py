@@ -121,3 +121,75 @@ def test_a_report_with_nothing_checkable_scores_zero_rather_than_dividing_by_not
 def test_every_site_type_has_something_to_check(site_type):
     applicable = [i for i in CHECKLIST if i.applies[site_type] is not Applicability.NO]
     assert len(applicable) >= 10, site_type
+
+
+# -- the Layer 1 items that are visible without a browser ---------------------
+#
+# Three of the seven can be read from the HTML. A static parse is weaker than
+# Lighthouse -- it cannot see what CSS or JavaScript does at runtime -- but "no
+# <main> anywhere in the document" is a fact, and reporting it as needing a
+# browser was giving up on a check we can make. The four that genuinely need
+# rendering stay manual, because guessing at them is how a passing score reaches
+# a site that fails.
+
+
+def test_semantic_html_is_read_from_the_markup():
+    from app.scrape.readiness import _semantic_html
+
+    good, _ = _semantic_html("<main><nav></nav><article></article></main>")
+    bad, detail = _semantic_html("<div><div><div></div></div></div>")
+
+    assert good is CheckState.PASS
+    assert bad is CheckState.FAIL
+    assert "accessibility tree" in detail
+
+
+def test_a_clickable_div_without_a_role_is_caught():
+    """An agent walking the tree cannot tell it is a button."""
+    from app.scrape.readiness import _clickable_divs
+
+    assert _clickable_divs('<div onclick="go()">x</div>')[0] is CheckState.FAIL
+    assert _clickable_divs('<div onclick="go()" role="button">x</div>')[0] is CheckState.PASS
+    assert _clickable_divs("<button>x</button>")[0] is CheckState.PASS
+
+
+def test_unlabelled_inputs_are_caught_and_aria_counts():
+    from app.scrape.readiness import _form_labels
+
+    assert _form_labels('<label for="e">E</label><input id="e">')[0] is CheckState.PASS
+    assert _form_labels('<input id="e" type="text">')[0] is CheckState.FAIL
+    assert _form_labels('<input aria-label="Email" type="text">')[0] is CheckState.PASS
+
+
+def test_hidden_and_submit_inputs_do_not_need_labels():
+    from app.scrape.readiness import _form_labels
+
+    assert _form_labels('<input type="hidden" name="t">')[0] is CheckState.NOT_APPLICABLE
+    assert _form_labels('<input type="submit" value="Go">')[0] is CheckState.NOT_APPLICABLE
+
+
+def test_a_page_with_no_inputs_is_not_applicable_rather_than_passing():
+    """Nothing to label is not the same as labelling everything."""
+    from app.scrape.readiness import _form_labels
+
+    state, detail = _form_labels("<p>Just prose.</p>")
+    assert state is CheckState.NOT_APPLICABLE
+    assert "no form inputs" in detail
+
+
+def test_the_four_that_need_rendering_are_still_manual():
+    """Layout shift, cursor styles, tap-target size and ghost overlays cannot be
+    read from source, and a guess at them would inflate the score."""
+    from app.scrape.readiness import STATIC_LAYER1
+
+    layer1 = {i.key for i in CHECKLIST if i.layer == 1}
+    assert layer1 - set(STATIC_LAYER1) == {"cls", "cursor", "tap-targets", "overlays"}
+
+
+def test_a_static_pass_says_it_only_saw_the_homepage():
+    """A pass here is evidence about one page, not about the site."""
+    import inspect
+
+    from app.scrape import readiness
+
+    assert "(homepage only)" in inspect.getsource(readiness.audit_readiness)

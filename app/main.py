@@ -432,6 +432,8 @@ async def brief_form(
             "suggested": [],
             "reasoning": "",
             "llm_used": False,
+            "dropped": [],
+            "readiness": None,
         },
     )
 
@@ -472,6 +474,16 @@ async def suggest_brief_route(
         # most of the signal; failing the whole suggestion over the homepage
         # would send the operator back to an empty form for no reason.
         homepage = ""
+
+    # The readiness audit runs here too. The wizard is already reading the site,
+    # and an operator filling in a brief is exactly the person who wants to know
+    # what the site is missing -- telling them later, on a different page, is
+    # telling them once they have stopped looking.
+    readiness = await audit_readiness(
+        site_url,
+        settings.crawl_user_agent,
+        SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
+    )
 
     stored = await repo.load_brief(session, domain)
     usage = LLMUsage()
@@ -514,6 +526,8 @@ async def suggest_brief_route(
             "suggested": filled,
             "reasoning": suggestion.get("_reasoning", ""),
             "llm_used": bool(suggestion),
+            "dropped": suggestion.get("_dropped", []),
+            "readiness": readiness,
         },
     )
 

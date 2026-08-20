@@ -428,6 +428,8 @@ def test_the_brief_form_renders_every_question_with_its_consequence():
             suggested=[],
             reasoning="",
             llm_used=False,
+            dropped=[],
+            readiness=None,
         )
     finally:
         env.undefined = previous
