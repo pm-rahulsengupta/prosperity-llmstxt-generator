@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.agents_doc import Capability, PolicyLink, Section, build_agents_doc
+from app.core.agents_doc import Capability, PolicyLink, build_agents_doc
 from app.core.agents_render import render_agents_liquid, render_agents_md
 from app.core.ranking import (
     PATTERN_AGENCY,
