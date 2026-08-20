@@ -462,3 +462,43 @@ pre.output {
 }
 .inline-form { display: inline-block; }
 .inline-form select { width: auto; }
+
+/* -- onboarding brief -------------------------------------------------------
+   A form whose fields each carry a consequence. The `.effect` line is not
+   decoration: an operator cannot calibrate an answer like "/services/*" without
+   knowing whether it protects those pages or forces them in, and the difference
+   between the two is the whole design. It is set at the same weight as the
+   label rather than as fine print, because it is read at the same moment. */
+
+.field { margin-bottom: 1.5rem; }
+.field textarea { min-height: 5.5rem; }
+
+.field .hint {
+    margin: 0.35rem 0 0;
+    font-size: var(--pm-xs);
+    color: var(--pm-ink-muted);
+}
+
+.field .hint code {
+    background: var(--pm-sunken);
+    border-radius: 3px;
+    padding: 0.05rem 0.3rem;
+    font-family: var(--pm-mono);
+}
+
+.field .effect {
+    margin: 0.4rem 0 0;
+    padding-left: 0.7rem;
+    border-left: 3px solid var(--pm-teal);
+    font-size: var(--pm-sm);
+    color: var(--pm-ink);
+}
+
+.notice {
+    margin: 0 0 1rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: var(--pm-radius-sm);
+    font-size: var(--pm-sm);
+}
+
+.notice.wait { background: var(--pm-lime); color: var(--pm-gunmetal); }

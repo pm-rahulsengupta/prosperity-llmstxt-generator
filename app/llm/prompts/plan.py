@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.onboarding import SiteBrief
 from app.core.ranking import PATTERN_LABELS, PATTERN_TEMPLATES
 
 SYSTEM = """You plan web crawls for building llms.txt files.
@@ -177,14 +178,26 @@ class CrawlPlan:
         )
 
 
-def build_user_message(brief: str, page_cap: int) -> str:
-    """`brief` is `Preflight.planning_brief()`: size estimate plus the inventory."""
+def build_user_message(brief: str, page_cap: int, site_brief: SiteBrief | None = None) -> str:
+    """`brief` is `Preflight.planning_brief()`: size estimate plus the inventory.
+
+    `site_brief` is what the operator told us at onboarding. Only its free-text
+    answers reach the model. The URL patterns are deliberately withheld: they are
+    enforced at the verdict layer, where a test can prove they were honoured,
+    rather than being asked for in a prompt and hoped for.
+    """
     sections = "\n".join(
         f"- {pattern} ({PATTERN_LABELS[pattern]}): {', '.join(names)}"
         for pattern, names in PATTERN_TEMPLATES.items()
     )
+    operator = ""
+    if site_brief and (context := site_brief.prompt_context()):
+        operator = (
+            "\nWhat the site's own team says about it, which is better evidence of what "
+            f"matters here than anything inferable from the URLs:\n{context}\n"
+        )
     return (
-        f"{brief}\n\n"
+        f"{brief}\n{operator}\n"
         f"Crawl budget: about {page_cap} pages.\n\n"
         f"Section templates available:\n{sections}\n\n"
         "Return one rule for every URL template listed above, using the template "

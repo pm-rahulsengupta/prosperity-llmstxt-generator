@@ -273,3 +273,109 @@ def test_the_free_text_questions_say_they_have_no_automatic_effect():
     for question in QUESTIONS:
         if question.kind == "text":
             assert "No automatic effect" in question.effect
+
+
+# -- the brief reaching the plan stage --------------------------------------
+#
+# These exist because an earlier version of this wiring silently did not apply:
+# the prompt gained an unused import, ruff removed it, and every test still
+# passed. Asserting on the rendered prompt is what makes that visible.
+
+
+def test_the_plan_prompt_carries_what_the_operator_said():
+    from app.llm.prompts.plan import build_user_message
+
+    brief = SiteBrief(
+        found_for="Digital PR and link building",
+        audience="Marketing managers evaluating agencies",
+    )
+    message = build_user_message("223 crawlable URLs", 400, brief)
+
+    assert "Digital PR and link building" in message
+    assert "Marketing managers evaluating agencies" in message
+
+
+def test_the_plan_prompt_withholds_the_url_patterns():
+    """They are enforced in code. Asking a model for them invites it to differ."""
+    from app.llm.prompts.plan import build_user_message
+
+    brief = SiteBrief(embargoed=("/clients/acquisition-2026/*",))
+    message = build_user_message("223 crawlable URLs", 400, brief)
+
+    assert "acquisition-2026" not in message
+
+
+def test_an_absent_brief_leaves_the_plan_prompt_as_it_was():
+    from app.llm.prompts.plan import build_user_message
+
+    assert build_user_message("brief", 400) == build_user_message("brief", 400, SiteBrief())
+
+
+# -- the form ---------------------------------------------------------------
+
+
+def test_the_brief_form_renders_every_question_with_its_consequence():
+    """Rendering catches what a route test would, without a database or a login.
+
+    A missing variable or a renamed field is a 500 on a page the operator hits
+    before their first run, which is the worst possible place to find it.
+    """
+    from jinja2 import StrictUndefined
+
+    from app.main import _brief_form_values, templates
+
+    # The app's own environment, because `base.html` reads globals registered on
+    # it. Building a fresh one would test a template that does not exist. Only
+    # `undefined` is swapped, so a variable the route forgets to pass raises here
+    # instead of rendering as empty.
+    env = templates.env
+    previous, env.undefined = env.undefined, StrictUndefined
+    try:
+        html = env.get_template("brief.html").render(
+            request=None,
+            user=None,
+            domain="prosperitymedia.com.au",
+            questions=QUESTIONS,
+            answers=_brief_form_values(
+                SiteBrief(valuable=("/services/*",), found_for="Digital PR")
+            ),
+            run_id="abc",
+            drift_reason=None,
+        )
+    finally:
+        env.undefined = previous
+
+    for question in QUESTIONS:
+        assert question.prompt in html
+        assert question.effect in html
+    # Stored answers come back, so a re-confirmation is an edit and not a re-entry.
+    assert "/services/*" in html
+    assert "Digital PR" in html
+
+
+def test_stored_answers_survive_a_round_trip_through_the_form():
+    from app.main import _brief_form_values, _parse_facts
+
+    original = SiteBrief(
+        found_for="Digital PR",
+        valuable=("/services/*", "/case-studies/*"),
+        must_appear=frozenset({"https://x.com/about/"}),
+        facts={"founded": Fact("2013", "ASIC registration")},
+    )
+    values = _brief_form_values(original)
+    values["facts"] = _parse_facts(values["facts"])
+    again = brief_from_answers(values)
+
+    assert again.valuable == original.valuable
+    assert again.must_appear == original.must_appear
+    assert again.facts == original.facts
+
+
+def test_a_fact_line_without_a_source_still_parses():
+    from app.main import _parse_facts
+
+    parsed = _parse_facts("founded = 2013\nteam_size = 22 = LinkedIn\nnonsense line\n")
+
+    assert parsed["founded"] == {"value": "2013", "source": "operator"}
+    assert parsed["team_size"] == {"value": "22", "source": "LinkedIn"}
+    assert "nonsense line" not in parsed

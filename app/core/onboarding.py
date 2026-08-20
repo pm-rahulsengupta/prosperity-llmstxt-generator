@@ -164,6 +164,40 @@ class SiteBrief:
             )
         )
 
+    def to_dict(self) -> dict:
+        """JSONB-safe. Sets and tuples become lists; Fact becomes a mapping."""
+        return {
+            "found_for": self.found_for,
+            "audience": self.audience,
+            "valuable": list(self.valuable),
+            "noise": list(self.noise),
+            "must_appear": sorted(self.must_appear),
+            "embargoed": list(self.embargoed),
+            "facts": {
+                name: {"value": fact.value, "source": fact.source}
+                for name, fact in sorted(self.facts.items())
+            },
+            "fingerprint": self.fingerprint,
+            "answered_by": self.answered_by,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> SiteBrief:
+        """Tolerant by design: an older stored brief must still load.
+
+        `brief_from_answers` already normalises every field this reads, so a
+        brief written before a question existed loads with that field empty
+        rather than raising on a schema that has since moved.
+        """
+        if not data:
+            return cls()
+        brief = brief_from_answers(
+            data,
+            answered_by=str(data.get("answered_by") or ""),
+            site_fingerprint=str(data.get("fingerprint") or ""),
+        )
+        return brief
+
     def prompt_context(self) -> str:
         """The part a model is allowed to see.
 

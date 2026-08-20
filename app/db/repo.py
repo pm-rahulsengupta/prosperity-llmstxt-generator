@@ -15,6 +15,7 @@ from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models import GenerationResult, PageEntry
+from app.core.onboarding import SiteBrief
 from app.db.models import Page, Run, RunEvent, RunStatus, SectionRow, SiteConfig
 
 
@@ -216,6 +217,30 @@ async def save_site_config(
         config.label = label
     await session.flush()
     return config
+
+
+async def load_brief(session: AsyncSession, domain: str) -> SiteBrief:
+    """Never returns None. An unanswered brief is an empty one, not a missing one.
+
+    Every caller would otherwise need the same `or SiteBrief()`, and the one that
+    forgot would crash a run on a domain nobody has onboarded yet.
+    """
+    config = await load_site_config(session, domain)
+    return SiteBrief.from_dict(config.brief if config else None)
+
+
+async def save_brief(session: AsyncSession, domain: str, brief: SiteBrief) -> None:
+    """Written separately from the plan, because the two have different lifetimes.
+
+    A plan is approved per run; a brief is answered once and re-confirmed only
+    when the site's shape moves.
+    """
+    config = await load_site_config(session, domain)
+    if config is None:
+        config = SiteConfig(domain=domain)
+        session.add(config)
+    config.brief = brief.to_dict()
+    await session.flush()
 
 
 async def cache_indexed_estimate(session: AsyncSession, domain: str, estimate: int | None) -> None:

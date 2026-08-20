@@ -95,9 +95,16 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
 
     cap = effective_page_cap(pre.size, requested_max_pages, settings.crawl_default_max_pages)
 
+    # Loaded here rather than passed in from the route: a run can be deferred long
+    # after the form was submitted, and the brief in the database at crawl time is
+    # the one the operator would expect to have been used.
+    async with session_scope() as session:
+        run = await repo.get_run(session, rid)
+        site_brief = await repo.load_brief(session, run.domain) if run else None
+
     usage = LLMUsage()
     client = LLMClient(settings, usage)
-    plan = await plan_crawl(client, pre.planning_brief(), pre.recon, cap)
+    plan = await plan_crawl(client, pre.planning_brief(), pre.recon, cap, site_brief)
 
     async with session_scope() as session:
         run = await repo.get_run(session, rid)

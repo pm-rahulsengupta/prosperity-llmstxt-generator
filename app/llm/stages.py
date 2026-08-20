@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from app.core.copyrules import check_all
 from app.core.models import PageEntry, Section, ValidationIssue
+from app.core.onboarding import SiteBrief
 from app.core.ranking import PATTERN_CATALOG, template_order
 from app.llm.client import LLMClient, Stage
 from app.llm.prompts import chat as chat_prompt
@@ -104,7 +105,13 @@ def heuristic_plan(recon: SiteRecon, page_cap: int) -> CrawlPlan:
     )
 
 
-async def plan_crawl(client: LLMClient, brief: str, recon: SiteRecon, page_cap: int) -> CrawlPlan:
+async def plan_crawl(
+    client: LLMClient,
+    brief: str,
+    recon: SiteRecon,
+    page_cap: int,
+    site_brief: SiteBrief | None = None,
+) -> CrawlPlan:
     fallback = heuristic_plan(recon, page_cap)
     if not client.enabled:
         return fallback
@@ -112,7 +119,7 @@ async def plan_crawl(client: LLMClient, brief: str, recon: SiteRecon, page_cap: 
     data = await client.structured(
         stage=Stage.PLAN,
         system=plan_prompt.SYSTEM,
-        user=plan_prompt.build_user_message(brief, page_cap),
+        user=plan_prompt.build_user_message(brief, page_cap, site_brief),
         schema=plan_prompt.schema(),
         schema_name="crawl_plan",
     )

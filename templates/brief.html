@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="panel">
+    <h2>What should we know about {{ domain }}?</h2>
+
+    {% if drift_reason %}
+    <p class="notice wait">
+        {{ drift_reason }} Your previous answers are below — confirm or change them.
+    </p>
+    {% else %}
+    <p class="muted">
+        Answered once per site and reused on every run. Everything here is optional;
+        skip what you do not know rather than guessing.
+    </p>
+    {% endif %}
+
+    <form method="post" action="/sites/{{ domain }}/brief{% if run_id %}?run={{ run_id }}{% endif %}">
+        {% for q in questions %}
+        <div class="field">
+            <label for="q_{{ q.key }}">{{ q.prompt }}</label>
+            {% if q.kind == 'text' %}
+            <input type="text" id="q_{{ q.key }}" name="{{ q.key }}"
+                   value="{{ answers[q.key] }}" placeholder="{{ q.placeholder }}">
+            {% elif q.kind == 'facts' %}
+            <textarea id="q_{{ q.key }}" name="{{ q.key }}" rows="4"
+                      placeholder="{{ q.placeholder }}">{{ answers[q.key] }}</textarea>
+            <p class="hint">One per line, as <code>name = value</code>. Add the source
+                after a second <code>=</code> if you have one.</p>
+            {% else %}
+            <textarea id="q_{{ q.key }}" name="{{ q.key }}" rows="4"
+                      placeholder="{{ q.placeholder }}">{{ answers[q.key] }}</textarea>
+            <p class="hint">One per line. <code>*</code> matches anything, including
+                slashes, so <code>/services/*</code> covers everything beneath it.</p>
+            {% endif %}
+            <p class="effect">{{ q.effect }}</p>
+        </div>
+        {% endfor %}
+
+        <div class="row">
+            <button class="primary" type="submit">
+                {% if run_id %}Save and start the run{% else %}Save{% endif %}
+            </button>
+            {% if run_id %}
+            <a class="muted" href="/sites/{{ domain }}/brief/skip?run={{ run_id }}">
+                Skip and run without a brief
+            </a>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
+<div class="panel">
+    <h3>How these answers are used</h3>
+    <p class="muted">
+        The URL patterns are enforced in code, not asked of a model. Declaring a
+        pattern valuable stops it being excluded on traffic alone — it is held for
+        your review instead — but it does not force it into the file, because one
+        broad pattern would otherwise admit an entire faceted URL space. Declaring
+        a pattern low value is the mirror: it is never included wholesale, but a
+        page inside it that earns real clicks is still kept.
+    </p>
+    <p class="muted">
+        Embargoed patterns are excluded outright and are never sent to a model.
+        The free-text answers are given to the planning and description stages as
+        context and have no automatic effect on what is included.
+    </p>
+</div>
+{% endblock %}

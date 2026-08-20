@@ -294,6 +294,11 @@ class SiteConfig(Base):
     domain: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     label: Mapped[str] = mapped_column(String(255), default="")
     plan: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # The onboarding answers, in their own column rather than inside `plan`.
+    # `save_site_config` replaces `plan` wholesale with `CrawlPlan.to_dict()`, and
+    # `CrawlPlan.from_dict` keeps only the keys it knows, so a brief stored there
+    # would be erased by the next plan approval without anything reporting it.
+    brief: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
     max_pages: Mapped[int] = mapped_column(Integer, default=0)
     # Cached `site:` count, with its date, so a monthly rerun does not buy the same
     # SERP call again for no new information.

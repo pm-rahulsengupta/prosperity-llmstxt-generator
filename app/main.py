@@ -37,6 +37,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.core.edits import EditTarget, apply_operations
+from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
 from app.core.pipeline import rebuild
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import PATTERN_LABELS, PATTERN_TEMPLATES
@@ -287,12 +288,128 @@ async def create_run(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     run = await repo.create_run(session, normalised, created_by=user.email)
+    run.max_pages = max_pages
     run_id = str(run.id)
+
+    existing = await repo.load_site_config(session, run.domain)
     await session.commit()
+
+    # A domain nobody has onboarded stops here once. `brief` is `{}` only when the
+    # form has never been submitted -- skipping writes an empty answered brief, so
+    # a deliberate skip is not mistaken for an unanswered question next time.
+    if existing is None or not existing.brief:
+        return RedirectResponse(
+            f"/sites/{run.domain}/brief?run={run_id}", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    return await _start_preflight(session, run_id)
+
+
+def _brief_form_values(brief: SiteBrief) -> dict[str, str]:
+    """Render a stored brief back into the textareas it came from."""
+    facts = "\n".join(
+        f"{name} = {fact.value}" + (f" = {fact.source}" if fact.source != "operator" else "")
+        for name, fact in sorted(brief.facts.items())
+    )
+    return {
+        "found_for": brief.found_for,
+        "audience": brief.audience,
+        "valuable": "\n".join(brief.valuable),
+        "noise": "\n".join(brief.noise),
+        "must_appear": "\n".join(sorted(brief.must_appear)),
+        "embargoed": "\n".join(brief.embargoed),
+        "facts": facts,
+    }
+
+
+def _parse_facts(raw: str) -> dict[str, dict[str, str]]:
+    """`name = value` or `name = value = source`, one per line.
+
+    A structured editor would be better and is not worth building before anyone
+    has used this. What matters is that a value keeps its provenance, so the
+    third field is preserved when given rather than being dropped into a note.
+    """
+    facts: dict[str, dict[str, str]] = {}
+    for line in raw.splitlines():
+        if "=" not in line:
+            continue
+        name, _, rest = line.partition("=")
+        value, _, source = rest.partition("=")
+        if not (name := name.strip()) or not (value := value.strip()):
+            continue
+        facts[name] = {"value": value, "source": source.strip() or "operator"}
+    return facts
+
+
+@app.get("/sites/{domain}/brief", response_class=HTMLResponse)
+async def brief_form(
+    request: Request,
+    domain: str,
+    run: str | None = None,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    stored = await repo.load_brief(session, domain)
+    return templates.TemplateResponse(
+        request,
+        "brief.html",
+        {
+            "user": user,
+            "domain": domain,
+            "questions": QUESTIONS,
+            "answers": _brief_form_values(stored),
+            "run_id": run,
+            "drift_reason": request.query_params.get("drift"),
+        },
+    )
+
+
+@app.post("/sites/{domain}/brief")
+async def save_brief(
+    request: Request,
+    domain: str,
+    run: str | None = None,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    form = await request.form()
+    answers = {q.key: str(form.get(q.key) or "") for q in QUESTIONS}
+    answers["facts"] = _parse_facts(answers.get("facts", ""))
+    brief = brief_from_answers(answers, answered_by=user.email)
+    await repo.save_brief(session, domain, brief)
+    await session.commit()
+
+    if run:
+        return await _start_preflight(session, run)
+    return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/sites/{domain}/brief/skip", include_in_schema=False)
+async def skip_brief(
+    domain: str,
+    run: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Start the run unbriefed.
+
+    Recorded as an empty answered brief rather than left null, so the next run on
+    this domain does not stop and ask again. Skipping is a decision; it should
+    only have to be made once.
+    """
+    await repo.save_brief(session, domain, SiteBrief(answered_by=user.email))
+    await session.commit()
+    return await _start_preflight(session, run)
+
+
+async def _start_preflight(session: AsyncSession, run_id: str) -> RedirectResponse:
+    run = await repo.get_run(session, UUID(run_id))
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
 
     from app.jobs.tasks import preflight_task
 
-    await preflight_task.defer_async(run_id=run_id, requested_max_pages=max_pages)
+    await preflight_task.defer_async(run_id=run_id, requested_max_pages=run.max_pages or 0)
     return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
