@@ -111,7 +111,15 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
         run.pattern = plan.site_pattern
         if plan.site_name:
             run.site_name = plan.site_name
-        run.stats = {**(run.stats or {}), "llm": usage.as_dict(), "serp_calls": pre.serp_calls}
+        run.stats = {
+            **(run.stats or {}),
+            "llm": usage.as_dict(),
+            "serp_calls": pre.serp_calls,
+            "size_check": {
+                "reason": str(pre.indexed.reason),
+                "detail": pre.indexed.detail,
+            },
+        }
         await repo.cache_indexed_estimate(session, domain, pre.size.indexed_estimate)
         await repo.set_status(session, run, RunStatus.AWAITING_REVIEW)
         await repo.record_event(

@@ -17,7 +17,13 @@ from dataclasses import dataclass, field
 from app.config import Settings
 from app.scrape.discover import discover
 from app.scrape.recon import SiteRecon, summarise_for_plan
-from app.scrape.sizing import SizeEstimate, assess, indexed_page_count
+from app.scrape.sizing import (
+    CountFailure,
+    IndexedCount,
+    SizeEstimate,
+    assess,
+    indexed_page_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +36,9 @@ class Preflight:
     # can show what it spent.
     serp_calls: int = 0
     notes: list[str] = field(default_factory=list)
+    # The size check's own verdict, kept so the run record can say why a count is
+    # missing rather than leaving the UI to guess at a cause.
+    indexed: IndexedCount = field(default_factory=IndexedCount)
 
     @property
     def site_url(self) -> str:
@@ -44,7 +53,7 @@ async def run_preflight(site_url: str, settings: Settings) -> Preflight:
     """Recon plus size check. Never raises for a missing signal; records it instead."""
     recon = await discover(site_url, user_agent=settings.crawl_user_agent)
 
-    indexed: int | None = None
+    indexed = IndexedCount(reason=CountFailure.NO_CREDENTIALS)
     serp_calls = 0
     if settings.size_check_enabled:
         indexed = await indexed_page_count(
@@ -56,17 +65,23 @@ async def run_preflight(site_url: str, settings: Settings) -> Preflight:
         )
         # Charged whether or not a usable number came back.
         serp_calls = 1
-        if indexed is None:
-            logger.info("size check returned no count for %s", recon.site_url)
+        if indexed.failed:
+            logger.info("size check for %s: %s", recon.site_url, indexed.explain())
 
     size = assess(
         site_url=recon.site_url,
         sitemap_urls=recon.urls,
-        indexed_estimate=indexed,
         indexed_source="dataforseo",
+        indexed=indexed,
     )
 
-    return Preflight(recon=recon, size=size, serp_calls=serp_calls, notes=list(recon.notes))
+    return Preflight(
+        recon=recon,
+        size=size,
+        serp_calls=serp_calls,
+        notes=list(recon.notes),
+        indexed=indexed,
+    )
 
 
 def effective_page_cap(size: SizeEstimate, requested: int | None, configured_default: int) -> int:

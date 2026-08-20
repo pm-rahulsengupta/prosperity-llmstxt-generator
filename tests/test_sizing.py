@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.scrape.sizing import (
+    CountFailure,
+    IndexedCount,
     assess,
     classify,
     count_html_urls,
@@ -96,9 +98,75 @@ def test_parse_results_count_reads_dataforseo_shape():
             {"result": [{"keyword": "site:example.com", "se_results_count": 12_400, "items": []}]}
         ]
     }
-    assert parse_results_count(body) == 12_400
+    result = parse_results_count(body)
+    assert result.count == 12_400
+    assert result.reason is CountFailure.OK
+    assert not result.failed
 
 
-def test_parse_results_count_survives_an_error_payload():
-    assert parse_results_count({"tasks": [{"result": None, "status_code": 40501}]}) is None
-    assert parse_results_count({}) is None
+def test_an_ip_rejection_is_reported_as_an_ip_rejection():
+    """The live failure: HTTP 200, envelope 20000 Ok, refusal one level down.
+
+    Reading only the count is what made this present as "credentials are not
+    configured" and sent a real IP whitelist problem on a detour through the
+    credentials.
+    """
+    body = {
+        "status_code": 20000,
+        "status_message": "Ok.",
+        "tasks": [
+            {
+                "status_code": 40207,
+                "status_message": "Access denied. Your IP is not whitelisted.",
+                "result": None,
+            }
+        ],
+    }
+    result = parse_results_count(body)
+
+    assert result.failed
+    assert result.reason is CountFailure.NOT_WHITELISTED
+    assert "not whitelisted" in result.explain().lower()
+    assert "credentials are fine" in result.explain()
+    # And it must NOT blame configuration.
+    assert "not configured" not in result.explain()
+
+
+def test_task_status_codes_map_to_distinct_causes():
+    def reason_for(status: int) -> CountFailure:
+        return parse_results_count(
+            {"tasks": [{"status_code": status, "status_message": "x", "result": None}]}
+        ).reason
+
+    assert reason_for(40100) is CountFailure.AUTH_FAILED
+    assert reason_for(40200) is CountFailure.OUT_OF_CREDITS
+    assert reason_for(40207) is CountFailure.NOT_WHITELISTED
+    assert reason_for(40209) is CountFailure.RATE_LIMITED
+    # An unmapped refusal is still a refusal, not a success.
+    assert reason_for(49999) is CountFailure.API_ERROR
+
+
+def test_an_empty_but_valid_response_is_not_an_error():
+    """A domain Google indexes nothing for is a real answer, not a failure to ask."""
+    result = parse_results_count({"tasks": [{"status_code": 20000, "result": []}]})
+    assert result.failed
+    assert result.reason is CountFailure.NO_RESULTS
+    assert "not indexed" in result.explain()
+
+
+def test_assess_reports_the_real_reason_not_a_guess():
+    estimate = assess(
+        "https://example.com",
+        urls(30),
+        indexed=IndexedCount(reason=CountFailure.NOT_WHITELISTED, detail="40207 Access denied."),
+    )
+    warning = " ".join(estimate.warnings)
+    assert "not whitelisted" in warning.lower()
+    assert "credentials are not configured" not in warning
+
+
+def test_assess_still_blames_configuration_when_that_is_the_truth():
+    estimate = assess(
+        "https://example.com", urls(30), indexed=IndexedCount(reason=CountFailure.NO_CREDENTIALS)
+    )
+    assert any("credentials are not configured" in w for w in estimate.warnings)

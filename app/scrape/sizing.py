@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import logging
 from dataclasses import dataclass, field
+from enum import StrEnum
 from urllib.parse import urlparse
 
 import httpx
@@ -73,6 +74,92 @@ NON_HTML_EXTENSIONS = frozenset(
         "txt",
     }
 )
+
+
+class CountFailure(StrEnum):
+    """Why the indexed-page count is missing, in the caller's language."""
+
+    OK = "ok"
+    NO_CREDENTIALS = "no_credentials"
+    NOT_WHITELISTED = "not_whitelisted"
+    AUTH_FAILED = "auth_failed"
+    OUT_OF_CREDITS = "out_of_credits"
+    RATE_LIMITED = "rate_limited"
+    NO_RESULTS = "no_results"
+    API_ERROR = "api_error"
+    TRANSPORT = "transport_error"
+
+
+# DataForSEO reports task-level refusals in `tasks[0].status_code`, while the
+# envelope stays HTTP 200 / 20000 Ok. Codes from their error reference.
+TASK_STATUS_REASONS: dict[int, CountFailure] = {
+    40100: CountFailure.AUTH_FAILED,
+    40101: CountFailure.AUTH_FAILED,
+    40200: CountFailure.OUT_OF_CREDITS,
+    40201: CountFailure.OUT_OF_CREDITS,
+    40202: CountFailure.OUT_OF_CREDITS,
+    40207: CountFailure.NOT_WHITELISTED,
+    40209: CountFailure.RATE_LIMITED,
+    40501: CountFailure.API_ERROR,
+}
+
+# What to tell a human. These are read off the run page by someone deciding what to
+# do next, so each one names the fix rather than the symptom.
+FAILURE_MESSAGES: dict[CountFailure, str] = {
+    CountFailure.NO_CREDENTIALS: (
+        "No indexed-page count: DataForSEO credentials are not configured, so the "
+        "sitemap is the only size signal."
+    ),
+    CountFailure.NOT_WHITELISTED: (
+        "No indexed-page count: DataForSEO refused the request because this server's "
+        "IP is not whitelisted. Add the worker's static outbound IPs at "
+        "app.dataforseo.com/api-access. The credentials are fine."
+    ),
+    CountFailure.AUTH_FAILED: (
+        "No indexed-page count: DataForSEO rejected the credentials. Check "
+        "DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD."
+    ),
+    CountFailure.OUT_OF_CREDITS: (
+        "No indexed-page count: the DataForSEO account is out of credit. This is an "
+        "account condition, not a problem with this site."
+    ),
+    CountFailure.RATE_LIMITED: (
+        "No indexed-page count: DataForSEO rate-limited the request. It will usually "
+        "succeed on a later run."
+    ),
+    CountFailure.NO_RESULTS: (
+        "No indexed-page count: Google returned no results for a `site:` query on "
+        "this domain, which usually means it is not indexed at all."
+    ),
+    CountFailure.API_ERROR: ("No indexed-page count: DataForSEO returned an error for this query."),
+    CountFailure.TRANSPORT: (
+        "No indexed-page count: could not reach DataForSEO. The sitemap is the only "
+        "size signal for this run."
+    ),
+}
+
+
+@dataclass(slots=True)
+class IndexedCount:
+    """A count, or a stated reason there isn't one.
+
+    The predecessor returned a bare `int | None`, so every cause collapsed into the
+    same "credentials are not configured" warning -- which sent a real IP rejection
+    on a long detour through the credentials. The reason travels with the result now.
+    """
+
+    count: int | None = None
+    reason: CountFailure = CountFailure.OK
+    detail: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return self.count is None
+
+    def explain(self) -> str:
+        message = FAILURE_MESSAGES.get(self.reason, FAILURE_MESSAGES[CountFailure.API_ERROR])
+        return f"{message} ({self.detail})" if self.detail else message
+
 
 # Buckets, by the larger of the two counts. The numbers are crawl-cost thresholds,
 # not opinions about site quality.
@@ -145,8 +232,16 @@ def assess(
     sitemap_urls: list[str],
     indexed_estimate: int | None = None,
     indexed_source: str = "unavailable",
+    indexed: IndexedCount | None = None,
 ) -> SizeEstimate:
-    """Combine the two counts into a budget and a set of warnings. Pure."""
+    """Combine the two counts into a budget and a set of warnings. Pure.
+
+    `indexed` is the richer form of `indexed_estimate` and carries the reason a
+    count is missing. Both are accepted so existing callers and tests keep working;
+    when `indexed` is supplied it wins.
+    """
+    if indexed is not None and indexed_estimate is None:
+        indexed_estimate = indexed.count
     total, html = count_html_urls(sitemap_urls)
     estimate = SizeEstimate(
         site_url=site_url,
@@ -177,9 +272,12 @@ def assess(
                 "and lean on the exclude rules."
             )
     elif indexed_estimate is None:
+        # Say what actually happened. `indexed` carries the reason when the caller
+        # has one; without it we can only report the count as missing.
         estimate.warnings.append(
-            "No indexed-page count: DataForSEO credentials are not configured, so the "
-            "sitemap is the only size signal."
+            indexed.explain()
+            if indexed is not None
+            else FAILURE_MESSAGES[CountFailure.NO_CREDENTIALS]
         )
 
     if not html:
@@ -204,19 +302,19 @@ async def indexed_page_count(
     location_code: int = 2036,
     language_code: str = "en",
     timeout: float = 45.0,
-) -> int | None:
+) -> IndexedCount:
     """Ask Google, via DataForSEO, roughly how many pages of `domain` it indexes.
 
-    Returns None rather than raising: a size check is advisory and must never be the
-    reason a run cannot start. The figure Google reports for a `site:` query is a
-    rounded estimate and drifts between requests -- it is an order-of-magnitude
-    signal, and it is used as one.
+    Never raises: a size check is advisory and must not be the reason a run cannot
+    start. But it now says *why* it came back empty. The figure Google reports for a
+    `site:` query is a rounded estimate that drifts between requests -- it is an
+    order-of-magnitude signal and is used as one.
 
     Costs one live SERP call per invocation. Results are cached per domain by the
     caller rather than re-requested on every run.
     """
     if not (login and password):
-        return None
+        return IndexedCount(reason=CountFailure.NO_CREDENTIALS)
 
     host = urlparse(domain if "//" in domain else f"https://{domain}").netloc or domain
     host = host.removeprefix("www.")
@@ -244,17 +342,37 @@ async def indexed_page_count(
             response.raise_for_status()
             body = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        logger.warning("site: size check failed for %s: %s", host, exc)
-        return None
+        logger.warning("site: size check transport failure for %s: %s", host, exc)
+        return IndexedCount(reason=CountFailure.TRANSPORT, detail=f"{type(exc).__name__}: {exc}")
 
-    return parse_results_count(body)
+    result = parse_results_count(body)
+    if result.failed:
+        logger.warning("site: size check for %s: %s", host, result.explain())
+    return result
 
 
-def parse_results_count(body: dict) -> int | None:
-    """Pull `se_results_count` out of a DataForSEO SERP response."""
+def parse_results_count(body: dict) -> IndexedCount:
+    """Read a DataForSEO SERP response, including the reason it did not answer.
+
+    The response is HTTP 200 and `status_code: 20000 Ok.` even when the *task* was
+    refused -- the refusal is one level down, in `tasks[0].status_code`. Reading only
+    the count is why an IP rejection presented as "credentials are not configured".
+    """
     for task in body.get("tasks") or []:
         for result in task.get("result") or []:
             count = result.get("se_results_count")
             if isinstance(count, int) and count >= 0:
-                return count
-    return None
+                return IndexedCount(count=count, reason=CountFailure.OK)
+
+    for task in body.get("tasks") or []:
+        status = task.get("status_code")
+        message = (task.get("status_message") or "").strip()
+        if isinstance(status, int) and status != 20000:
+            return IndexedCount(
+                reason=TASK_STATUS_REASONS.get(status, CountFailure.API_ERROR),
+                detail=f"{status} {message}".strip(),
+            )
+
+    # A well-formed response that simply carried no count -- a `site:` query for a
+    # domain Google indexes nothing for is a real, and informative, answer.
+    return IndexedCount(reason=CountFailure.NO_RESULTS)
