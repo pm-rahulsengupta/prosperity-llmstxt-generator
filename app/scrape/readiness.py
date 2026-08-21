@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -223,12 +224,208 @@ def _form_labels(html: str) -> tuple[CheckState, str]:
     return CheckState.FAIL, f"{len(unlabelled)} of {len(inputs)} input(s) have no label"
 
 
+# -- WCAG 4.1.2 and 4.1.1, both readable from markup -------------------------
+#
+# Three distinct faults produce the same symptom -- a screen reader or an agent
+# ignoring the element or announcing it wrongly -- and the fix differs for each,
+# so they are reported apart rather than as one "bad role" bucket.
+
+# Deprecated in WAI-ARIA 1.2. Still parsed by some tools, honoured by fewer, and
+# heading for removal.
+DEPRECATED_ROLES = {"directory": "list"}
+
+# Abstract roles. These exist to define the taxonomy and were never valid as
+# markup values -- using one is not a deprecation, it is a category error, and
+# assistive technology has no behaviour to attach to it.
+ABSTRACT_ROLES = frozenset(
+    {
+        "command",
+        "composite",
+        "input",
+        "landmark",
+        "range",
+        "roletype",
+        "section",
+        "sectionhead",
+        "select",
+        "structure",
+        "widget",
+        "window",
+    }
+)
+
+# WAI-ARIA 1.2 plus the 1.3 additions. Anything outside this and not in a known
+# extension namespace is a role that does not exist -- `dialogbox` for `dialog`
+# is the common shape, and it fails silently.
+VALID_ROLES = frozenset(
+    {
+        "alert",
+        "alertdialog",
+        "application",
+        "article",
+        "banner",
+        "blockquote",
+        "button",
+        "caption",
+        "cell",
+        "checkbox",
+        "code",
+        "columnheader",
+        "combobox",
+        "comment",
+        "complementary",
+        "contentinfo",
+        "definition",
+        "deletion",
+        "dialog",
+        "document",
+        "emphasis",
+        "feed",
+        "figure",
+        "form",
+        "generic",
+        "grid",
+        "gridcell",
+        "group",
+        "heading",
+        "img",
+        "insertion",
+        "link",
+        "list",
+        "listbox",
+        "listitem",
+        "log",
+        "main",
+        "mark",
+        "marquee",
+        "math",
+        "menu",
+        "menubar",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "meter",
+        "navigation",
+        "none",
+        "note",
+        "option",
+        "paragraph",
+        "presentation",
+        "progressbar",
+        "radio",
+        "radiogroup",
+        "region",
+        "row",
+        "rowgroup",
+        "rowheader",
+        "scrollbar",
+        "search",
+        "searchbox",
+        "separator",
+        "slider",
+        "spinbutton",
+        "status",
+        "strong",
+        "subscript",
+        "suggestion",
+        "superscript",
+        "switch",
+        "tab",
+        "table",
+        "tablist",
+        "tabpanel",
+        "term",
+        "textbox",
+        "time",
+        "timer",
+        "toolbar",
+        "tooltip",
+        "tree",
+        "treegrid",
+        "treeitem",
+    }
+)
+
+# DPUB-ARIA and Graphics-ARIA are separate specifications with their own role
+# vocabularies. Flagging them as unknown would be wrong.
+EXTENSION_PREFIXES = ("doc-", "graphics-")
+
+ROLE_ATTR = re.compile(r"role\s*=\s*[\"']([^\"']+)[\"']", re.I)
+ID_ATTR = re.compile(r"\sid\s*=\s*[\"']([^\"']+)[\"']", re.I)
+ARIA_REF = re.compile(
+    r"(?:aria-labelledby|aria-describedby|aria-controls|aria-owns|\sfor)\s*=\s*[\"']([^\"']+)[\"']",
+    re.I,
+)
+
+
+def _aria_roles(html: str) -> tuple[CheckState, str]:
+    """WCAG 4.1.2 -- every role must be one assistive technology recognises."""
+    used = [r.strip().lower() for value in ROLE_ATTR.findall(html) for r in value.split()]
+    if not used:
+        return CheckState.NOT_APPLICABLE, "no ARIA roles on this page"
+
+    deprecated = sorted({r for r in used if r in DEPRECATED_ROLES})
+    abstract = sorted({r for r in used if r in ABSTRACT_ROLES})
+    unknown = sorted(
+        {
+            r
+            for r in used
+            if r not in VALID_ROLES
+            and r not in ABSTRACT_ROLES
+            and r not in DEPRECATED_ROLES
+            and not r.startswith(EXTENSION_PREFIXES)
+        }
+    )
+
+    problems = []
+    for role in deprecated:
+        problems.append(f"{role} is deprecated (use {DEPRECATED_ROLES[role]})")
+    for role in abstract:
+        problems.append(f"{role} is an abstract role and was never valid in markup")
+    for role in unknown:
+        problems.append(f"{role} is not a role in any ARIA specification")
+
+    if not problems:
+        return CheckState.PASS, f"{len(set(used))} role(s), all current"
+    return CheckState.FAIL, "; ".join(problems[:4])
+
+
+def _unique_ids(html: str) -> tuple[CheckState, str]:
+    """WCAG 4.1.1 -- a duplicated id makes every reference to it ambiguous.
+
+    A duplicate that nothing points at is untidy. A duplicate that an
+    `aria-labelledby` or a `label for=` resolves to is a control wired to the
+    wrong element, and that is reported first because it is the one that breaks
+    behaviour rather than validation.
+    """
+    ids = [i.strip() for i in ID_ATTR.findall(html)]
+    if not ids:
+        return CheckState.NOT_APPLICABLE, "no element ids on this page"
+
+    counts = Counter(ids)
+    duplicated = {i for i, n in counts.items() if n > 1}
+    if not duplicated:
+        return CheckState.PASS, f"{len(ids)} id(s), all unique"
+
+    referenced = {token for value in ARIA_REF.findall(html) for token in value.split()}
+    dangerous = sorted(duplicated & referenced)
+    if dangerous:
+        return CheckState.FAIL, (
+            f"{len(dangerous)} duplicated id(s) are the target of an ARIA or label "
+            f"reference, e.g. {dangerous[0]} -- those relationships resolve to the "
+            "wrong element"
+        )
+    return CheckState.FAIL, (f"{len(duplicated)} duplicated id(s), e.g. {sorted(duplicated)[0]}")
+
+
 # Only the homepage is parsed, so a pass is evidence about one page rather than
 # the site. Said plainly in the detail rather than implied by the score.
 STATIC_LAYER1 = {
     "semantic-html": _semantic_html,
     "roles": _clickable_divs,
     "labels": _form_labels,
+    "aria-roles": _aria_roles,
+    "unique-ids": _unique_ids,
 }
 
 CONTENT_SIGNAL = re.compile(r"content-signal\s*:", re.I)

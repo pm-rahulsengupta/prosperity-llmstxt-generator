@@ -29,7 +29,7 @@ from app.core.components import (
     Family,
     SiteType,
 )
-from app.scrape.readiness import CheckState, ReadinessReport
+from app.scrape.readiness import STATIC_LAYER1, CheckState, ReadinessReport
 
 __all__ = ["ComponentStatus", "SiteStatus", "derive"]
 
@@ -125,9 +125,12 @@ def manually_markable(component: Component) -> bool:
     )
 
 
-# The three Layer 1 items readable from markup. They are probe-decided like any
-# other check, so they are not manually markable.
-STATIC_LAYER1_KEYS = frozenset({"semantic-html", "roles", "labels"})
+# Derived, not restated. This began as a hardcoded copy of the same three keys
+# and immediately drifted: adding the WCAG 4.1.1 and 4.1.2 checks made them
+# probe-decided in `readiness` and still hand-markable here, so someone could
+# have ticked "no deprecated ARIA roles" on a page carrying one. Exactly the
+# duplication the component registry exists to remove.
+STATIC_LAYER1_KEYS = frozenset(STATIC_LAYER1)
 
 
 def derive(

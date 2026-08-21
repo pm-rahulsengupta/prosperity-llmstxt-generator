@@ -198,6 +198,19 @@ def test_only_the_undetectable_components_may_be_marked_by_hand():
         assert key not in markable
 
 
+def test_a_newly_probeable_check_stops_being_hand_markable_automatically():
+    """The markable set is derived from what the prober actually handles.
+
+    It began as a hardcoded copy and drifted the moment two WCAG checks were
+    added: they became probe-decided and stayed hand-markable, so someone could
+    have ticked "no deprecated ARIA roles" on a page carrying one.
+    """
+    from app.scrape.readiness import STATIC_LAYER1
+
+    for key in STATIC_LAYER1:
+        assert not manually_markable(by_key(key)), key
+
+
 def test_a_mark_makes_an_undetectable_component_live():
     status = derive("https://x.example", SiteType.CONTENT, marks={"cls": "rahul@example.com"})
     cls = status.by_key("cls")

@@ -51,8 +51,10 @@ def test_the_checklist_is_the_sheet_plus_the_two_files_this_tool_generates():
     """
     from app.core.components import COMPONENTS
 
-    assert len(CHECKLIST) == len(COMPONENTS) == 23
-    added = {"agents-md", "ai-catalog"}
+    assert len(CHECKLIST) == len(COMPONENTS) == 25
+    # Plus the two WCAG rules added after the sheet was written: 4.1.2 on
+    # deprecated roles and 4.1.1 on duplicate ids.
+    added = {"agents-md", "ai-catalog", "aria-roles", "unique-ids"}
     assert added <= {c.key for c in CHECKLIST}
 
 
@@ -277,3 +279,120 @@ def test_one_failing_template_fails_the_site():
     import inspect
 
     assert "Worst answer wins" in inspect.getsource(audit_readiness)
+
+
+# -- WCAG 4.1.2: roles assistive technology recognises ------------------------
+#
+# Three distinct faults with one symptom -- ignored or misannounced -- and three
+# different fixes, so they are reported apart rather than as one "bad role".
+
+
+def test_a_deprecated_role_is_caught_and_names_its_replacement():
+    """`directory` was deprecated in WAI-ARIA 1.2. Honoured by fewer tools each
+    year, and nothing errors when it stops working."""
+    from app.scrape.readiness import _aria_roles
+
+    state, detail = _aria_roles('<div role="directory">Menu</div>')
+
+    assert state is CheckState.FAIL
+    assert "deprecated" in detail
+    assert "list" in detail
+
+
+def test_an_abstract_role_is_a_category_error_not_a_deprecation():
+    """Abstract roles define the taxonomy and were never valid in markup, so
+    assistive technology has no behaviour to attach to one."""
+    from app.scrape.readiness import _aria_roles
+
+    state, detail = _aria_roles('<div role="widget">x</div>')
+
+    assert state is CheckState.FAIL
+    assert "never valid in markup" in detail
+
+
+def test_an_invented_role_is_caught():
+    """`dialogbox` for `dialog` is the common shape, and it fails silently."""
+    from app.scrape.readiness import _aria_roles
+
+    state, detail = _aria_roles('<div role="dialogbox">x</div>')
+
+    assert state is CheckState.FAIL
+    assert "not a role in any ARIA specification" in detail
+
+
+def test_current_roles_pass():
+    from app.scrape.readiness import _aria_roles
+
+    assert _aria_roles('<nav role="navigation" aria-label="Site"></nav>')[0] is CheckState.PASS
+
+
+def test_dpub_and_graphics_roles_are_not_flagged_as_unknown():
+    """Separate specifications with their own vocabularies. Flagging them would
+    make the check wrong about correct markup, which is how a check gets ignored.
+    """
+    from app.scrape.readiness import _aria_roles
+
+    assert _aria_roles('<section role="doc-abstract"></section>')[0] is CheckState.PASS
+    assert _aria_roles('<g role="graphics-symbol"></g>')[0] is CheckState.PASS
+
+
+def test_a_page_with_no_roles_is_not_applicable_rather_than_passing():
+    from app.scrape.readiness import _aria_roles
+
+    assert _aria_roles("<p>Just prose.</p>")[0] is CheckState.NOT_APPLICABLE
+
+
+def test_multiple_roles_in_one_attribute_are_all_checked():
+    """A role attribute is a fallback list; each token has to be valid."""
+    from app.scrape.readiness import _aria_roles
+
+    assert _aria_roles('<div role="button directory"></div>')[0] is CheckState.FAIL
+
+
+# -- WCAG 4.1.1: unique ids ---------------------------------------------------
+
+
+def test_duplicate_ids_are_caught():
+    from app.scrape.readiness import _unique_ids
+
+    state, detail = _unique_ids('<div id="a"></div><div id="a"></div>')
+
+    assert state is CheckState.FAIL
+    assert "duplicated" in detail
+
+
+def test_a_duplicated_id_that_something_points_at_is_reported_first():
+    """A duplicate nothing references is untidy. One an `aria-labelledby` or a
+    `label for=` resolves to is a control wired to the wrong element, which
+    breaks behaviour rather than validation."""
+    from app.scrape.readiness import _unique_ids
+
+    state, detail = _unique_ids('<label for="a">L</label><input id="a"><input id="a">')
+
+    assert state is CheckState.FAIL
+    assert "resolve to the wrong element" in detail
+
+
+def test_unique_ids_pass():
+    from app.scrape.readiness import _unique_ids
+
+    assert _unique_ids('<div id="a"></div><div id="b"></div>')[0] is CheckState.PASS
+
+
+def test_a_page_with_no_ids_is_not_applicable():
+    from app.scrape.readiness import _unique_ids
+
+    assert _unique_ids("<p>Just prose.</p>")[0] is CheckState.NOT_APPLICABLE
+
+
+def test_both_new_checks_pass_the_live_page_they_were_written_against():
+    """A negative control. prosperitymedia.com.au uses four current roles and 27
+    unique ids, so a check that fails there is producing false positives."""
+    from app.scrape.readiness import _aria_roles, _unique_ids
+
+    clean = (
+        '<div role="banner"></div><div role="main"></div>'
+        '<div role="figure"></div><img role="img" id="a"><div id="b"></div>'
+    )
+    assert _aria_roles(clean)[0] is CheckState.PASS
+    assert _unique_ids(clean)[0] is CheckState.PASS

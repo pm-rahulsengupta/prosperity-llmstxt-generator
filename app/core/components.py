@@ -298,6 +298,34 @@ COMPONENTS: tuple[Component, ...] = (
         "Inspect for position:absolute with high z-index showing no content",
         why="An invisible overlay swallows every click an agent makes.",
     ),
+    Component(
+        "aria-roles",
+        "No deprecated, abstract or invented ARIA roles",
+        Family.PAGE,
+        Priority.MUST,
+        1,
+        Effort.CODE_CHANGE,
+        _all(YES),
+        "Scan for role= values; check each against WAI-ARIA 1.2, then test with a screen reader",
+        why=(
+            "WCAG 4.1.2. A role assistive technology does not recognise is ignored "
+            "or announced wrongly, and it fails silently -- nothing errors."
+        ),
+    ),
+    Component(
+        "unique-ids",
+        "Element ids are unique, especially ARIA targets",
+        Family.PAGE,
+        Priority.MUST,
+        1,
+        Effort.CODE_CHANGE,
+        _all(YES),
+        "Scan for duplicate id= values, then check whether any is an aria-labelledby or label for= target",
+        why=(
+            "WCAG 4.1.1. A duplicated id makes every reference to it ambiguous, so "
+            "a label or description resolves to whichever element the parser met first."
+        ),
+    ),
     # -- Crawl rules ---------------------------------------------------------
     Component(
         "robots",
