@@ -380,6 +380,23 @@ COMPONENTS: tuple[Component, ...] = (
         why="A curated index beats leaving a model to guess which pages matter.",
     ),
     Component(
+        "llms-full",
+        "/llms-full.txt for full page text",
+        Family.CONTENT,
+        Priority.OPTIONAL,
+        2,
+        Effort.DROP_IN,
+        _mix(YES, COND, COND),
+        "curl <site>/llms-full.txt",
+        artifact="llms-full.txt",
+        path="/llms-full.txt",
+        expect=TEXT,
+        why=(
+            "Whole pages rather than an index. Not in the llms.txt specification, "
+            "so it is a convention -- useful where citation accuracy matters."
+        ),
+    ),
+    Component(
         "sitemap",
         "/sitemap.xml live and reachable",
         Family.CONTENT,
@@ -517,6 +534,7 @@ COMPONENTS: tuple[Component, ...] = (
         'curl -sI <site>/ | grep -i "^link:"',
         artifact="_headers",
         why="Advertises the agent surfaces without an agent having to guess paths.",
+        templated=True,
     ),
     Component(
         "markdown-negotiation",
@@ -528,6 +546,7 @@ COMPONENTS: tuple[Component, ...] = (
         _mix(YES, COND, COND),
         'curl -H "Accept: text/markdown" <site>/ | wc -c',
         why="The one item with measured benefit: roughly a five-fold drop in payload.",
+        templated=True,
     ),
     Component(
         "webmcp",
@@ -542,6 +561,29 @@ COMPONENTS: tuple[Component, ...] = (
         why="Exposes in-page tools to an agent driving the browser.",
     ),
 )
+
+
+# Host-specific notes for the one component with no portable answer. They live
+# beside the component rather than in `bundle`, which is where they started: a
+# fact about what a platform can do belongs with the thing it constrains, not
+# with the code that happens to render it. Where the platform is unknown the
+# generic wording is used -- a wrong hint costs a developer an afternoon before
+# they find out, an unspecific one costs a search.
+HEADER_HINTS: dict[str, str] = {
+    "shopify": (
+        "Shopify does not expose response headers. Serve the Link header from a "
+        "reverse proxy in front of the store, or skip this item."
+    ),
+    "wordpress": (
+        "Add to the server config rather than a plugin: `Header add Link` in "
+        "Apache, or `add_header Link` in nginx."
+    ),
+    "nextjs": "Set it in `headers()` in next.config.js, or in a Cloudflare `_headers` file.",
+    "wix": "Wix does not allow custom response headers. This item is not achievable there.",
+    "squarespace": "Squarespace does not allow custom response headers on the root domain.",
+}
+
+GENERIC_HEADER_HINT = "Set the same Link headers wherever your host allows response headers."
 
 
 BY_KEY: dict[str, Component] = {c.key: c for c in COMPONENTS}

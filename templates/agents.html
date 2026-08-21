@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}agents.md{% endblock %}
+{% block title %}Site overview{% endblock %}
 
 {% block content %}
 <div class="panel">
-    <h2>Generate an agents.md</h2>
+    <h2>Generate for a site</h2>
     <form method="post" action="/agents">
         <div class="row">
             <div>
@@ -16,16 +16,49 @@
             </div>
         </div>
         <p class="muted">
-            Checks what the site already publishes &mdash; <code>/agents.md</code>,
-            <code>/.well-known/ucp</code>, <code>/llms.txt</code> &mdash; before writing
-            anything. Nothing is claimed in the generated file that was not found here.
+            Reads what the site already publishes before writing anything. Nothing is
+            claimed in a generated file that was not found here.
         </p>
     </form>
 </div>
 
 {% if probe %}
 <div class="panel">
-    <h3>What {{ probe.site_url }} publishes today</h3>
+    <div class="spread">
+        <h3>{{ probe.site_url }}</h3>
+        <span class="muted">{{ tech.platform.value if tech else 'unknown' }}</span>
+    </div>
+
+    <div class="stat-grid">
+        {% if readiness %}
+        <div class="stat">
+            <div class="k">Agent readiness</div>
+            <div class="v">{{ readiness.score }}/100</div>
+        </div>
+        {% endif %}
+        {% if status %}
+        <div class="stat">
+            <div class="k">Components live</div>
+            <div class="v">{{ status.live_count }} of {{ status.applicable_count }}</div>
+        </div>
+        {% endif %}
+        {% if doc and doc.transactional and probe.has_ucp %}
+        <div class="stat">
+            <div class="k">UCP</div>
+            <div class="v">
+                <a href="{{ probe.ucp.url }}" target="_blank" rel="noopener">{{ doc.ucp_version or 'declared' }}</a>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if tech and tech.platform_evidence %}
+    <p class="hint">Platform evidence: {{ tech.platform_evidence }}</p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h3>What the site publishes today</h3>
     <table>
         <thead><tr><th>Surface</th><th>State</th><th>Detail</th></tr></thead>
         <tbody>
@@ -42,232 +75,34 @@
         {% endfor %}
         </tbody>
     </table>
-
     {% if probe.notes %}
     <ul class="notes">
         {% for note in probe.notes %}<li class="info">{{ note }}</li>{% endfor %}
     </ul>
     {% endif %}
+</div>
+{% endif %}
 
-    <div class="stat-grid" style="margin-top:1rem">
-        <div class="stat">
-            <div class="k">Platform</div>
-            <div class="v">{{ tech.platform.value if tech else probe.platform }}</div>
-        </div>
-        {% if doc and doc.transactional and probe.has_ucp %}
-        <div class="stat">
-            <div class="k">UCP</div>
-            <div class="v">
-                <a href="{{ probe.ucp.url }}" target="_blank" rel="noopener">{{ doc.ucp_version or 'declared' }}</a>
-            </div>
-        </div>
-        {% endif %}
-        <div class="stat">
-            <div class="k">Endpoints we may cite</div>
-            <div class="v">{{ (tech.endpoints|length if tech else 0) + probe.verified_endpoints|length }}</div>
-        </div>
-    </div>
-
-    {% if tech and tech.platform_evidence %}
-    <p class="hint">Platform evidence: {{ tech.platform_evidence }}</p>
-    {% endif %}
-
-    {% if tech and tech.endpoints %}
-    <h4>Machine-readable surfaces</h4>
+{% if status %}
+<div class="panel">
+    <h3>Where each group stands</h3>
     <table>
-        <thead><tr><th>Surface</th><th>URL</th><th>Evidence</th></tr></thead>
+        <thead><tr><th>Group</th><th class="num" colspan="4">Components</th></tr></thead>
         <tbody>
-        {% for d in tech.endpoints %}
-        <tr>
-            <td>{{ d.name }}</td>
-            <td><span class="url">{{ d.url }}</span></td>
-            <td class="muted">{{ d.evidence }}</td>
-        </tr>
+        {% for family, label, counts in family_rows %}
+        {% include "partials/family_summary.html" %}
         {% endfor %}
         </tbody>
     </table>
     <p class="hint">
-        Each answered with the expected content type. A path returning HTML is a page,
-        not an endpoint, and is not listed.
+        Each group is a tab with the detail, the generated file and the command to
+        verify it.
     </p>
-    {% endif %}
-</div>
-{% endif %}
-
-{% if bundle %}
-<div class="panel">
-    <h3>Files for this scenario</h3>
-    <p class="muted">
-        Goal: <strong>{{ bundle.scenario.replace('_', ' ') }}</strong>.
-        {{ bundle.artifacts|length }} file{{ '' if bundle.artifacts|length == 1 else 's' }} to publish.
-    </p>
-    <table>
-        <thead><tr><th>File</th><th>Serve at</th><th></th></tr></thead>
-        <tbody>
-        {% for a in bundle.artifacts %}
-        <tr>
-            <td>{{ a.name }}</td>
-            <td><span class="url">{{ a.path }}</span></td>
-            <td class="right">
-                <a href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind={{ a.name|urlencode }}">Download</a>
-            </td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-
-    {% if bundle.not_needed %}
-    <p class="hint">
-        Not needed for this goal: {{ bundle.not_needed|join(', ') }}. That is a decision,
-        not an omission &mdash; publishing a file a site has no use for gives an agent
-        one more thing to fetch and nothing more to act on.
-    </p>
-    {% endif %}
-
-    {% if bundle.notes %}
-    <ul class="notes">
-        {% for note in bundle.notes %}<li class="info">{{ note }}</li>{% endfor %}
-    </ul>
-    {% endif %}
-</div>
-
-<div class="panel">
-    <h3>Deployment dependencies</h3>
-    <p class="muted">
-        Grouped by who has to do it. The uploads can be actioned today; everything
-        below them needs someone with access to the server, the templates or the
-        stack &mdash; and a list that mixes the two is a list nobody starts.
-    </p>
-
-    {% for effort, tasks in bundle.tasks_by_effort().items() %}
-    <h4>{{ effort_labels[effort] }}</h4>
-    <p class="hint">{{ effort_owners[effort] }}</p>
-    <ul class="notes">
-        {% for t in tasks %}
-        <li class="{% if t.blocked_by %}error{% else %}info{% endif %}">
-            <strong>{{ t.component }}</strong> &mdash; {{ t.what }}
-            {% if t.platform_hint %}<br><span class="muted">{{ t.platform_hint }}</span>{% endif %}
-            {% if t.blocked_by %}<br><span class="muted">Blocked: {{ t.blocked_by }}</span>{% endif %}
-        </li>
-        {% endfor %}
-    </ul>
-    {% endfor %}
-</div>
-{% endif %}
-
-{% if readiness %}
-<div class="panel">
-    <h3>Agent readiness &mdash; {{ readiness.score }}/100</h3>
-    <p class="muted">{{ readiness.summary() }}</p>
-
-    {% if readiness.failures %}
-    <table>
-        <thead><tr><th>Priority</th><th>Component</th><th>Detail</th></tr></thead>
-        <tbody>
-        {% for r in readiness.failures %}
-        <tr>
-            <td><span class="pill {% if r.item.priority.value == 'Must' %}bad{% else %}wait{% endif %}">{{ r.item.priority.value }}</span></td>
-            <td>{{ r.item.component }}</td>
-            <td class="muted">{{ r.detail }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p class="muted">Everything checkable from here passed.</p>
-    {% endif %}
-
-    {% if readiness.manual %}
-    <h4>Needs a browser</h4>
-    <p class="muted">
-        These are page-level checks &mdash; layout stability, semantic HTML, tap
-        targets. They are excluded from the score rather than assumed to pass.
-    </p>
-    <ul class="notes">
-        {% for r in readiness.manual %}
-        <li class="info">{{ r.item.component }} &mdash; <code>{{ r.detail }}</code></li>
-        {% endfor %}
-    </ul>
-    {% endif %}
-</div>
-{% endif %}
-
-{% if doc %}
-<div class="panel">
-    <h3>Generated file</h3>
-    <p class="muted">
-        Profile: <strong>{{ doc.profile }}</strong>.
-        {% if not doc.transactional %}
-        This shape does not transact, so the file says so explicitly rather than
-        describing a checkout it does not have.
-        {% endif %}
-    </p>
-    <pre class="doc">{{ rendered }}</pre>
 
     <div class="row">
-        <a class="button" href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind=md">
-            Download agents.md
-        </a>
-        {% if probe.is_shopify %}
-        <a class="button" href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind=liquid">
-            Download agents.md.liquid
-        </a>
-        {% endif %}
-        {% if catalog and catalog.worth_publishing %}
-        <a class="button" href="/agents/download?site={{ probe.site_url|urlencode }}&amp;kind=catalog">
-            Download ai-catalog.json
-        </a>
-        {% endif %}
+        <a class="button" href="/sites/{{ domain }}/checklist">Your checklist ({{ client_count }})</a>
+        <a class="button" href="/sites/{{ domain }}/handover">Developer handover ({{ dev_count }})</a>
     </div>
-
-    {% if catalog %}
-    <h4>Agentic Resource Discovery</h4>
-    {% if catalog.worth_publishing %}
-    <p class="muted">
-        {{ catalog.entries|length }} verified capabilit{{ 'y' if catalog.entries|length == 1 else 'ies' }}
-        to publish at <code>/.well-known/ai-catalog.json</code>.
-    </p>
-    <ul class="notes">
-        {% for entry in catalog.entries %}
-        <li class="info">
-            <strong>{{ entry.display_name }}</strong> &mdash;
-            <span class="url">{{ entry.url }}</span>
-            <br><span class="muted">{{ entry.evidence }}</span>
-        </li>
-        {% endfor %}
-    </ul>
-    {% else %}
-    <p class="muted">{{ catalog.notes[0] }}</p>
-    {% endif %}
-    <p class="hint">
-        Agentic Resource Discovery is a v0.9 draft published 17 June 2026 by Google
-        with ten partners. Adoption is near zero &mdash; publishing this is being
-        early, not being compliant.
-    </p>
-    {% endif %}
-
-    {% if probe.is_shopify %}
-    <p class="hint">
-        This store is on Shopify, which serves its own <code>/agents.md</code>. Take the
-        Liquid template and place it at <code>templates/agents.md.liquid</code> in the
-        theme; a static file has nowhere to go on a Shopify store.
-    </p>
-    {% endif %}
 </div>
-
-{% if doc.omitted %}
-<div class="panel">
-    <h3>Left out, and why</h3>
-    <p class="muted">
-        Each of these would suit this kind of site. They were omitted because nothing
-        verified them &mdash; not because they were forgotten.
-    </p>
-    <ul class="notes">
-        {% for omission in doc.omitted %}
-        <li class="info"><strong>{{ omission.section.value.replace('_', ' ') }}</strong> &mdash; {{ omission.reason }}</li>
-        {% endfor %}
-    </ul>
-</div>
-{% endif %}
 {% endif %}
 {% endblock %}

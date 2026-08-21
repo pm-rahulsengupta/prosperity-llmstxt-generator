@@ -258,3 +258,117 @@ def test_the_nav_offers_every_family_and_both_action_lists():
         assert label in items, label
     assert "Your checklist" in items
     assert "Developer handover" in items
+
+
+# -- the overview -------------------------------------------------------------
+
+
+def _overview(**extra):
+    """The /agents overview, with whatever the route would have passed."""
+    from app.scrape.agents_probe import ProbeResult, Surface, SurfaceState
+
+    probe = ProbeResult(
+        site_url="https://x.example",
+        llms_txt=Surface(
+            url="https://x.example/llms.txt",
+            state=SurfaceState.PRESENT,
+            status=200,
+            content_type="text/markdown",
+        ),
+        agents_md=Surface(url="https://x.example/agents.md", state=SurfaceState.ABSENT, status=404),
+        notes=["Detected WordPress from a generator meta tag."],
+    )
+    from types import SimpleNamespace
+
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+    from app.core.templates_lib import build_templates
+
+    status = derive(
+        "https://x.example",
+        SiteType.CONTENT,
+        artifacts={"llms.txt": "# x", "robots.txt": "# r"},
+        templates=build_templates("https://x.example"),
+    )
+    context = {
+        "probe": probe,
+        "doc": SimpleNamespace(transactional=False, ucp_version="", site_name="X"),
+        "tech": SimpleNamespace(
+            platform=SimpleNamespace(value="wordpress"),
+            platform_evidence="generator meta tag",
+        ),
+        "catalog": None,
+        "readiness": SimpleNamespace(score=42),
+        "status": status,
+        "family_rows": status.family_counts(),
+        "client_count": len(status.for_client()),
+        "dev_count": len(status.for_developer()),
+        "bundle": None,
+        "rendered": "",
+        **extra,
+    }
+    return _render("agents.html", **context)
+
+
+def test_the_overview_renders_before_a_site_has_been_checked():
+    """The GET route passes nothing; StrictUndefined makes a forgotten key fail here."""
+    html = _render(
+        "agents.html",
+        probe=None,
+        doc=None,
+        tech=None,
+        catalog=None,
+        readiness=None,
+        status=None,
+        family_rows=[],
+        client_count=0,
+        dev_count=0,
+    )
+
+    assert "Check the site" in html
+    assert 'class="side"' in html
+
+
+def test_the_overview_answers_how_the_site_is_doing_without_opening_a_tab():
+    html = _overview()
+
+    assert "42/100" in html, "the readiness score"
+    assert "wordpress" in html, "the platform"
+    assert "llms.txt" in html, "what the site publishes today"
+    assert "Your checklist" in html and "Developer handover" in html
+
+
+def test_the_overview_counts_agree_with_the_tabs():
+    """Two derivations that disagree would make the overview worse than nothing."""
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+    from app.core.templates_lib import build_templates
+
+    status = derive(
+        "https://x.example",
+        SiteType.CONTENT,
+        artifacts={"llms.txt": "# x", "robots.txt": "# r"},
+        templates=build_templates("https://x.example"),
+    )
+    rows = status.family_counts()
+
+    assert sum(c["total"] for _, _, c in rows) == status.applicable_count
+    assert sum(c["live"] for _, _, c in rows) == status.live_count
+    for _, _, counts in rows:
+        assert (
+            counts["live"] + counts["ready"] + counts["template"] + counts["missing"]
+            == (counts["total"])
+        ), "a component in a state the overview does not count would vanish from the totals"
+
+
+def test_a_family_with_nothing_applicable_is_left_out_rather_than_shown_as_zero():
+    from app.core.components import SiteType
+    from app.core.site_state import ComponentState, derive
+
+    status = derive("https://x.example", SiteType.CONTENT)
+    for family, _, counts in status.family_counts():
+        assert counts["total"] > 0, family
+        applicable = [
+            s for s in status.family(family) if s.state is not ComponentState.NOT_APPLICABLE
+        ]
+        assert len(applicable) == counts["total"]

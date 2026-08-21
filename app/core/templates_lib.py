@@ -152,7 +152,69 @@ def webmcp_snippet(site_url: str, name: str = "") -> str:
     )
 
 
+def link_header_snippet(site_url: str, name: str = "", platform: str = "") -> str:
+    """Server config for the Link header, in the syntax the host actually uses.
+
+    The last component that handed a developer a paragraph. Two platforms cannot
+    do it at all, and saying so is more useful than a snippet they would spend an
+    afternoon failing to apply.
+    """
+    host = _host(site_url)
+    if platform in ("shopify", "wix", "squarespace"):
+        return f"""# {platform.title()} does not allow custom response headers on the
+# primary domain. This component is not achievable there without putting a
+# reverse proxy in front of the site, which is a larger decision than this file.
+"""
+
+    return f"""# Not a file to publish as-is: apply whichever block matches your host.
+
+# Cloudflare Pages / Netlify -- _headers at the site root
+/*
+  Link: </llms.txt>; rel="describedby"; type="text/markdown"
+  Link: </sitemap.xml>; rel="sitemap"
+
+# nginx
+#   add_header Link '</llms.txt>; rel="describedby"; type="text/markdown"' always;
+
+# Apache
+#   Header add Link "</llms.txt>; rel=\\"describedby\\"; type=\\"text/markdown\\""
+
+# Confirm with: curl -sI https://{host}/ | grep -i '^link:'
+"""
+
+
+def markdown_negotiation_snippet(site_url: str, name: str = "", platform: str = "") -> str:
+    """Return markdown when the request asks for it.
+
+    The one component with measured benefit rather than assumed: roughly a
+    five-fold drop in payload for agents already fetching the site. There is no
+    portable implementation, so this shows the shape in both places it can live.
+    """
+    host = _host(site_url)
+    return f"""# Not a file to publish: this is where the behaviour goes, not a document.
+
+# Cloudflare -- a Transform Rule on the response, when
+#   http.request.headers['accept'][0] contains 'text/markdown'
+
+# Or in the application, wherever the response is built:
+#
+#   accept = request.headers.get('accept', '')
+#   if 'text/markdown' in accept:
+#       return Response(render_markdown(page), media_type='text/markdown')
+
+# It counts as negotiated only when BOTH the content type and the payload
+# change. Many sites return the same HTML under a markdown header, which is
+# worse than not offering it -- the agent pays for the request and gains nothing.
+
+# Confirm with:
+#   curl -s https://{host}/ | wc -c
+#   curl -s -H 'Accept: text/markdown' https://{host}/ | wc -c
+"""
+
+
 BUILDERS = {
+    "link-header": link_header_snippet,
+    "markdown-negotiation": markdown_negotiation_snippet,
     "mcp-card": mcp_server_card,
     "a2a-card": a2a_agent_card,
     "oauth-resource": oauth_protected_resource,
@@ -166,6 +228,14 @@ def _host(site_url: str) -> str:
     return site_url.split("//")[-1].strip("/").removeprefix("www.")
 
 
-def build_templates(site_url: str, site_name: str = "") -> dict[str, str]:
+def build_templates(site_url: str, site_name: str = "", platform: str = "") -> dict[str, str]:
     """Every template, keyed by component. Cheap enough to build unconditionally."""
-    return {key: builder(site_url, site_name) for key, builder in BUILDERS.items()}
+    built: dict[str, str] = {}
+    for key, builder in BUILDERS.items():
+        try:
+            built[key] = builder(site_url, site_name, platform)
+        except TypeError:
+            # The service templates take no platform; only the two server-config
+            # ones vary by host.
+            built[key] = builder(site_url, site_name)
+    return built

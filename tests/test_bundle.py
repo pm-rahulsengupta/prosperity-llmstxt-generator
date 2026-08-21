@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.bundle import (
-    SCENARIO_FILES,
+    SCENARIO_COMPONENTS,
     DeclaredEndpoint,
     Effort,
     build_bundle,
@@ -43,7 +43,23 @@ def test_every_primary_action_has_a_scenario():
     for action in PrimaryAction:
         if action is PrimaryAction.UNDECIDED:
             continue
-        assert action.value in SCENARIO_FILES, action
+        assert action.value in SCENARIO_COMPONENTS, action
+
+
+def test_every_scenario_names_components_that_exist():
+    """The reason the table is keyed on components rather than filenames.
+
+    It caught its first mistake immediately: `llms-full.txt` was named here and
+    had no component behind it, so the filename existed in this table and
+    nowhere else in the tool.
+    """
+    from app.core.components import by_key
+
+    for scenario, keys in SCENARIO_COMPONENTS.items():
+        for key in keys:
+            component = by_key(key)
+            assert component is not None, f"{scenario} names unknown component {key}"
+            assert component.artifact, f"{scenario} names {key}, which produces no file"
 
 
 def test_a_shop_gets_the_catalog_and_a_firm_does_not():
@@ -159,14 +175,27 @@ def test_an_unverified_openapi_url_is_not_advertised():
 # -- deployment dependencies --------------------------------------------------
 
 
+def title(key: str) -> str:
+    """Resolve a component's name through the registry.
+
+    The tests used to hardcode labels like "Link headers" while the registry
+    called it "Link HTTP header with agent-aware rels" -- two names for one
+    thing, which is the drift the consolidation removed. Looking it up means a
+    renamed component updates its own tests.
+    """
+    from app.core.components import by_key
+
+    return by_key(key).title
+
+
 def test_the_developer_work_is_carried_not_dropped():
-    """Link headers, Markdown negotiation and Layer 1 produce no downloadable
-    file, and a bundle of files alone hands over only the easy half."""
+    """Link headers, Markdown negotiation and the page checks produce no
+    downloadable file, and a bundle of files alone hands over only the easy half.
+    """
     tasks = {t.component for t in bundle_for("contact_agency").developer_tasks}
 
-    assert "Link headers" in tasks
-    assert "Markdown negotiation" in tasks
-    assert "Layer 1 page checks" in tasks
+    for key in ("link-header", "markdown-negotiation", "cls", "semantic-html"):
+        assert title(key) in tasks, key
 
 
 def test_uploads_are_separated_from_everything_that_blocks_on_a_developer():
@@ -188,14 +217,14 @@ def test_platform_constraints_are_stated_rather_than_assumed_away(platform, expe
     with the item still not done.
     """
     bundle = bundle_for("contact_agency", platform=platform)
-    task = next(t for t in bundle.tasks if t.component == "Link headers")
+    task = next(t for t in bundle.tasks if t.component == title("link-header"))
 
     assert expected in task.platform_hint
 
 
 def test_an_unknown_platform_gets_generic_wording_rather_than_a_wrong_guess():
     bundle = bundle_for("contact_agency", platform="")
-    task = next(t for t in bundle.tasks if t.component == "Link headers")
+    task = next(t for t in bundle.tasks if t.component == title("link-header"))
 
     assert "wherever your host allows" in task.platform_hint
 
@@ -209,7 +238,7 @@ def test_a_declared_but_unreachable_service_becomes_an_infrastructure_task():
         agents_md="# a",
         ai_catalog="{}",
     )
-    task = next(t for t in bundle.tasks if t.component == "MCP server")
+    task = next(t for t in bundle.tasks if t.component == title("mcp-card"))
 
     assert task.effort is Effort.INFRASTRUCTURE
     assert "502" in task.blocked_by
@@ -219,6 +248,6 @@ def test_a_declared_but_unreachable_service_becomes_an_infrastructure_task():
 def test_choosing_to_block_training_adds_a_cdn_task():
     """robots.txt alone does not produce that outcome; the CDN overrides it."""
     bundle = bundle_for("contact_agency", answers={"ai_bot_policy": "allow_search_only"})
-    task = next(t for t in bundle.tasks if t.component == "CDN AI crawler settings")
+    task = next(t for t in bundle.tasks if t.component == title("web-bot-auth"))
 
     assert "Googlebot" in task.platform_hint

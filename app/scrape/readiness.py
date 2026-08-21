@@ -101,6 +101,11 @@ class ReadinessReport:
     site_url: str
     site_type: SiteType
     results: list[CheckResult] = field(default_factory=list)
+    # The pages the page-level checks actually read. A score from one page and a
+    # score from five are not the same measurement, and without this nothing
+    # distinguishes them -- which is how the same site read 42 on one route and
+    # 53 on another, with no indication that the routes had sampled differently.
+    sampled: list[str] = field(default_factory=list)
 
     @property
     def score(self) -> int:
@@ -125,9 +130,14 @@ class ReadinessReport:
         )
 
     def summary(self) -> str:
+        pages = (
+            f" Page checks read {len(self.sampled)} page(s)."
+            if len(self.sampled) > 1
+            else " Page checks read the homepage only, so template-level faults may be missed."
+        )
         return (
             f"{self.score}/100 across {len(self.checked)} automated checks; "
-            f"{len(self.manual)} need a browser and were not checked here."
+            f"{len(self.manual)} need a browser and were not checked here.{pages}"
         )
 
 
@@ -455,6 +465,26 @@ def _state_for(response: httpx.Response | None, expect: tuple[str, ...]) -> tupl
     return CheckState.PASS, f"{response.status_code} {content_type or 'no content type'}"
 
 
+def sample_from_sources(url_sources: dict[str, str], limit: int = MAX_SAMPLES) -> list[str]:
+    """One page per sitemap group, in the order the sitemaps were read.
+
+    The single definition of how this tool samples a site. It exists because two
+    routes decided independently and disagreed: the onboarding wizard sampled
+    sitemap groups and scored prosperitymedia at 42, while the overview read the
+    homepage alone and scored it 53. Neither was wrong about its own checks, and
+    a reader had no way to tell that the two numbers were different measurements.
+
+    Sitemap group rather than URL template, because on a flat WordPress site every
+    page is `/{slug}` and the path carries no distinction at all -- while
+    `post-sitemap` and `page-sitemap` still separate a blog post from a service
+    page. Where a site's shapes do differ the two agree anyway.
+    """
+    seen: dict[str, str] = {}
+    for url, source in url_sources.items():
+        seen.setdefault(source, url)
+    return list(seen.values())[:limit]
+
+
 async def audit_readiness(
     site_url: str,
     user_agent: str,
@@ -507,6 +537,8 @@ async def audit_readiness(
                 sampled = await _fetch(client, url)
             if sampled is not None and sampled.status_code < 400:
                 pages.append((url, sampled.text))
+
+    report.sampled = [url for url, _ in pages]
 
     robots_body = ""
     if (robots := by_key.get("robots")) is not None and robots.status_code < 400:

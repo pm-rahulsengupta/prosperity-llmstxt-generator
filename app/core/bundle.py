@@ -26,14 +26,32 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import date
-from enum import StrEnum
 
 import httpx
 
+from app.core.components import (
+    COMPONENTS,
+    EFFORT_LABELS,
+    EFFORT_OWNERS,
+    GENERIC_HEADER_HINT,
+    HEADER_HINTS,
+    Effort,
+    SiteType,
+    by_key,
+    for_developer,
+)
 from app.core.onboarding import BotPolicy, SiteBrief
 
+# Re-exported, not redefined. `bundle` used to declare its own `Effort` with the
+# same members, and because both were StrEnum the cross-module dictionary lookup
+# in the handover page hashed identically and worked -- by accident. Two classes,
+# `is` comparison false, one `KeyError` away from a broken page the moment either
+# stopped being a StrEnum or a member value changed. The identity is asserted in
+# the tests now rather than left to coincidence.
 __all__ = [
-    "SCENARIO_FILES",
+    "EFFORT_LABELS",
+    "EFFORT_OWNERS",
+    "SCENARIO_COMPONENTS",
     "Artifact",
     "Bundle",
     "DeploymentTask",
@@ -41,6 +59,7 @@ __all__ = [
     "build_bundle",
     "render_headers",
     "render_robots",
+    "scenario_files",
     "verify_declared",
 ]
 
@@ -48,36 +67,6 @@ __all__ = [
 # monthly while the policy behind it does not.
 SEARCH_BOTS = ("OAI-SearchBot", "PerplexityBot", "ClaudeBot", "Google-Extended")
 TRAINING_BOTS = ("GPTBot", "CCBot", "anthropic-ai")
-
-
-class Effort(StrEnum):
-    """Who has to do the work, which decides who the item goes to.
-
-    A generated file and a server change look alike on a checklist and are
-    nothing alike in a client's week. Handing a marketing manager a list that
-    mixes "upload this file" with "implement content negotiation at the edge"
-    produces a list nobody starts, because the first blocked item stops it.
-    """
-
-    DROP_IN = "drop_in"
-    SERVER_CONFIG = "server_config"
-    CODE_CHANGE = "code_change"
-    INFRASTRUCTURE = "infrastructure"
-
-
-EFFORT_LABELS: dict[Effort, str] = {
-    Effort.DROP_IN: "Upload the file",
-    Effort.SERVER_CONFIG: "Server, CDN or host configuration",
-    Effort.CODE_CHANGE: "Template or front-end change",
-    Effort.INFRASTRUCTURE: "Stand up a service",
-}
-
-EFFORT_OWNERS: dict[Effort, str] = {
-    Effort.DROP_IN: "Anyone with access to the web root or CMS",
-    Effort.SERVER_CONFIG: "Whoever administers the CDN or web server",
-    Effort.CODE_CHANGE: "The site's front-end developer",
-    Effort.INFRASTRUCTURE: "A backend engineer; this is a build, not a setting",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,31 +149,39 @@ class Bundle:
         return [t for t in self.tasks if t.effort is not Effort.DROP_IN]
 
 
-# Which files each scenario calls for. Keyed on the operator's stated goal, which
-# is the only input that describes intent rather than structure.
-SCENARIO_FILES: dict[str, tuple[str, ...]] = {
-    "contact_local_business": ("robots.txt", "llms.txt", "agents.md", "_headers"),
-    "contact_agency": ("robots.txt", "llms.txt", "agents.md", "_headers"),
-    "book_appointment": ("robots.txt", "llms.txt", "agents.md", "_headers"),
-    "read_and_cite": ("robots.txt", "llms.txt", "llms-full.txt", "agents.md", "_headers"),
-    "shop_on_store": ("robots.txt", "llms.txt", "agents.md", "_headers", "ai-catalog.json"),
-    "find_local_inventory": (
-        "robots.txt",
-        "llms.txt",
-        "agents.md",
-        "_headers",
-        "ai-catalog.json",
-    ),
-    "use_the_api": (
-        "robots.txt",
-        "llms.txt",
-        "agents.md",
-        "_headers",
-        "ai-catalog.json",
-    ),
+# Which components each scenario calls for. Keyed on the operator's stated goal,
+# because which files a *goal* needs is a product decision rather than a property
+# of any component -- this is the one table that is genuinely not derivable.
+#
+# Keyed on component keys rather than filenames, so a typo fails a test instead
+# of silently naming a file nothing produces. The filenames come from the
+# registry, which is the only place they are written down.
+# The goals that involve money changing hands, which decides whether the
+# developer list includes the commerce components at all.
+TRANSACTIONAL_SCENARIOS = frozenset({"shop_on_store", "find_local_inventory"})
+
+SCENARIO_COMPONENTS: dict[str, tuple[str, ...]] = {
+    "contact_local_business": ("robots", "llms-txt", "agents-md", "link-header"),
+    "contact_agency": ("robots", "llms-txt", "agents-md", "link-header"),
+    "book_appointment": ("robots", "llms-txt", "agents-md", "link-header"),
+    "read_and_cite": ("robots", "llms-txt", "llms-full", "agents-md", "link-header"),
+    "shop_on_store": ("robots", "llms-txt", "agents-md", "link-header", "ai-catalog"),
+    "find_local_inventory": ("robots", "llms-txt", "agents-md", "link-header", "ai-catalog"),
+    "use_the_api": ("robots", "llms-txt", "agents-md", "link-header", "ai-catalog"),
 }
 
-ALL_FILES = ("robots.txt", "llms.txt", "llms-full.txt", "agents.md", "_headers", "ai-catalog.json")
+
+def scenario_files(scenario: str) -> tuple[str, ...]:
+    """The filenames a scenario calls for, resolved through the registry."""
+    keys = SCENARIO_COMPONENTS.get(scenario, SCENARIO_COMPONENTS["contact_agency"])
+    return tuple(
+        component.artifact
+        for key in keys
+        if (component := by_key(key)) is not None and component.artifact
+    )
+
+
+ALL_FILES = tuple(dict.fromkeys(c.artifact for c in COMPONENTS if c.artifact))
 
 # Content type expected of each declared endpoint kind.
 DECLARED_EXPECT = {
@@ -303,34 +300,21 @@ def render_headers(site_url: str, has_llms: bool, has_catalog: bool, openapi_url
 # the platform is unknown the generic wording is used, because a wrong hint costs
 # more than an unspecific one -- a developer following instructions for the wrong
 # CDN loses an afternoon before finding out.
-HEADER_HINTS: dict[str, str] = {
-    "shopify": (
-        "Shopify does not expose response headers. Serve the Link header from a "
-        "reverse proxy in front of the store, or skip this item."
-    ),
-    "wordpress": (
-        "Add to the server config rather than a plugin: `Header add Link` in "
-        "Apache, or `add_header Link` in nginx."
-    ),
-    "nextjs": "Set it in `headers()` in next.config.js, or in a Cloudflare `_headers` file.",
-    "wix": "Wix does not allow custom response headers. This item is not achievable there.",
-    "squarespace": "Squarespace does not allow custom response headers on the root domain.",
-}
-
-
 def _deployment_tasks(bundle: Bundle, brief: SiteBrief, platform: str) -> list[DeploymentTask]:
-    """The work that produces no downloadable file.
+    """The work that produces no downloadable file, projected from the registry.
 
-    Half the checklist lives here. `Link` headers, Markdown negotiation, WebMCP
-    and the accessibility items are changes to how a site answers or how it is
-    built, and a bundle that listed only files would hand a client the easy half
-    and quietly drop the rest.
+    This began as a hand-written list that happened to agree with the checklist,
+    which is the arrangement that drifts: adding a component wired it into the
+    audit and left the handover silent about it. Every developer task is now
+    derived from `for_developer()`, so the two cannot disagree.
+
+    The uploads are still enumerated from the bundle's own artefacts, because
+    which files were actually produced is a fact about this run rather than about
+    the registry.
     """
     tasks: list[DeploymentTask] = []
 
     for artifact in bundle.artifacts:
-        if artifact.name == "_headers":
-            continue
         tasks.append(
             DeploymentTask(
                 component=artifact.name,
@@ -340,77 +324,37 @@ def _deployment_tasks(bundle: Bundle, brief: SiteBrief, platform: str) -> list[D
             )
         )
 
-    if bundle.get("_headers") is not None:
-        tasks.append(
-            DeploymentTask(
-                component="Link headers",
-                effort=Effort.SERVER_CONFIG,
-                what=(
-                    "Advertise the agent surfaces in the Link response header on every "
-                    "page. The generated `_headers` file covers Cloudflare Pages."
-                ),
-                platform_hint=HEADER_HINTS.get(
-                    platform,
-                    "Set the same Link headers wherever your host allows response headers.",
-                ),
-            )
-        )
-
-    tasks.append(
-        DeploymentTask(
-            component="Markdown negotiation",
-            effort=Effort.SERVER_CONFIG,
-            what=(
-                "Return markdown when the request carries `Accept: text/markdown`. This "
-                "is the one item with measured benefit rather than assumed: roughly a "
-                "five-fold drop in payload for agents already fetching the site."
-            ),
-            platform_hint=(
-                "Cloudflare offers it as a transform. Otherwise it is a content-negotiation "
-                "branch in the application."
-            ),
-        )
+    site_type = (
+        SiteType.ECOMMERCE if bundle.scenario in TRANSACTIONAL_SCENARIOS else SiteType.CONTENT
     )
-
-    tasks.append(
-        DeploymentTask(
-            component="Layer 1 page checks",
-            effort=Effort.CODE_CHANGE,
-            what=(
-                "Semantic HTML, roles on clickable divs, form labels, 24px tap targets, "
-                "layout stability and no ghost overlays. Agents walking the accessibility "
-                "tree depend on these, and no generated file substitutes for them."
-            ),
-            platform_hint="Verify with `npx lighthouse <site> --view` and an accessibility tree walk.",
-        )
-    )
-
-    if brief.mcp_server_url and not any(d.kind == "mcp" and d.verified for d in bundle.declared):
-        tasks.append(
-            DeploymentTask(
-                component="MCP server",
-                effort=Effort.INFRASTRUCTURE,
-                what="An MCP server was declared but did not answer, so nothing references it.",
-                blocked_by=next(
-                    (d.detail for d in bundle.declared if d.kind == "mcp"), "not reachable"
-                ),
+    for component in for_developer(site_type):
+        hint = ""
+        blocked = ""
+        if component.key == "link-header":
+            hint = HEADER_HINTS.get(platform, GENERIC_HEADER_HINT)
+        elif component.key == "markdown-negotiation":
+            hint = (
+                "Cloudflare offers it as a transform. Otherwise it is a "
+                "content-negotiation branch in the application."
             )
-        )
+        elif component.key == "web-bot-auth" and brief.ai_bot_policy is BotPolicy.ALLOW_SEARCH_ONLY:
+            hint = (
+                "On Cloudflare, blocking Training also blocks Googlebot, Bingbot and "
+                "Applebot from 15 September 2026 -- multi-purpose crawlers are judged "
+                "by their strictest rule. Confirm this is intended before enabling it."
+            )
+        elif component.key == "mcp-card" and brief.mcp_server_url:
+            declared = next((d for d in bundle.declared if d.kind == "mcp"), None)
+            if declared is not None and not declared.verified:
+                blocked = declared.detail or "not reachable"
 
-    if brief.ai_bot_policy is BotPolicy.ALLOW_SEARCH_ONLY:
         tasks.append(
             DeploymentTask(
-                component="CDN AI crawler settings",
-                effort=Effort.SERVER_CONFIG,
-                what=(
-                    "robots.txt alone will not produce the stated policy. Check the CDN's "
-                    "own AI crawler controls, which override it."
-                ),
-                platform_hint=(
-                    "On Cloudflare, blocking Training also blocks Googlebot, Bingbot and "
-                    "Applebot from 15 September 2026 — multi-purpose crawlers are judged by "
-                    "their strictest rule. Confirm this is intended before enabling it."
-                ),
+                component=component.title,
+                effort=component.effort,
+                what=component.why or component.verify,
+                platform_hint=hint or component.verify,
+                blocked_by=blocked,
             )
         )
 
@@ -431,7 +375,7 @@ def build_bundle(
 ) -> Bundle:
     """Assemble every file this scenario calls for, and name the ones it does not."""
     scenario = brief.primary_action.value or "contact_agency"
-    wanted = SCENARIO_FILES.get(scenario, SCENARIO_FILES["contact_agency"])
+    wanted = scenario_files(scenario)
 
     bundle = Bundle(site_url=site_url, scenario=scenario, declared=list(declared or []))
 

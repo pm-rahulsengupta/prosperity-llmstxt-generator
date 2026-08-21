@@ -94,6 +94,7 @@ def test_a_near_miss_pattern_does_not_over_delete():
 
     assert n_narrow == 1 and "https://x.com/inventory/" in narrow
     assert n_broad == 2, "a broad pattern takes both, which is why it is reported"
+    assert "x.com/inventory" not in broad, "the count is not enough -- the lines must be gone"
 
 
 # -- the report ---------------------------------------------------------------

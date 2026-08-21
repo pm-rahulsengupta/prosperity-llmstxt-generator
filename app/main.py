@@ -88,7 +88,7 @@ from app.nav import build_nav
 from app.scrape.agents_probe import probe_site
 from app.scrape.discover import discover, normalise_site_url
 from app.scrape.extract import extract
-from app.scrape.readiness import audit_readiness
+from app.scrape.readiness import audit_readiness, sample_from_sources
 from app.scrape.tech_probe import probe_tech
 
 logger = logging.getLogger(__name__)
@@ -491,15 +491,11 @@ async def suggest_brief_route(
     # telling them once they have stopped looking.
     # One page per sitemap group, so the page checks see the templates rather than
     # only the homepage -- which is the least representative page most sites have.
-    seen_groups: dict[str, str] = {}
-    for url, source in recon.url_sources.items():
-        seen_groups.setdefault(source, url)
-
     readiness = await audit_readiness(
         site_url,
         settings.crawl_user_agent,
         SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
-        sample_urls=list(seen_groups.values()),
+        sample_urls=sample_from_sources(recon.url_sources),
     )
 
     stored = await repo.load_brief(session, domain)
@@ -692,16 +688,6 @@ async def _agents_document(session: AsyncSession, normalised: str):
     # the page is not waiting on a crawl.
     probe = await probe_site(normalised, settings.crawl_user_agent)
     tech = await probe_tech(normalised, settings.crawl_user_agent)
-    # The readiness audit runs after, not alongside. It is nine more requests to
-    # the same host, and firing them concurrently with the other two probes is how
-    # a small site starts refusing us and we report our own impatience as its
-    # shortcomings.
-    readiness = await audit_readiness(
-        normalised,
-        settings.crawl_user_agent,
-        SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
-    )
-
     domain = urlparse(normalised).netloc
     config = await repo.load_site_config(session, domain)
     brief = await repo.load_brief(session, domain)
@@ -728,6 +714,33 @@ async def _agents_document(session: AsyncSession, normalised: str):
         # Machine-readable endpoints first: an agent can parse those, and the
         # crawled pages are the human-readable fallback behind them.
         read_only = read_only + crawled
+
+    # The readiness audit runs after the probes, not alongside. It is nine more
+    # requests to the same host, and firing them concurrently with the other two
+    # is how a small site starts refusing us and we report our own impatience as
+    # its shortcomings.
+    #
+    # It samples one page per sitemap group, by the same rule the onboarding
+    # wizard uses. Until now this route read the homepage alone: the same site
+    # scored 42 in the wizard and 53 here, and nothing on either page said the
+    # two numbers came from different samples. The sitemaps are re-read rather
+    # than recovered from the crawl because the crawl does not record which
+    # sitemap a page came from, and on a flat WordPress site the URL path
+    # carries no distinction to fall back on.
+    try:
+        recon = await discover(normalised, settings.crawl_user_agent)
+        page_sample = sample_from_sources(recon.url_sources)
+    except (httpx.HTTPError, ValueError):
+        # A site whose sitemaps we cannot read still gets a homepage audit, and
+        # `report.sampled` will say that is all it was.
+        page_sample = []
+
+    readiness = await audit_readiness(
+        normalised,
+        settings.crawl_user_agent,
+        SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
+        sample_urls=page_sample,
+    )
 
     # The profile comes from that same run when there is one: agents.md and
     # llms.txt describe the same site, and disagreeing about its shape would be
@@ -790,6 +803,11 @@ async def agents_page(request: Request, user: User = Depends(require_user)):
             "tech": None,
             "catalog": None,
             "readiness": None,
+            "status": None,
+            "family_rows": [],
+            "domain": "",
+            "client_count": 0,
+            "dev_count": 0,
         },
     )
 
@@ -813,6 +831,8 @@ async def agents_generate(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     probe, doc, tech, catalog, readiness, bundle = await _agents_document(session, normalised)
+    domain = normalised.split("//")[-1].strip("/")
+    site_status = await _derive_state(session, domain, doc, tech, readiness, bundle)
 
     return templates.TemplateResponse(
         request,
@@ -827,6 +847,11 @@ async def agents_generate(
             "readiness": readiness,
             "bundle": bundle,
             "rendered": render_agents_md(doc),
+            "status": site_status,
+            "family_rows": site_status.family_counts(),
+            "domain": domain,
+            "client_count": len(site_status.for_client()),
+            "dev_count": len(site_status.for_developer()),
         },
     )
 
@@ -889,9 +914,19 @@ async def _site_status(session: AsyncSession, domain: str):
     """
     site_url = f"https://{domain}"
     _probe, doc, tech, _catalog, readiness, bundle = await _agents_document(session, site_url)
+    return await _derive_state(session, domain, doc, tech, readiness, bundle), tech
 
+
+async def _derive_state(session: AsyncSession, domain: str, doc, tech, readiness, bundle):
+    """The four states, from pieces a caller already has.
+
+    Split out so `/agents` can show the same counts as the tabs without probing
+    the site a second time -- two derivations from two probes could disagree,
+    and the overview exists precisely to be trusted at a glance.
+    """
+    site_url = f"https://{domain}"
     artifacts = {a.name: a.body for a in bundle.artifacts}
-    templates_for_site = build_templates(site_url, doc.site_name or domain)
+    templates_for_site = build_templates(site_url, doc.site_name or domain, tech.platform.value)
     marks = await repo.load_marks(session, domain)
 
     status = derive(
@@ -902,7 +937,7 @@ async def _site_status(session: AsyncSession, domain: str):
         templates=templates_for_site,
         marks=marks,
     )
-    return status, tech
+    return status
 
 
 def _component_context(request, user, domain, status, tech) -> dict:

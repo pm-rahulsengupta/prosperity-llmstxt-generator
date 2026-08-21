@@ -12,6 +12,7 @@ import pytest
 
 from app.scrape.readiness import (
     CHECKLIST,
+    MAX_SAMPLES,
     Applicability,
     CheckResult,
     CheckState,
@@ -19,6 +20,7 @@ from app.scrape.readiness import (
     ReadinessReport,
     SiteType,
     audit_readiness,
+    sample_from_sources,
 )
 
 
@@ -51,10 +53,10 @@ def test_the_checklist_is_the_sheet_plus_the_two_files_this_tool_generates():
     """
     from app.core.components import COMPONENTS
 
-    assert len(CHECKLIST) == len(COMPONENTS) == 25
+    assert len(CHECKLIST) == len(COMPONENTS) == 26
     # Plus the two WCAG rules added after the sheet was written: 4.1.2 on
     # deprecated roles and 4.1.1 on duplicate ids.
-    added = {"agents-md", "ai-catalog", "aria-roles", "unique-ids"}
+    added = {"agents-md", "ai-catalog", "aria-roles", "unique-ids", "llms-full"}
     assert added <= {c.key for c in CHECKLIST}
 
 
@@ -396,3 +398,67 @@ def test_both_new_checks_pass_the_live_page_they_were_written_against():
     )
     assert _aria_roles(clean)[0] is CheckState.PASS
     assert _unique_ids(clean)[0] is CheckState.PASS
+
+
+# -- the report says what it read --------------------------------------------
+
+
+def test_a_homepage_only_score_says_so():
+    """The same site read 42 on one route and 53 on another.
+
+    Both were honest about their checks and neither said how many pages it had
+    read, so the two numbers looked like a contradiction rather than two
+    different measurements. A score that does not carry its sample is a score
+    that cannot be compared with another.
+    """
+    report = ReadinessReport(site_url="https://x.example", site_type=SiteType.CONTENT)
+    report.sampled = ["https://x.example/"]
+
+    assert "homepage only" in report.summary()
+
+
+def test_a_sampled_score_names_how_many_pages_it_read():
+    report = ReadinessReport(site_url="https://x.example", site_type=SiteType.CONTENT)
+    report.sampled = ["https://x.example/", "https://x.example/services/seo"]
+
+    assert "read 2 page(s)" in report.summary()
+    assert "homepage only" not in report.summary()
+
+
+def test_one_page_is_taken_from_each_sitemap_group():
+    """Four blog posts audit one template four times."""
+    sources = {f"https://x.example/post-{n}": "post-sitemap" for n in range(20)}
+    sources["https://x.example/services/seo"] = "page-sitemap"
+    sources["https://x.example/seo"] = "page-sitemap"
+
+    picked = sample_from_sources(sources)
+
+    assert len(picked) == 2, "one per group, not one per page"
+    assert picked == ["https://x.example/post-0", "https://x.example/services/seo"]
+
+
+def test_the_sample_is_capped_so_an_audit_cannot_become_a_crawl():
+    sources = {f"https://x.example/{n}": f"sitemap-{n}" for n in range(20)}
+
+    assert len(sample_from_sources(sources)) == MAX_SAMPLES
+
+
+def test_sampling_a_site_with_no_sitemap_is_empty_rather_than_an_error():
+    """No readable sitemap means a homepage-only audit, not a failure."""
+    assert sample_from_sources({}) == []
+
+
+def test_a_flat_site_still_samples_more_than_one_kind_of_page():
+    """The case that made URL-shape sampling the wrong rule.
+
+    On a flat WordPress site every page is `/{slug}`, so clustering by path
+    yields one template and the audit sees a blog post and nothing else. Sitemap
+    membership still separates a post from a service page.
+    """
+    flat = {
+        "https://x.example/8-things-i-learnt/": "post-sitemap",
+        "https://x.example/another-post/": "post-sitemap",
+        "https://x.example/seo-services/": "page-sitemap",
+    }
+
+    assert len(sample_from_sources(flat)) == 2

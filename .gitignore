@@ -25,3 +25,6 @@ uv.lock.bak
 *credentials*.json
 gcp-*.json
 *.key.json
+
+# Working notes, not for the repo
+NOTES.local.md

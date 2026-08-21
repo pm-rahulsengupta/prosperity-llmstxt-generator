@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from app.core.components import (
     COMPONENTS,
+    FAMILY_LABELS,
     Applicability,
     Component,
     ComponentState,
@@ -100,6 +101,37 @@ class SiteStatus:
         for status in self.for_developer():
             grouped[status.component.effort].append(status)
         return {effort: items for effort, items in grouped.items() if items}
+
+    def family_counts(self) -> list[tuple[Family, str, dict[str, int]]]:
+        """One row per family for the overview, in registry order.
+
+        Derived from the same `statuses` the tabs render rather than counted
+        separately, so the overview cannot claim a number a tab contradicts.
+        Families with nothing applicable are dropped -- a row of four zeroes
+        tells a reader nothing except that the tool has a tab they should not
+        open.
+        """
+        rows: list[tuple[Family, str, dict[str, int]]] = []
+        for family in Family:
+            members = [
+                s for s in self.family(family) if s.state is not ComponentState.NOT_APPLICABLE
+            ]
+            if not members:
+                continue
+            rows.append(
+                (
+                    family,
+                    FAMILY_LABELS[family],
+                    {
+                        "live": sum(1 for s in members if s.state is ComponentState.LIVE),
+                        "ready": sum(1 for s in members if s.state is ComponentState.READY),
+                        "template": sum(1 for s in members if s.state is ComponentState.TEMPLATE),
+                        "missing": sum(1 for s in members if s.state is ComponentState.MISSING),
+                        "total": len(members),
+                    },
+                )
+            )
+        return rows
 
     @property
     def live_count(self) -> int:

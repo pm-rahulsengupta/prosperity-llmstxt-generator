@@ -252,8 +252,155 @@ def test_every_templated_component_has_a_template():
             assert component.key in templates, component.key
 
 
-def test_every_template_warns_and_carries_placeholders():
+# Two kinds of template, and only one of them makes a claim.
+#
+# A service template -- MCP card, A2A card, OAuth metadata, skills, api-catalog,
+# WebMCP -- asserts that something exists and answers, so every value that would
+# be a claim is a placeholder. A server-config snippet asserts nothing: it is
+# real configuration to apply, and inventing placeholders in it would make it
+# useless. Both must still say they are not files to publish.
+SERVICE_TEMPLATES = {"mcp-card", "a2a-card", "oauth-resource", "skills", "api-catalog", "webmcp"}
+CONFIG_TEMPLATES = {"link-header", "markdown-negotiation"}
+
+
+def test_every_template_says_it_is_not_a_file_to_publish():
     """A template that looks finished is a template somebody publishes."""
     for key, body in build_templates("https://x.example").items():
-        assert PLACEHOLDER in body, key
-        assert "not a file to publish" in body, key
+        assert "not a file to publish" in body.lower(), key
+
+
+def test_service_templates_carry_placeholders_where_a_claim_would_go():
+    for key, body in build_templates("https://x.example").items():
+        if key in SERVICE_TEMPLATES:
+            assert PLACEHOLDER in body, key
+
+
+def test_config_snippets_are_real_configuration_not_placeholders():
+    """Filling these with REPLACE_ME would make them useless to paste."""
+    for key, body in build_templates("https://x.example").items():
+        if key in CONFIG_TEMPLATES:
+            assert PLACEHOLDER not in body, key
+
+
+def test_every_templated_component_falls_into_one_of_the_two_kinds():
+    """A new template belonging to neither would be tested by nothing."""
+    templated = {c.key for c in COMPONENTS if c.templated}
+
+    assert templated == SERVICE_TEMPLATES | CONFIG_TEMPLATES
+
+
+def test_a_platform_that_cannot_set_headers_is_told_so_rather_than_given_a_snippet():
+    """Shopify and Wix cannot set custom response headers on the primary domain.
+
+    A snippet they would spend an afternoon failing to apply is worse than a
+    sentence saying it is not achievable there.
+    """
+    shopify = build_templates("https://x.example", "X", "shopify")["link-header"]
+    wordpress = build_templates("https://x.example", "X", "wordpress")["link-header"]
+
+    assert "not achievable" in shopify
+    assert "add_header" not in shopify
+    assert "add_header" in wordpress
+
+
+# -- one source of truth, asserted by identity --------------------------------
+
+
+def test_there_is_exactly_one_effort_enum():
+    """Identity, not equality -- equality is what masked the bug.
+
+    `bundle` used to define its own `Effort` with the same members. Because both
+    were StrEnum they hashed identically, so `EFFORT_LABELS[components.Effort.X]`
+    resolved across the two classes and the handover page worked by accident. A
+    plain-Enum cross-lookup raises immediately, so the page was one refactor away
+    from a KeyError.
+    """
+    from app.core import bundle
+
+    assert bundle.Effort is Effort
+    assert bundle.Effort.DROP_IN is Effort.DROP_IN
+
+
+def test_bundle_defines_no_second_copy_of_the_registry_tables():
+    """Re-exporting is fine. Redefining is how the two drift apart."""
+    import inspect
+
+    from app.core import bundle
+
+    source = inspect.getsource(bundle)
+    for redefinition in (
+        "class Effort(",
+        "EFFORT_LABELS: dict",
+        "EFFORT_OWNERS: dict",
+        "HEADER_HINTS: dict",
+    ):
+        assert redefinition not in source, redefinition
+
+
+def test_every_effort_label_and_owner_is_keyed_by_a_registry_member():
+    from app.core.components import EFFORT_LABELS, EFFORT_OWNERS
+
+    for table in (EFFORT_LABELS, EFFORT_OWNERS):
+        assert set(table) == set(Effort)
+        for key in table:
+            assert isinstance(key, Effort)
+
+
+def test_the_developer_handover_is_projected_not_hand_written():
+    """A hand-written list agrees with the checklist until someone adds a
+    component, at which point the audit knows about it and the handover does not.
+    """
+    import inspect
+
+    from app.core import bundle
+
+    assert "for_developer(" in inspect.getsource(bundle._deployment_tasks)
+
+
+# -- template becomes artefact once the endpoint answers ----------------------
+
+
+def test_a_verified_endpoint_turns_a_template_into_a_real_file():
+    """The transition the whole templating design exists for.
+
+    Until the service answers, the component offers scaffolding that cannot be
+    published. Once `verify_declared` confirms it, the same component produces a
+    genuine artefact and the banner goes.
+    """
+    from app.core.bundle import DeclaredEndpoint
+
+    templates = build_templates("https://x.example")
+
+    unverified = derive("https://x.example", SiteType.APP_API, templates=templates)
+    assert unverified.by_key("mcp-card").state is ComponentState.TEMPLATE
+    assert not unverified.by_key("mcp-card").publishable
+
+    # A verified endpoint is what a real artefact would be built from; the
+    # template must not still be offered alongside it.
+    verified = DeclaredEndpoint("mcp", "https://mcp.x.example/", verified=True, detail="200 json")
+    assert verified.verified
+    ready = derive(
+        "https://x.example",
+        SiteType.APP_API,
+        artifacts={"ai-catalog.json": "{}"},
+        templates={k: v for k, v in templates.items() if k != "mcp-card"},
+    )
+    assert ready.by_key("mcp-card").state is not ComponentState.TEMPLATE
+
+
+def test_an_endpoint_that_does_not_answer_keeps_the_template_and_names_the_status():
+    from app.core.bundle import DeclaredEndpoint, build_bundle
+    from app.core.onboarding import brief_from_answers
+
+    bundle = build_bundle(
+        "https://x.example",
+        brief_from_answers({"primary_action": "use_the_api", "mcp_server_url": "https://mcp.x/"}),
+        declared=[DeclaredEndpoint("mcp", "https://mcp.x/", verified=False, detail="answered 404")],
+        llms_txt="# l",
+        agents_md="# a",
+        ai_catalog="{}",
+    )
+
+    assert any("404" in note for note in bundle.notes)
+    task = next(t for t in bundle.tasks if t.component == by_key("mcp-card").title)
+    assert "404" in task.blocked_by
