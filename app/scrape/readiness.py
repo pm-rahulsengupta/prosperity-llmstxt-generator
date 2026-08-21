@@ -133,6 +133,9 @@ class ReadinessReport:
 # The whole checklist is nine fetches against one host. Four at a time keeps a
 # small site responsive and still finishes in about a second.
 MAX_CONCURRENCY = 4
+# One page per sitemap group, bounded. Enough to cover the templates a site
+# actually uses without turning an audit into a crawl.
+MAX_SAMPLES = 4
 
 # Three Layer 1 items are visible in the HTML without rendering it. A static
 # parse is weaker than Lighthouse -- it cannot see what CSS or JavaScript does at
@@ -141,9 +144,28 @@ MAX_CONCURRENCY = 4
 # four that genuinely need rendering (layout shift, tap-target size, cursor
 # styles, ghost overlays) stay manual, because guessing at them from source is
 # how a passing score gets handed to a site that fails.
-SEMANTIC_TAGS = ("<main", "<nav", "<article", "<section", "<header", "<footer")
-CLICKABLE_DIV = re.compile(r"<div[^>]*\bonclick\b[^>]*>", re.I)
-DIV_WITH_ROLE = re.compile(r"<div[^>]*\brole\s*=", re.I)
+# Landmarks, by tag *or* by ARIA role. Diagnosed against the rendered DOM of
+# prosperitymedia.com.au: the site has no `<main>` and no `<nav>` element at all,
+# and carries `role="main"` and `role="banner"` instead. A tag-only check calls
+# that a failure, when an agent walking the accessibility tree sees exactly the
+# landmark it needs -- the role is the thing the tree is built from, and the tag
+# is only the most common way to produce one.
+SEMANTIC_TAGS = ("<main", "<nav", "<article", "<section", "<header", "<footer", "<aside")
+LANDMARK_ROLE = re.compile(
+    r"role\s*=\s*[\"']?(main|banner|navigation|contentinfo|complementary|region|article)",
+    re.I,
+)
+
+# Elements that are focusable or clickable without being natively interactive.
+# The first version searched for inline `onclick` alone and found none anywhere on
+# the site, so the check passed a page carrying two real violations: the mobile
+# menu is `<div class="hamburger" tabindex="0">` with no role, which an
+# accessibility tree cannot identify as a control. Anchors and buttons are
+# excluded because they are interactive by nature -- 180 of the 182 focusable
+# elements on that page are `<a tabindex="-1">` in a lazy-loaded gallery, and
+# flagging those would bury the two that matter.
+FOCUSABLE_DIV = re.compile(r"<(?:div|span|li)[^>]*\b(?:tabindex|onclick)\s*=[^>]*>", re.I)
+DIV_WITH_ROLE = re.compile(r"\brole\s*=", re.I)
 INPUT_TAG = re.compile(r"<input[^>]*>", re.I)
 INPUT_TYPE_HIDDEN = re.compile(r"type\s*=\s*[\"']?(hidden|submit|button)", re.I)
 INPUT_ID = re.compile(r"\bid\s*=\s*[\"']?([^\"' >]+)", re.I)
@@ -152,9 +174,12 @@ ARIA_LABELLED = re.compile(r"\baria-label(?:ledby)?\s*=", re.I)
 
 
 def _semantic_html(html: str) -> tuple[CheckState, str]:
-    found = [tag.lstrip("<") for tag in SEMANTIC_TAGS if tag in html.lower()]
+    tags = [tag.lstrip("<") for tag in SEMANTIC_TAGS if tag in html.lower()]
+    roles = sorted({m.lower() for m in LANDMARK_ROLE.findall(html)})
+    found = tags + [f"role={r}" for r in roles if r not in tags]
+
     if len(found) >= 3:
-        return CheckState.PASS, f"uses {', '.join(found)}"
+        return CheckState.PASS, f"landmarks: {', '.join(found[:6])}"
     return CheckState.FAIL, (
         f"only {', '.join(found) or 'none'} found; agents walking the accessibility "
         "tree have little structure to navigate"
@@ -162,22 +187,28 @@ def _semantic_html(html: str) -> tuple[CheckState, str]:
 
 
 def _clickable_divs(html: str) -> tuple[CheckState, str]:
-    clickable = CLICKABLE_DIV.findall(html)
-    if not clickable:
-        return CheckState.PASS, "no divs with inline onclick"
-    unroled = [d for d in clickable if not DIV_WITH_ROLE.search(d)]
+    focusable = FOCUSABLE_DIV.findall(html)
+    unroled = [d for d in focusable if not DIV_WITH_ROLE.search(d)]
+
+    if not focusable:
+        # Honest about the blind spot. A div made clickable purely by
+        # `addEventListener`, with no tabindex and no role, is invisible to any
+        # static parse -- and is also the worst version of this fault, since it is
+        # not keyboard-reachable either. Passing here means "nothing visible in
+        # the markup", not "audited".
+        return CheckState.PASS, "no focusable or clickable div in the markup"
     if not unroled:
-        return CheckState.PASS, f"{len(clickable)} clickable div(s), all with a role"
+        return CheckState.PASS, f"{len(focusable)} focusable element(s), all with a role"
     return CheckState.FAIL, (
-        f"{len(unroled)} clickable div(s) with no role; an agent walking the tree "
-        "cannot tell they are buttons"
+        f"{len(unroled)} of {len(focusable)} focusable element(s) have no role, "
+        f"e.g. {unroled[0][:60]}; an agent walking the tree cannot tell what they do"
     )
 
 
 def _form_labels(html: str) -> tuple[CheckState, str]:
     inputs = [i for i in INPUT_TAG.findall(html) if not INPUT_TYPE_HIDDEN.search(i)]
     if not inputs:
-        return CheckState.NOT_APPLICABLE, "no form inputs on the homepage"
+        return CheckState.NOT_APPLICABLE, "no form inputs on this page"
 
     labelled = set(LABEL_FOR.findall(html))
     unlabelled = []
@@ -228,9 +259,21 @@ def _state_for(response: httpx.Response | None, expect: tuple[str, ...]) -> tupl
 
 
 async def audit_readiness(
-    site_url: str, user_agent: str, site_type: SiteType = SiteType.CONTENT, timeout: float = 20.0
+    site_url: str,
+    user_agent: str,
+    site_type: SiteType = SiteType.CONTENT,
+    timeout: float = 20.0,
+    sample_urls: list[str] | None = None,
 ) -> ReadinessReport:
-    """Run every checkable item, and report the rest as needing a person."""
+    """Run every checkable item, and report the rest as needing a person.
+
+    `sample_urls` should be one page per sitemap group. The page-level checks run
+    across all of them rather than on the homepage alone, because a homepage is
+    the least representative page most sites have: it is usually bespoke while the
+    templates carry the structure an agent will actually meet. A service page and
+    a blog post on the same site are built by different templates and fail
+    differently, and auditing one of them says nothing about the other.
+    """
     origin = site_url.rstrip("/")
     report = ReadinessReport(site_url=origin, site_type=site_type)
 
@@ -254,6 +297,20 @@ async def audit_readiness(
         home = await _fetch(client, origin + "/")
         markdown = await _fetch(client, origin + "/", headers={"Accept": "text/markdown"})
 
+        # One page per template, capped and polite. Failures here are skipped
+        # rather than fatal: a sample we could not fetch should narrow the audit,
+        # not fail it.
+        pages: list[tuple[str, str]] = []
+        if home is not None:
+            pages.append((origin + "/", home.text))
+        for url in (sample_urls or [])[:MAX_SAMPLES]:
+            if url.rstrip("/") == origin.rstrip("/"):
+                continue
+            async with gate:
+                sampled = await _fetch(client, url)
+            if sampled is not None and sampled.status_code < 400:
+                pages.append((url, sampled.text))
+
     robots_body = ""
     if (robots := by_key.get("robots")) is not None and robots.status_code < 400:
         robots_body = robots.text
@@ -268,11 +325,39 @@ async def audit_readiness(
             )
             continue
 
-        if item.key in STATIC_LAYER1 and home is not None:
-            state, detail = STATIC_LAYER1[item.key](home.text)
-            report.results.append(
-                CheckResult(item, state, f"{detail} (homepage only)", origin + "/")
-            )
+        if item.key in STATIC_LAYER1 and pages:
+            # Worst answer wins. One template failing is the site failing for
+            # every page built from it, and averaging would let a clean homepage
+            # hide a broken service template behind it.
+            results = [(url, *STATIC_LAYER1[item.key](html)) for url, html in pages]
+            failed = [(url, detail) for url, state, detail in results if state is CheckState.FAIL]
+            scope = f"{len(pages)} page(s) sampled"
+
+            if failed:
+                url, detail = failed[0]
+                report.results.append(
+                    CheckResult(
+                        item,
+                        CheckState.FAIL,
+                        f"{detail} — on {len(failed)} of {scope}",
+                        url,
+                    )
+                )
+            elif all(state is CheckState.NOT_APPLICABLE for _, state, _ in results):
+                report.results.append(
+                    CheckResult(item, CheckState.NOT_APPLICABLE, results[0][2], origin + "/")
+                )
+            else:
+                # The detail comes from a page that actually passed. Taking
+                # `results[0]` reported the homepage's "no form inputs" as the
+                # reason a check passed, when the pass came from a different page
+                # that had labelled inputs.
+                passed = next(
+                    (d for _, state, d in results if state is CheckState.PASS), results[0][2]
+                )
+                report.results.append(
+                    CheckResult(item, CheckState.PASS, f"{passed} — {scope}", origin + "/")
+                )
             continue
 
         if item.layer == 1 or item.key in {"webmcp", "web-bot-auth"}:

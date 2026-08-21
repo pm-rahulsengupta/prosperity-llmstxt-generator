@@ -489,10 +489,17 @@ async def suggest_brief_route(
     # and an operator filling in a brief is exactly the person who wants to know
     # what the site is missing -- telling them later, on a different page, is
     # telling them once they have stopped looking.
+    # One page per sitemap group, so the page checks see the templates rather than
+    # only the homepage -- which is the least representative page most sites have.
+    seen_groups: dict[str, str] = {}
+    for url, source in recon.url_sources.items():
+        seen_groups.setdefault(source, url)
+
     readiness = await audit_readiness(
         site_url,
         settings.crawl_user_agent,
         SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
+        sample_urls=list(seen_groups.values()),
     )
 
     stored = await repo.load_brief(session, domain)

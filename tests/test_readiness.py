@@ -18,6 +18,7 @@ from app.scrape.readiness import (
     Priority,
     ReadinessReport,
     SiteType,
+    audit_readiness,
 )
 
 
@@ -158,6 +159,24 @@ def test_semantic_html_is_read_from_the_markup():
     assert "accessibility tree" in detail
 
 
+def test_aria_landmarks_count_as_much_as_the_tags():
+    """Diagnosed against the rendered DOM of a live site.
+
+    prosperitymedia.com.au has no `<main>` and no `<nav>` element anywhere, and
+    carries `role="main"` and `role="banner"` instead. A tag-only check called
+    that a failure, when an agent walking the accessibility tree sees exactly the
+    landmark it needs -- the role is what the tree is built from.
+    """
+    from app.scrape.readiness import _semantic_html
+
+    state, detail = _semantic_html(
+        '<div role="main"><div role="banner"></div><div role="navigation"></div></div>'
+    )
+
+    assert state is CheckState.PASS
+    assert "role=main" in detail
+
+
 def test_a_clickable_div_without_a_role_is_caught():
     """An agent walking the tree cannot tell it is a button."""
     from app.scrape.readiness import _clickable_divs
@@ -165,6 +184,44 @@ def test_a_clickable_div_without_a_role_is_caught():
     assert _clickable_divs('<div onclick="go()">x</div>')[0] is CheckState.FAIL
     assert _clickable_divs('<div onclick="go()" role="button">x</div>')[0] is CheckState.PASS
     assert _clickable_divs("<button>x</button>")[0] is CheckState.PASS
+
+
+def test_a_focusable_div_without_a_role_is_caught():
+    """The real-world pattern, and the false pass that hid it.
+
+    Searching for inline `onclick` alone found none anywhere on
+    prosperitymedia.com.au, so the check passed a page carrying two genuine
+    violations: the mobile menu is `<div class="hamburger" tabindex="0">` with no
+    role, which is keyboard-reachable and unidentifiable.
+    """
+    from app.scrape.readiness import _clickable_divs
+
+    hamburger = '<div class="uabb-creative-menu-mobile-toggle hamburger" tabindex="0"></div>'
+    state, detail = _clickable_divs(hamburger)
+
+    assert state is CheckState.FAIL
+    assert "hamburger" in detail
+
+
+def test_anchors_are_not_flagged_for_being_focusable():
+    """180 of 182 focusable elements on that page were `<a tabindex="-1">` in a
+    lazy-loaded gallery. Flagging those would bury the two that matter."""
+    from app.scrape.readiness import _clickable_divs
+
+    gallery = "".join(f'<a href="/i{i}" tabindex="-1">x</a>' for i in range(50))
+    assert _clickable_divs(gallery)[0] is CheckState.PASS
+
+
+def test_a_pass_says_it_only_saw_the_markup():
+    """A div made clickable purely by addEventListener is invisible to any static
+    parse -- and is the worst version of the fault, being unreachable by keyboard
+    too. Passing means "nothing visible in the markup", not "audited"."""
+    from app.scrape.readiness import _clickable_divs
+
+    state, detail = _clickable_divs("<p>Just prose.</p>")
+
+    assert state is CheckState.PASS
+    assert "in the markup" in detail
 
 
 def test_unlabelled_inputs_are_caught_and_aria_counts():
@@ -200,10 +257,23 @@ def test_the_four_that_need_rendering_are_still_manual():
     assert layer1 - set(STATIC_LAYER1) == {"cls", "cursor", "tap-targets", "overlays"}
 
 
-def test_a_static_pass_says_it_only_saw_the_homepage():
-    """A pass here is evidence about one page, not about the site."""
+def test_the_page_checks_run_across_templates_not_just_the_homepage():
+    """A homepage is the least representative page most sites have.
+
+    It is usually bespoke while the templates carry the structure an agent will
+    meet, so a service page and a blog post fail differently and auditing one
+    says nothing about the other. The report names how many pages it saw.
+    """
     import inspect
 
-    from app.scrape import readiness
+    source = inspect.getsource(audit_readiness)
 
-    assert "(homepage only)" in inspect.getsource(readiness.audit_readiness)
+    assert "sample_urls" in source
+    assert "page(s) sampled" in source
+
+
+def test_one_failing_template_fails_the_site():
+    """Averaging would let a clean homepage hide a broken service template."""
+    import inspect
+
+    assert "Worst answer wins" in inspect.getsource(audit_readiness)
