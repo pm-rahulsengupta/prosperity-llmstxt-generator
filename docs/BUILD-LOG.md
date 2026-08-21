@@ -10,11 +10,16 @@ checked against when it was made — the same reason every probe result in this
 tool carries its evidence rather than just its verdict.
 
 Written at commit time or not at all. A build log nobody updates is worse than
-no build log, because it reads as current.
+no build log, because it reads as current. The deploy line is the one exception
+— it is filled in after the deploy succeeds, since it records something that had
+not happened yet when the code was committed.
 
 ---
 
 ## 2026-08-21 — finish the registry consolidation
+
+Deployed `bd3a70d` — web and worker, migrations clean (none in this commit),
+both `SUCCESS`, `/healthz` 200.
 
 **Measured**
 
