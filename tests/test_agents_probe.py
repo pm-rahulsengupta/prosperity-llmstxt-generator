@@ -313,6 +313,37 @@ def test_the_two_probes_are_not_raced_against_one_host():
 
     from app import main
 
-    source = inspect.getsource(main._agents_document)
+    source = inspect.getsource(main.probe_site_live)
     assert "probe = await probe_site(" in source
     assert "asyncio.gather(\n        probe_site" not in source
+
+
+def test_no_get_route_probes_a_clients_site():
+    """The whole point of storing snapshots, asserted rather than documented.
+
+    Opening a client used to cost them roughly thirty requests, and clicking
+    between the six family tabs cost six times that. Worse, a domain nobody had
+    ever onboarded got the same treatment from anyone who typed it into the URL
+    bar. Every read path now goes through the stored row.
+
+    Checked by reading the source of each GET handler rather than by mocking the
+    network, because the failure this guards against is a future edit adding a
+    probe back into a page -- which would pass any test that only exercises the
+    routes as they stand today.
+    """
+    import inspect
+
+    from app import main
+
+    live_calls = ("probe_site_live(", "_check_and_store(", "audit_readiness(", "probe_tech(")
+    offenders = []
+    for route in main.app.routes:
+        if not hasattr(route, "endpoint") or "GET" not in getattr(route, "methods", set()):
+            continue
+        try:
+            source = inspect.getsource(route.endpoint)
+        except (OSError, TypeError):
+            continue
+        offenders += [f"{route.path} calls {c}" for c in live_calls if c in source]
+
+    assert offenders == [], offenders

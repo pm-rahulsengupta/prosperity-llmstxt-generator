@@ -4,7 +4,7 @@
 {% block content %}
 <div class="panel">
     <div class="spread">
-        <h2>Developer handover</h2>
+        <h1>Developer handover</h1>
         <span class="muted">{{ domain }}</span>
     </div>
     <p class="muted">
@@ -16,6 +16,7 @@
         for what it can and cannot do.
         {% endif %}
     </p>
+    {% include "partials/checked.html" %}
 </div>
 
 {% for effort, statuses in grouped.items() %}

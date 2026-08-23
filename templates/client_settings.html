@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <div class="spread">
+        <h1>Settings</h1>
+        <span class="muted">{{ domain }}</span>
+    </div>
+    {% if not exists %}
+    <p class="notice">
+        {{ domain }} is not on file yet. Saving a name here will add it.
+    </p>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>Name</h2>
+    <form method="post" action="/sites/{{ domain }}/settings">
+        <div class="row">
+            <div>
+                <label for="label">Client name</label>
+                <input type="text" id="label" name="label" autocomplete="off" spellcheck="false" value="{{ label }}"
+                       placeholder="{{ domain }}">
+            </div>
+            <div class="narrow">
+                <button class="primary" type="submit">Save</button>
+            </div>
+        </div>
+        <p class="hint">
+            Used in the client list and as the site name in the generated
+            agents.md. Approving a crawl plan will not overwrite it.
+        </p>
+    </form>
+</div>
+
+<div class="panel">
+    <h2>Onboarding</h2>
+    <p class="muted">
+        The brief decides which components apply, what the site is for, and what
+        must never be published.
+    </p>
+    <div class="row">
+        <a class="button" href="/sites/{{ domain }}/brief">Open the brief</a>
+        <a class="button" href="/sites/{{ domain }}">Back to overview</a>
+    </div>
+</div>
+
+{% if user and user.is_admin %}
+<div class="panel danger-zone">
+    <h2>Danger zone</h2>
+    {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+    <p class="muted">
+        Deleting {{ domain }} removes <strong>{{ going.summary() }}</strong>, and
+        cannot be undone.
+    </p>
+    {% if going.total %}
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>What goes</th><th class="num">Rows</th></tr></thead>
+            <tbody>
+            <tr><td>Runs</td><td class="num">{{ going.runs }}</td></tr>
+            <tr><td>Crawled pages</td><td class="num">{{ going.pages }}</td></tr>
+            <tr><td>Manual marks</td><td class="num">{{ going.marks }}</td></tr>
+            <tr><td>Search-metric rows</td><td class="num">{{ going.metric_rows }}</td></tr>
+            <tr><td>Stored checks</td><td class="num">{{ going.snapshots }}</td></tr>
+            <tr><td>Client record</td><td class="num">{{ going.config }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    <form method="post" action="/sites/{{ domain }}/delete">
+        <div class="field">
+            <label for="confirm">Type <code>{{ domain }}</code> to confirm</label>
+            <input type="text" id="confirm" name="confirm" autocomplete="off" required>
+        </div>
+        <button class="destructive" type="submit">Delete this client and all its data</button>
+    </form>
+</div>
+{% endif %}
+{% endblock %}

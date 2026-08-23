@@ -112,6 +112,10 @@
     --pm-lg:   20px;   /* brand H2 */
     --pm-xl:   26px;
 
+    /* Which palette the native controls belong to. Without it a date input and
+       a scrollbar render in the OS dark theme against our light page. */
+    color-scheme: light;
+
     --pm-radius:    10px;
     --pm-radius-sm:  6px;
 }
@@ -130,6 +134,23 @@ body {
     color: var(--pm-ink);
     background: var(--pm-bg);
     -webkit-font-smoothing: antialiased;
+    /* No 300ms double-tap-zoom delay on buttons and links. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(1, 208, 129, 0.25);
+}
+
+/* The page's own title. Every page began at h2 and had no h1, which left the
+   document outline headless for a screen reader and the top of the type scale
+   unused. Light weight here is the brand book's own instruction: DM Sans Light
+   -- Poppins Light in our stack -- for display sizes. */
+h1, h2, h3 { text-wrap: balance; }
+
+h1 {
+    font-size: var(--pm-xl);
+    font-weight: 300;
+    line-height: 1.2;
+    margin: 0 0 0.35rem;
+    letter-spacing: -0.01em;
 }
 
 /* Gunmetal text with an emerald underline. The brand has no accent that can
@@ -143,6 +164,25 @@ a {
     text-underline-offset: 3px;
 }
 a:hover { background: var(--pm-emerald-wash); text-decoration-thickness: 3px; }
+
+/* Visible only once focused. The sidebar is up to fourteen links deep on every
+   page, and below the breakpoint it becomes a horizontal band the keyboard has
+   to cross before reaching anything. */
+.skip {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.6rem 1rem;
+    background: var(--pm-gunmetal);
+    color: var(--pm-white);
+    text-decoration: none;
+}
+.skip:focus { left: 0; }
+
+/* The focused main region should not draw a ring -- it is a scroll target for
+   the skip link, not a control. */
+main:focus { outline: none; }
 
 :focus-visible {
     outline: 2px solid var(--pm-gunmetal);
@@ -263,7 +303,7 @@ button, .button {
     cursor: pointer;
     text-decoration: none;
 }
-button:hover, .button:hover { background: #2e3a41; text-decoration: none; }
+button:hover, .button:hover { background: var(--pm-gunmetal-lift); text-decoration: none; }
 
 /* The flagship control gets the brand's flagship approved pair. */
 button.primary, .button.primary {
@@ -284,6 +324,11 @@ button.ghost:hover, .button.ghost:hover { background: var(--pm-sunken); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Tables ─────────────────────────────────────────────────────────────── */
+
+/* The table scrolls, not the page. A ten-column admin table below the sidebar
+   breakpoint otherwise pushes the whole layout sideways, which moves the nav
+   off-screen to read one cell. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
 
 table { width: 100%; border-collapse: collapse; font-size: var(--pm-sm); }
 th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--pm-rule); vertical-align: top; }
@@ -392,7 +437,6 @@ pre.output {
 /* ── Utilities ──────────────────────────────────────────────────────────── */
 
 .muted { color: var(--pm-ink-muted); font-size: var(--pm-xs); }
-.right { text-align: right; }
 .spread { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
 .empty {
     padding: 2rem;
@@ -403,6 +447,17 @@ pre.output {
 }
 
 .auth-mark { display: block; margin: 0 auto 1.5rem; width: 240px; max-width: 70%; }
+
+/* Honour a stated preference. Nothing here is decorative enough to be worth
+   overriding someone's operating-system setting. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
 
 @media (max-width: 720px) {
     main { padding: 1rem; }
@@ -439,29 +494,22 @@ pre.output {
     word-break: break-word;
 }
 
-/* ── Admin ──────────────────────────────────────────────────────────────── */
-
-.admin-nav { display: flex; gap: 0.35rem; margin-bottom: 1.25rem; }
-.admin-nav a {
-    padding: 0.35rem 0.85rem;
-    font-size: var(--pm-sm);
-    font-weight: 500;
-    border-radius: 999px;
-    text-decoration: none;
-    color: var(--pm-ink-soft);
-    background: var(--pm-surface);
-    border: 1px solid var(--pm-rule);
-}
-.admin-nav a:hover { background: var(--pm-sunken); }
-/* The current tab is the one place a solid emerald fill earns its keep --
-   gunmetal on it is 6.92:1 and it is a single small block per screen. */
-.admin-nav a.on {
-    background: var(--pm-emerald);
-    border-color: var(--pm-emerald);
-    color: var(--pm-gunmetal);
-}
 .inline-form { display: inline-block; }
 .inline-form select { width: auto; }
+
+/* -- stored-probe age -------------------------------------------------------
+   Rendered on every page that shows a figure from a stored probe. Quiet by
+   design: it is context, not a warning -- until it is stale, at which point the
+   strong inside it carries the weight. */
+.checked { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.checked form { margin: 0; }
+
+/* -- danger zone ------------------------------------------------------------
+   Bordered in imperial red, which the brand book reserves for negative outcomes
+   and which this is. The border, not a fill: red has no accessible text pairing,
+   so it is a stroke here as everywhere else in the sheet. */
+.danger-zone { border: 2px solid var(--pm-red); }
+.danger-zone h2 { color: var(--pm-red); }
 
 /* -- onboarding brief -------------------------------------------------------
    A form whose fields each carry a consequence. The `.effect` line is not
@@ -469,6 +517,17 @@ pre.output {
    knowing whether it protects those pages or forces them in, and the difference
    between the two is the whole design. It is set at the same weight as the
    label rather than as fine print, because it is read at the same moment. */
+
+/* Login and signup share one card. Both were laid out with inline styles
+   repeated in each file, which is how the two drifted apart by a few pixels. */
+.auth-card { max-width: 25rem; margin: 4rem auto; }
+.auth-card .field { margin-bottom: 0.75rem; }
+.auth-card button { width: 100%; }
+.auth-card .alt { margin-top: 1rem; text-align: center; }
+
+/* A heading inside a `.spread` sits on the flex line; its default top margin
+   pushed it off the baseline, which is why six templates carried `margin:0`. */
+.spread h1, .spread h2, .spread h3 { margin: 0; }
 
 .field { margin-bottom: 1.5rem; }
 .field textarea { min-height: 5.5rem; }
@@ -536,7 +595,7 @@ details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
 
 button.destructive {
     background: var(--pm-red);
-    color: #ffffff;
+    color: var(--pm-white);
     border-color: var(--pm-red);
 }
 
@@ -595,7 +654,10 @@ button.destructive {
 
 .shell > main { flex: 1 1 auto; min-width: 0; }
 
-@media (max-width: 60rem) {
+/* 960px, written in px like the other breakpoint. It was `60rem`, which is the
+   same distance only while the root stays at 16px -- the mixed-unit trap the
+   type-scale note above warns about, reintroduced here. */
+@media (max-width: 960px) {
     .shell { display: block; }
     .side { position: static; padding-bottom: 1rem; }
     .side-group { display: inline-block; margin-right: 1.5rem; vertical-align: top; }
@@ -668,3 +730,23 @@ pre.doc.template {
 
 .component .mark input[type="text"] { flex: 1 1 16rem; margin: 0; }
 .component .mark button { flex: 0 0 auto; }
+
+/* Spacing that was repeated inline in six templates. A named utility rather
+   than a `margin-top` on every call site, so the rhythm is one value. */
+.spaced { margin-top: 1rem; }
+.bar.tight { margin: 0.35rem 0; }
+.tick-col { width: 3rem; }
+.bar-col { width: 45%; }
+
+/* Available to a screen reader, absent from the page. Used for the reason a
+   nav item cannot be followed yet -- a `title` tooltip is mouse-only, so
+   without this the item announces as an ordinary destination. */
+.visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}

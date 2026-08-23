@@ -5,12 +5,12 @@
 
 <div class="panel">
     <div class="spread">
-        <h2 style="margin:0">{{ run.domain }}</h2>
+        <h1>{{ run.domain }}</h1>
         <span class="pill {% if run.status == 'complete' %}ok{% elif run.status == 'failed' %}bad{% elif run.status == 'awaiting_review' %}wait{% else %}run{% endif %}">
             {{ run.status.replace('_', ' ') }}
         </span>
     </div>
-    <div class="stat-grid" style="margin-top:1rem">
+    <div class="stat-grid spaced">
         <div class="stat"><div class="k">Sitemap URLs</div><div class="v">{{ run.sitemap_html or 0 }}</div></div>
         <div class="stat"><div class="k">Google indexes</div><div class="v">{{ run.indexed_estimate if run.indexed_estimate is not none else '—' }}</div></div>
         <div class="stat"><div class="k">Size tier</div><div class="v">{{ run.size_tier }}</div></div>
@@ -26,7 +26,7 @@
 </div>
 
 {% if not status.is_terminal %}
-<div class="panel" id="progress"
+<div class="panel" id="progress" aria-live="polite" aria-atomic="false"
      hx-get="/runs/{{ run.id }}/progress"
      hx-trigger="load, every 3s"
      hx-swap="innerHTML">
@@ -39,9 +39,10 @@
     <h2>Crawl plan &mdash; review before anything is fetched</h2>
     {% if plan.reasoning %}<p class="muted">{{ plan.reasoning }}</p>{% endif %}
     <form method="post" action="/runs/{{ run.id }}/plan">
-        <table>
+        <div class="table-scroll">
+            <table>
             <thead>
-            <tr><th style="width:3rem">Crawl</th><th>URL template</th><th class="num">Pages</th><th class="num">Priority</th><th>Section</th><th>Why</th></tr>
+            <tr><th class="tick-col">Crawl</th><th>URL template</th><th class="num">Pages</th><th class="num">Priority</th><th>Section</th><th>Why</th></tr>
             </thead>
             <tbody>
             {% for rule in plan.rules %}
@@ -55,8 +56,9 @@
             </tr>
             {% endfor %}
             </tbody>
-        </table>
-        <div class="row" style="margin-top:1rem">
+            </table>
+        </div>
+        <div class="row spaced">
             <div>
                 <label for="site_pattern">Site type</label>
                 <select id="site_pattern" name="site_pattern">
@@ -83,7 +85,7 @@
 {% if run.llmstxt %}
 <div class="panel">
     <div class="spread">
-        <h2 style="margin:0">Output</h2>
+        <h2>Output</h2>
         <span>
             <a class="button ghost" href="/runs/{{ run.id }}/download/llms.txt">llms.txt</a>
             {% if run.llms_full %}<a class="button ghost" href="/runs/{{ run.id }}/download/llms-full.txt">llms-full.txt</a>{% endif %}
@@ -128,14 +130,15 @@
                 </select>
             </div>
         </div>
-        <div style="margin-top:0.75rem">
+        <div class="spaced">
             <label for="edit_site_summary">Summary line</label>
             <input type="text" id="edit_site_summary" name="site_summary" value="{{ run.site_summary }}">
         </div>
         <h3>Pages</h3>
-        <table>
+        <div class="table-scroll">
+            <table>
             <thead>
-            <tr><th style="width:3rem">Keep</th><th>URL</th><th>Section</th><th class="num">Score</th><th>Tier</th></tr>
+            <tr><th class="tick-col">Keep</th><th>URL</th><th>Section</th><th class="num">Score</th><th>Tier</th></tr>
             </thead>
             <tbody>
             {% for page in pages %}
@@ -148,8 +151,9 @@
             </tr>
             {% endfor %}
             </tbody>
-        </table>
-        <div style="margin-top:1rem"><button type="submit">Re-render</button></div>
+            </table>
+        </div>
+        <div class="spaced"><button type="submit">Re-render</button></div>
     </form>
 </div>
 {% endif %}
@@ -209,8 +213,8 @@
     </div>
 
     {% if user and user.is_admin %}
-    <details class="danger">
-        <summary>Delete this run</summary>
+    <div class="danger-zone spaced">
+        <h3>Delete this run</h3>
         {% if status.is_terminal %}
         <p class="muted">
             Deletes the run, its {{ pages|length }} stored page{{ '' if pages|length == 1 else 's' }},
@@ -229,7 +233,11 @@
             holds its id and would write rows back after the delete.
         </p>
         {% endif %}
-    </details>
+        <p class="hint">
+            To remove the client and everything belonging to them, use
+            <a href="/sites/{{ run.domain }}/settings">their settings page</a>.
+        </p>
+    </div>
     {% endif %}
 </div>
 

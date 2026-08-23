@@ -2,12 +2,12 @@
 
 {% block content %}
 <div class="panel">
-    <h2>Generate for a site</h2>
+    <h1>Start an llms.txt run</h1>
     <form method="post" action="/runs">
         <div class="row">
             <div>
                 <label for="site_url">Site URL</label>
-                <input type="text" id="site_url" name="site_url" placeholder="carsguide.com.au" required>
+                <input type="text" id="site_url" name="site_url" autocomplete="off" spellcheck="false" placeholder="carsguide.com.au…" required>
             </div>
             <div class="narrow">
                 <label for="max_pages">Page cap</label>
@@ -31,7 +31,8 @@
 <div class="panel">
     <h2>Recent runs</h2>
     {% if runs %}
-    <table>
+    <div class="table-scroll">
+        <table>
         <thead>
         <tr>
             <th>Site</th><th>Status</th><th class="num">Pages</th>
@@ -53,7 +54,8 @@
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     {% else %}
     <p class="empty">No runs yet.</p>
     {% endif %}

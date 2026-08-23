@@ -4,10 +4,11 @@
 {% block content %}
 <div class="panel">
     <div class="spread">
-        <h2>{{ family_label }}</h2>
+        <h1>{{ family_label }}</h1>
         <span class="muted">{{ domain }}</span>
     </div>
     <p class="muted">{{ family_blurb }}</p>
+    {% include "partials/checked.html" %}
 </div>
 
 {% if statuses %}

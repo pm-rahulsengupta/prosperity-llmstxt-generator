@@ -478,3 +478,44 @@ class SiteMetric(Base):
         # which is what an operator correcting a bad export expects.
         UniqueConstraint("domain", "url", "source", name="uq_site_metrics_domain_url_source"),
     )
+
+
+class SiteSnapshot(Base):
+    """The last probe of a domain's agent surfaces, so a page render costs nothing.
+
+    Every site page used to re-probe the client's site on GET: fourteen to
+    eighteen readiness requests plus roughly fourteen probe requests, blocking,
+    against a thirty-second healthcheck. Clicking between the six family tabs
+    re-probed six times, and a domain nobody had ever onboarded still got
+    twenty-five live requests fired at it. The pages now read this row.
+
+    One row per domain, replaced on refresh rather than appended, because the
+    question these pages answer is "how is this site *now*" -- a history would be
+    a different feature with a different shape, and keeping every probe forever to
+    serve one of them is a cost with no reader.
+
+    `fetched_at` is not optional and is never hidden. A cached figure presented as
+    a live one is the failure this table could most easily introduce, so every
+    page that renders a snapshot renders its age beside it, and a domain with no
+    row says "not checked yet" rather than quietly probing.
+    """
+
+    __tablename__ = "site_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    # Serialised rather than modelled: these three are read back into the same
+    # dataclasses they came from, and a column per field would have to be migrated
+    # every time a probe learns to look for one more thing.
+    probe: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
+    readiness: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+    tech: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    fetched_by: Mapped[str] = mapped_column(String(320), default="")
+    # How long the probe took. Recorded because it is the number that decides
+    # whether this stays a background job or could ever go back inline.
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)

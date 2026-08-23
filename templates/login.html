@@ -4,27 +4,25 @@
 {% block chrome %}{% endblock %}
 
 {% block content %}
-<img class="auth-mark" src="/static/img/pm-logo-green.svg" alt="Prosperity Media">
-<div class="panel" style="max-width: 24rem; margin: 4rem auto">
-    <h2>Sign in</h2>
+<img class="auth-mark" src="/static/img/pm-logo-green.svg" alt="Prosperity Media" width="160" height="71">
+<div class="panel auth-card">
+    <h1>Sign in</h1>
     {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
     <form method="post" action="/login">
-        <div style="margin-bottom:0.75rem">
+        <div class="field">
             <label for="email">Email</label>
-            <input type="text" id="email" name="email" autocomplete="username" required autofocus>
+            <input type="email" id="email" name="email" spellcheck="false" autocomplete="username" required autofocus>
         </div>
-        <div style="margin-bottom:1rem">
+        <div class="field">
             <label for="password">Password</label>
             <input type="password" id="password" name="password" autocomplete="current-password" required>
         </div>
-        <button class="primary" type="submit" style="width:100%">Sign in</button>
+        <button class="primary" type="submit">Sign in</button>
     </form>
     {% if sso_enabled %}
-    <p style="margin-top:1rem; text-align:center">
-        <a class="button ghost" href="/login/google" style="width:100%">Sign in with Google</a>
-    </p>
+    <p class="alt"><a class="button ghost" href="/login/google">Sign in with Google</a></p>
     {% endif %}
-    <p class="muted" style="margin-top:1rem">
+    <p class="muted alt">
         No account? An admin creates them &mdash; there is no self-service signup once
         this instance has an owner.
     </p>

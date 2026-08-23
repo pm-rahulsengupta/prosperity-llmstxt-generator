@@ -29,6 +29,7 @@ from app.db.models import (
     SectionRow,
     SiteConfig,
     SiteMetric,
+    SiteSnapshot,
 )
 
 
@@ -226,6 +227,10 @@ async def save_site_config(
     config.plan = plan
     config.max_pages = max_pages
     config.updated_by = updated_by
+    # Guarded rather than assigned outright: this is called on every plan
+    # approval, and those callers pass no label. An unguarded assignment would
+    # blank the name an operator typed on the settings page the next time a run
+    # was approved.
     if label:
         config.label = label
     await session.flush()
@@ -254,6 +259,163 @@ async def save_brief(session: AsyncSession, domain: str, brief: SiteBrief) -> No
         session.add(config)
     config.brief = brief.to_dict()
     await session.flush()
+
+
+async def list_site_configs(session: AsyncSession) -> list[SiteConfig]:
+    """Every client the tool knows about, most recently touched first.
+
+    The function whose absence was the whole problem: `app/nav.py` described
+    site-scoped links as pointing at "the picker", and there was no picker,
+    because nothing could answer "who are our clients?". The only route to a
+    client was finding one of their runs in the most recent forty on the index,
+    so a client whose last run had scrolled off was reachable only by typing a
+    URL by hand.
+    """
+    result = await session.execute(select(SiteConfig).order_by(desc(SiteConfig.updated_at)))
+    return list(result.scalars().all())
+
+
+# -- deleting a client ------------------------------------------------------
+#
+# `domain` is a bare string in five tables with no foreign key between them, so
+# nothing cascades. Deleting a client means five explicit deletes, and the risk
+# is not that one of them fails loudly -- it is that one is forgotten and the
+# client "disappears" while its rows remain, so the next client on that domain
+# silently inherits the last one's marks.
+#
+# The guard is that the preview and the delete count through the SAME function.
+# Two implementations would be two chances to miss a table, and the preview would
+# reassure an operator about rows the delete then left behind.
+
+
+@dataclass(frozen=True, slots=True)
+class ClientDeletion:
+    """What removing a client took with it. Ordered as the confirm screen reads."""
+
+    domain: str
+    runs: int
+    pages: int
+    marks: int
+    metric_rows: int
+    snapshots: int
+    config: int
+
+    @property
+    def total(self) -> int:
+        return self.runs + self.pages + self.marks + self.metric_rows + self.snapshots + self.config
+
+    def summary(self) -> str:
+        parts = []
+        for count, noun in (
+            (self.runs, "run"),
+            (self.pages, "crawled page"),
+            (self.marks, "manual mark"),
+            (self.metric_rows, "search-metric row"),
+        ):
+            if count:
+                parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
+        return ", ".join(parts) if parts else "no stored data"
+
+
+async def _client_row_counts(session: AsyncSession, domain: str) -> ClientDeletion:
+    """The single source of truth for what belongs to a domain.
+
+    Both `preview_client_deletion` and `delete_client` call this, so the number an
+    operator confirms and the number actually removed cannot disagree.
+    """
+
+    async def count(model, column) -> int:
+        result = await session.execute(
+            select(func.count()).select_from(model).where(column == domain)
+        )
+        return int(result.scalar_one())
+
+    run_ids = list(
+        (await session.execute(select(Run.id).where(Run.domain == domain))).scalars().all()
+    )
+    pages = 0
+    if run_ids:
+        result = await session.execute(
+            select(func.count()).select_from(Page).where(Page.run_id.in_(run_ids))
+        )
+        pages = int(result.scalar_one())
+
+    return ClientDeletion(
+        domain=domain,
+        runs=len(run_ids),
+        pages=pages,
+        marks=await count(ComponentMark, ComponentMark.domain),
+        metric_rows=await count(SiteMetric, SiteMetric.domain),
+        snapshots=await count(SiteSnapshot, SiteSnapshot.domain),
+        config=await count(SiteConfig, SiteConfig.domain),
+    )
+
+
+async def preview_client_deletion(session: AsyncSession, domain: str) -> ClientDeletion:
+    """What would go, without anything going. Read-only."""
+    return await _client_row_counts(session, domain)
+
+
+async def delete_client(session: AsyncSession, domain: str) -> ClientDeletion:
+    """Remove a client and everything keyed to its domain.
+
+    Returns what was counted before the deletes ran, so the caller can report it.
+    Runs are deleted through the ORM rather than a bulk `delete()` statement
+    because `Run.pages`/`sections`/`events` are `delete-orphan` relationships and
+    the database-level CASCADE only covers the FK'd children -- a bulk delete
+    would skip the ORM cascade and leave the session holding stale objects.
+    """
+    counts = await _client_row_counts(session, domain)
+
+    runs = (await session.execute(select(Run).where(Run.domain == domain))).scalars().all()
+    for run in runs:
+        await session.delete(run)
+
+    await session.execute(delete(ComponentMark).where(ComponentMark.domain == domain))
+    await session.execute(delete(SiteMetric).where(SiteMetric.domain == domain))
+    await session.execute(delete(SiteSnapshot).where(SiteSnapshot.domain == domain))
+    await session.execute(delete(SiteConfig).where(SiteConfig.domain == domain))
+    await session.flush()
+    return counts
+
+
+# -- the probe cache --------------------------------------------------------
+
+
+async def load_snapshot(session: AsyncSession, domain: str) -> SiteSnapshot | None:
+    """The last probe, or None. None means "not checked", never "nothing found"."""
+    result = await session.execute(select(SiteSnapshot).where(SiteSnapshot.domain == domain))
+    return result.scalar_one_or_none()
+
+
+async def save_snapshot(
+    session: AsyncSession,
+    domain: str,
+    probe: dict,
+    readiness: dict,
+    tech: dict,
+    fetched_by: str = "",
+    duration_ms: int = 0,
+) -> SiteSnapshot:
+    """Replace this domain's snapshot, stamping when it was taken.
+
+    `fetched_at` is set explicitly rather than left to `onupdate`, because on a
+    replace the column would otherwise keep the row's original creation time and
+    every page would report an age that was wrong in the one direction that
+    matters -- claiming fresher than it is.
+    """
+    snapshot = await load_snapshot(session, domain)
+    if snapshot is None:
+        snapshot = SiteSnapshot(domain=domain)
+        session.add(snapshot)
+    snapshot.probe = probe
+    snapshot.readiness = readiness
+    snapshot.tech = tech
+    snapshot.fetched_by = fetched_by
+    snapshot.duration_ms = duration_ms
+    snapshot.fetched_at = datetime.now(UTC)
+    await session.flush()
+    return snapshot
 
 
 async def replace_site_metrics(

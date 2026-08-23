@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+
+{% block content %}
+{% if deleted %}
+<div class="panel">
+    <p class="notice ok">Deleted {{ deleted }}.</p>
+</div>
+{% endif %}
+
+<div class="panel">
+    <div class="spread">
+        <h1>Clients</h1>
+        <a class="button primary" href="/clients/new">Add a client</a>
+    </div>
+    <p class="muted">
+        Every site on file. Nothing here touches a client's server &mdash; the
+        scores are from the last time each was checked, and each says when that was.
+    </p>
+</div>
+
+<div class="panel">
+    {% if rows %}
+    <div class="table-scroll">
+        <table>
+            <thead>
+            <tr>
+                <th>Client</th>
+                <th>Onboarded</th>
+                <th class="num">Readiness</th>
+                <th>Last checked</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>
+                    <a href="/sites/{{ row.domain }}">{{ row.label or row.domain }}</a>
+                    {% if row.label %}<br><span class="muted">{{ row.domain }}</span>{% endif %}
+                </td>
+                <td>
+                    {% if row.onboarded %}
+                    <span class="pill ok">brief answered</span>
+                    {% else %}
+                    <a class="pill wait" href="/sites/{{ row.domain }}/brief">needs onboarding</a>
+                    {% endif %}
+                </td>
+                <td class="num">
+                    {% if row.snapshot %}{{ row.snapshot.score }}/100{% else %}&mdash;{% endif %}
+                </td>
+                <td class="muted">
+                    {% if row.snapshot %}
+                    {{ row.snapshot.checked_ago }}{% if row.snapshot.is_stale %}
+                    <span class="pill wait">stale</span>{% endif %}
+                    {% else %}
+                    <span class="muted">never checked</span>
+                    {% endif %}
+                </td>
+                <td class="num">
+                    <a href="/sites/{{ row.domain }}/settings">Settings</a>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty">
+        No clients yet. <a href="/clients/new">Add one</a> to get started &mdash;
+        onboarding takes a domain and walks through the brief.
+    </p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -54,13 +54,39 @@ def _active(path: str, url: str) -> bool:
 def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGroup]:
     """Build the sidebar for one request."""
     scoped = bool(domain)
-    site_hint = "" if scoped else "Pick a site first"
+    site_hint = "" if scoped else "Pick a client first"
 
     def site_url(suffix: str) -> str:
-        # Without a domain these point at the picker rather than at a dead path.
-        return f"/sites/{domain}{suffix}" if scoped else "/"
+        # Without a domain these point at the client list. That list is new: this
+        # function previously said it pointed at "the picker" and there was no
+        # picker, so every disabled item sent an operator to the run starter.
+        return f"/sites/{domain}{suffix}" if scoped else "/clients"
 
     groups = [
+        NavGroup(
+            label="Clients",
+            items=[
+                # Exact, not prefix: `/clients` is a prefix of `/clients/new`,
+                # which lit both and left the sidebar saying it did not know
+                # where the operator was.
+                NavItem("All clients", "/clients", active=path.rstrip("/") == "/clients"),
+                NavItem(
+                    "Add a client",
+                    "/clients/new",
+                    active=_active(path, "/clients/new"),
+                ),
+                NavItem(
+                    "Overview",
+                    site_url(""),
+                    # Exact match only. `/sites/{d}` is a prefix of every scoped
+                    # page, so a prefix match here would light Overview on the
+                    # checklist, the handover and all six family tabs at once.
+                    active=scoped and path.rstrip("/") == f"/sites/{domain}",
+                    disabled=not scoped,
+                    hint=site_hint,
+                ),
+            ],
+        ),
         NavGroup(
             label="Generate",
             items=[
@@ -118,12 +144,23 @@ def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGr
                     disabled=not scoped,
                     hint=site_hint,
                 ),
+                # "Search data" used to sit here pointing at the same URL as Brief
+                # with `active=False` hardcoded, so it could never light and
+                # clicking it highlighted Brief instead. It was a signpost to a
+                # panel further down that page. It now links to the panel.
                 NavItem(
                     "Search data",
-                    site_url("/brief"),
+                    site_url("/brief#search-console"),
                     active=False,
                     disabled=not scoped,
                     hint=site_hint or "Upload or fetch Search Console data",
+                ),
+                NavItem(
+                    "Settings",
+                    site_url("/settings"),
+                    active=scoped and _active(path, f"/sites/{domain}/settings"),
+                    disabled=not scoped,
+                    hint=site_hint,
                 ),
             ],
         ),

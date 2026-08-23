@@ -16,7 +16,8 @@ import logging
 import mimetypes
 import zipfile
 from contextlib import asynccontextmanager
-from datetime import date
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 from uuid import UUID
@@ -76,6 +77,16 @@ from app.core.ranking import (
 )
 from app.core.render import render_combined
 from app.core.site_state import derive, manually_markable
+from app.core.snapshot import (
+    declared_from_list,
+    declared_to_list,
+    probe_from_dict,
+    probe_to_dict,
+    readiness_from_dict,
+    readiness_to_dict,
+    tech_from_dict,
+    tech_to_dict,
+)
 from app.core.templates_lib import build_templates
 from app.db import repo
 from app.db.base import get_session, session_scope
@@ -335,6 +346,13 @@ async def logout(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, session: AsyncSession = Depends(get_session)):
+    """The llms.txt run starter, and recent runs.
+
+    This used to be the whole front door, which is why the tool read as being
+    about runs rather than about clients: a run was the only object with a list,
+    so finding a client meant finding one of their runs. `/clients` is the front
+    door now and this is one of the things you do to a client.
+    """
     user = current_user(request)
     if user is None and not settings.allow_anonymous:
         # /login sends a brand-new instance on to /signup.
@@ -671,12 +689,22 @@ async def upload_metrics(
     )
 
 
-async def _agents_document(session: AsyncSession, normalised: str):
-    """Probe a site and build its document. Shared by the page and the download.
+async def probe_site_live(session: AsyncSession, normalised: str):
+    """Every network call the tool makes about a site. **Never from a GET.**
 
-    Both paths must produce the same file. Duplicating the assembly is how they
-    would come to differ, and an operator downloading something other than what
-    they reviewed is the kind of divergence nobody notices until a client does.
+    Roughly thirty requests to one host: fourteen probing agent surfaces and the
+    stack, fourteen to eighteen auditing readiness, one per declared endpoint,
+    plus the sitemaps. Nine of those are strictly sequential, so a slow host can
+    hold this open for minutes.
+
+    It used to run on every page render. Opening a client meant probing them, and
+    clicking between the six family tabs probed them six more times -- against a
+    thirty-second healthcheck, and at a stranger's host for any domain someone
+    typed into the URL bar. Now it runs in a job and writes one row, and the
+    pages read that row.
+
+    `test_no_get_route_probes_a_clients_site` asserts the "never from a GET" part
+    rather than trusting this docstring.
     """
     settings = get_settings()
     # Both probes together: one asks what agent-facing files exist, the other what
@@ -689,7 +717,6 @@ async def _agents_document(session: AsyncSession, normalised: str):
     probe = await probe_site(normalised, settings.crawl_user_agent)
     tech = await probe_tech(normalised, settings.crawl_user_agent)
     domain = urlparse(normalised).netloc
-    config = await repo.load_site_config(session, domain)
     brief = await repo.load_brief(session, domain)
 
     # Links come from a completed llms.txt run for the same domain. The two files
@@ -698,23 +725,6 @@ async def _agents_document(session: AsyncSession, normalised: str):
     # Endpoints the tech probe confirmed are citable on the same terms as anything
     # else here: each answered with the right content type, so each is a capability
     # rather than a convention someone expects to exist.
-    run = None
-    read_only: list = [
-        Capability(label=d.name, url=d.url, evidence=f"answered {d.evidence}")
-        for d in tech.endpoints
-    ]
-    policies: list = []
-    contact = ""
-    run = await repo.latest_complete_run(session, domain)
-    if run is not None:
-        pages = await repo.get_pages(session, run.id)
-        crawled, policies, contact = links_from_pages(
-            [(p.url, p.title or "") for p in pages if p.included]
-        )
-        # Machine-readable endpoints first: an agent can parse those, and the
-        # crawled pages are the human-readable fallback behind them.
-        read_only = read_only + crawled
-
     # The readiness audit runs after the probes, not alongside. It is nine more
     # requests to the same host, and firing them concurrently with the other two
     # is how a small site starts refusing us and we report our own impatience as
@@ -741,6 +751,54 @@ async def _agents_document(session: AsyncSession, normalised: str):
         SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
         sample_urls=page_sample,
     )
+
+    # Declared endpoints are verified here rather than at render, because each is
+    # its own network call -- exactly the cost this split exists to remove from
+    # the request path. `verified` is stored, and the codec reading it back
+    # defaults to False, so a malformed row fails closed.
+    declared = await verify_declared(brief, settings.crawl_user_agent)
+    return probe, tech, readiness, declared
+
+
+def _assemble(
+    normalised: str,
+    domain: str,
+    probe,
+    tech,
+    readiness,
+    declared,
+    brief,
+    config,
+    run,
+    pages,
+):
+    """Build the document, catalog and bundle. No network, no database.
+
+    Everything here is a pure function of what the probe already established plus
+    what the database already holds, which is what makes it safe to run on a GET.
+    Kept as one function shared by the page and the download so both produce the
+    same file -- an operator downloading something other than what they reviewed
+    is the kind of divergence nobody notices until a client does.
+    """
+    # Links come from a completed llms.txt run for the same domain. The two files
+    # describe one site, so pages that crawl already fetched are pages this one
+    # can cite -- the evidence rule met by a different means rather than waived.
+    # Endpoints the tech probe confirmed are citable on the same terms as anything
+    # else here: each answered with the right content type, so each is a capability
+    # rather than a convention someone expects to exist.
+    read_only: list = [
+        Capability(label=d.name, url=d.url, evidence=f"answered {d.evidence}")
+        for d in tech.endpoints
+    ]
+    policies: list = []
+    contact = ""
+    if run is not None and pages:
+        crawled, policies, contact = links_from_pages(
+            [(p.url, p.title or "") for p in pages if p.included]
+        )
+        # Machine-readable endpoints first: an agent can parse those, and the
+        # crawled pages are the human-readable fallback behind them.
+        read_only = read_only + crawled
 
     # The profile comes from that same run when there is one: agents.md and
     # llms.txt describe the same site, and disagreeing about its shape would be
@@ -769,12 +827,6 @@ async def _agents_document(session: AsyncSession, normalised: str):
     doc.platform = tech.platform.value
     doc.notes.extend(tech.notes)
     catalog = build_catalog(probe, tech, site_name=doc.site_name)
-
-    # Declared endpoints are verified before anything references them. An
-    # operator naming their own MCP server is the only way we learn of it, and
-    # also the easiest place for a typo or a decommissioned host to reach a
-    # published file.
-    declared = await verify_declared(brief, settings.crawl_user_agent)
     rendered_catalog = render_catalog(catalog) if catalog.worth_publishing else ""
     bundle = build_bundle(
         normalised,
@@ -787,29 +839,333 @@ async def _agents_document(session: AsyncSession, normalised: str):
         sitemap_url=f"{normalised}/sitemap.xml",
         platform=tech.platform.value,
     )
-    return probe, doc, tech, catalog, readiness, bundle
+    return doc, catalog, bundle
+
+
+def _ago(when: datetime) -> str:
+    """How long ago, in words a reader can act on.
+
+    Deliberately coarse. Claiming "3 minutes ago" from a row written 200 seconds
+    back is precision the reader cannot use and the tool has not earned.
+
+    One definition, used by both `SiteView.checked_ago` and the client list. Two
+    would drift, and a list saying "2 hours ago" beside a page saying "yesterday"
+    for the same row is the kind of small disagreement that makes an operator
+    stop believing either number.
+    """
+    seconds = max(0, int((datetime.now(UTC) - when).total_seconds()))
+    if seconds < 90:
+        return "just now"
+    if seconds < 3600:
+        return f"{seconds // 60} minutes ago"
+    if seconds < 86_400:
+        hours = seconds // 3600
+        return f"{hours} hour{'' if hours == 1 else 's'} ago"
+    days = seconds // 86_400
+    return f"{days} day{'' if days == 1 else 's'} ago"
+
+
+@dataclass(frozen=True, slots=True)
+class SiteView:
+    """One client's stored probe, assembled for rendering.
+
+    Carries `fetched_at` as a field rather than leaving it in the row, because
+    every page that shows a figure from this object must also show when it was
+    taken. A cached number presented as a live one is the single failure this
+    caching could introduce, and making the timestamp travel with the data is
+    what stops a template forgetting it.
+    """
+
+    domain: str
+    site_url: str
+    probe: object
+    doc: object
+    tech: object
+    catalog: object
+    readiness: object
+    bundle: object
+    fetched_at: datetime
+    fetched_by: str = ""
+    duration_ms: int = 0
+
+    @property
+    def age(self) -> timedelta:
+        return datetime.now(UTC) - self.fetched_at
+
+    @property
+    def checked_ago(self) -> str:
+        """Plain words, because "2026-08-21T05:12:44Z" is not an age."""
+        return _ago(self.fetched_at)
+
+    @property
+    def is_stale(self) -> bool:
+        """A day old. Not an error -- a prompt to refresh before quoting it."""
+        return self.age > timedelta(days=1)
+
+
+async def _from_snapshot(session: AsyncSession, domain: str):
+    """Everything the site pages render, from the stored probe. No network.
+
+    Returns `None` when the domain has never been checked. `None` means "not
+    checked", and the pages say exactly that rather than probing to find out --
+    the distinction between absent evidence and negative evidence, applied to the
+    tool's own state rather than to a client's site.
+    """
+    snapshot = await repo.load_snapshot(session, domain)
+    if snapshot is None:
+        return None
+
+    normalised = f"https://{domain}"
+    probe = probe_from_dict(snapshot.probe)
+    tech = tech_from_dict(snapshot.tech)
+    readiness = readiness_from_dict(snapshot.readiness)
+    declared = declared_from_list(snapshot.probe.get("declared"))
+
+    config = await repo.load_site_config(session, domain)
+    brief = await repo.load_brief(session, domain)
+    run = await repo.latest_complete_run(session, domain)
+    pages = await repo.get_pages(session, run.id) if run is not None else []
+
+    doc, catalog, bundle = _assemble(
+        normalised, domain, probe, tech, readiness, declared, brief, config, run, pages
+    )
+    return SiteView(
+        domain=domain,
+        site_url=normalised,
+        probe=probe,
+        doc=doc,
+        tech=tech,
+        catalog=catalog,
+        readiness=readiness,
+        bundle=bundle,
+        fetched_at=snapshot.fetched_at,
+        fetched_by=snapshot.fetched_by,
+        duration_ms=snapshot.duration_ms,
+    )
+
+
+# -- clients ----------------------------------------------------------------
+#
+# The section that did not exist. `app/nav.py` described site-scoped links as
+# pointing at "the picker" and there was no picker: the only route to a client
+# was finding one of their runs among the last forty on the index and clicking
+# it, so a client whose runs had scrolled off was reachable only by typing a URL.
+
+
+@app.get("/clients", response_class=HTMLResponse)
+async def clients_page(
+    request: Request,
+    deleted: str = "",
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Every client, with enough state to decide which one needs attention.
+
+    Reads only stored rows -- no client's server is touched by loading this,
+    however many of them there are.
+    """
+    rows = []
+    for config in await repo.list_site_configs(session):
+        snapshot = await repo.load_snapshot(session, config.domain)
+        summary = None
+        if snapshot is not None:
+            summary = {
+                "score": readiness_from_dict(snapshot.readiness).score,
+                "checked_ago": _ago(snapshot.fetched_at),
+                "is_stale": datetime.now(UTC) - snapshot.fetched_at > timedelta(days=1),
+            }
+        rows.append(
+            {
+                "domain": config.domain,
+                "label": config.label,
+                "onboarded": bool(config.brief),
+                "snapshot": summary,
+            }
+        )
+
+    return templates.TemplateResponse(
+        request, "clients.html", {"user": user, "rows": rows, "deleted": deleted}
+    )
+
+
+@app.get("/clients/new", response_class=HTMLResponse)
+async def new_client_page(request: Request, user: User = Depends(require_user)):
+    """Onboarding as a destination rather than an interstitial.
+
+    The brief and its wizard already existed and were good; they could only be
+    reached by starting a crawl, and only ever once per domain. This is the door.
+    """
+    return templates.TemplateResponse(request, "client_new.html", {"user": user, "error": None})
+
+
+@app.post("/clients/new")
+async def create_client(
+    request: Request,
+    site_url: str = Form(...),
+    label: str = Form(""),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        normalised = normalise_site_url(site_url)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "client_new.html",
+            {"user": user, "error": str(exc)},
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    domain = urlparse(normalised).netloc
+    existing = await repo.load_site_config(session, domain)
+    await repo.save_site_config(
+        session,
+        domain,
+        plan=(existing.plan or {}) if existing else {},
+        max_pages=existing.max_pages if existing else 0,
+        updated_by=user.email,
+        label=label.strip(),
+    )
+    await session.commit()
+    # Straight into the brief, which is where onboarding actually happens.
+    return RedirectResponse(f"/sites/{domain}/brief", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/sites/{domain}", response_class=HTMLResponse)
+async def client_home(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One client, whole.
+
+    Everything `SiteConfig` holds plus the run history, the marks and the search
+    metrics -- which between them lived on four different pages, or on none.
+    """
+    config = await repo.load_site_config(session, domain)
+    site_status, view = await _site_status(session, domain)
+    if site_status is None:
+        return _unchecked(request, user, domain, "Overview")
+
+    runs = [r for r in await repo.list_runs(session, limit=200) if r.domain == domain][:10]
+
+    return templates.TemplateResponse(
+        request,
+        "client_home.html",
+        {
+            **_component_context(request, user, domain, site_status, view),
+            "label": (config.label if config and config.label else ""),
+            "readiness": view.readiness,
+            "probe": view.probe,
+            "status": site_status,
+            "family_rows": site_status.family_counts(),
+            "client_count": len(site_status.for_client()),
+            "dev_count": len(site_status.for_developer()),
+            "runs": runs,
+            "brief": await repo.load_brief(session, domain),
+            "onboarded": bool(config.brief) if config else False,
+            "mark_count": len(await repo.load_marks(session, domain)),
+            "metrics": await repo.metrics_summary(session, domain),
+        },
+    )
+
+
+@app.post("/sites/{domain}/refresh")
+async def refresh_client(
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-probe the site and store it. Synchronous, because someone clicked it.
+
+    The worker runs at concurrency 1, so a queued refresh can sit behind an
+    in-flight crawl for minutes. For a button an operator is watching, waiting on
+    the probe beats waiting on a queue with no way to tell which is happening.
+    """
+    await _check_and_store(session, f"https://{domain}", domain, user.email)
+    await session.commit()
+    return RedirectResponse(f"/sites/{domain}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+async def _settings_context(session: AsyncSession, user: User, domain: str, error: str | None):
+    config = await repo.load_site_config(session, domain)
+    return {
+        "user": user,
+        "domain": domain,
+        "label": config.label if config else "",
+        "exists": config is not None,
+        "going": await repo.preview_client_deletion(session, domain),
+        "error": error,
+    }
+
+
+@app.get("/sites/{domain}/settings", response_class=HTMLResponse)
+async def client_settings(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return templates.TemplateResponse(
+        request, "client_settings.html", await _settings_context(session, user, domain, None)
+    )
+
+
+@app.post("/sites/{domain}/settings")
+async def save_client_settings(
+    domain: str,
+    label: str = Form(""),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    config = await repo.load_site_config(session, domain)
+    await repo.save_site_config(
+        session,
+        domain,
+        plan=(config.plan or {}) if config else {},
+        max_pages=config.max_pages if config else 0,
+        updated_by=user.email,
+        label=label.strip(),
+    )
+    await session.commit()
+    return RedirectResponse(f"/sites/{domain}/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.post("/sites/{domain}/delete")
+async def delete_client_route(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Remove a client and everything keyed to its domain.
+
+    Admin-only with a typed confirmation, matching the run delete it sits beside.
+    The confirmation is the domain itself, so an operator with several clients
+    open cannot destroy the wrong one by muscle memory.
+    """
+    form = await request.form()
+    if str(form.get("confirm") or "").strip().lower() != domain.lower():
+        context = await _settings_context(
+            session, user, domain, f"Type {domain} to confirm. Nothing was deleted."
+        )
+        return templates.TemplateResponse(
+            request, "client_settings.html", context, status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+    removed = await repo.delete_client(session, domain)
+    await session.commit()
+    return RedirectResponse(
+        "/clients?deleted=" + quote(f"{domain}: {removed.summary()}"),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.get("/agents", response_class=HTMLResponse)
 async def agents_page(request: Request, user: User = Depends(require_user)):
-    return templates.TemplateResponse(
-        request,
-        "agents.html",
-        {
-            "user": user,
-            "site_url": "",
-            "probe": None,
-            "doc": None,
-            "tech": None,
-            "catalog": None,
-            "readiness": None,
-            "status": None,
-            "family_rows": [],
-            "domain": "",
-            "client_count": 0,
-            "dev_count": 0,
-        },
-    )
+    """The "check a site" form, for a domain that is not on file yet."""
+    return templates.TemplateResponse(request, "agents.html", {"user": user, "site_url": ""})
 
 
 @app.post("/agents", response_class=HTMLResponse)
@@ -819,40 +1175,55 @@ async def agents_generate(
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Probe first, then write only what the probe confirmed.
+    """Probe the site once, store the result, then show the client.
 
-    Synchronous rather than queued: this is four HTTP requests, not a crawl, and
-    putting it behind the job queue would add a status page to something that
-    finishes before the operator lets go of the mouse.
+    A POST rather than a GET because it costs a client's server roughly thirty
+    requests. That is fine as a thing someone asked for and wrong as a thing that
+    happens because they clicked a tab.
+
+    Still synchronous: an operator who has just typed a URL is waiting for this
+    specific answer, and a job plus a status page would be slower for them than
+    the probe. The background job exists for refreshing a client already on file,
+    where nobody is watching.
     """
     try:
         normalised = normalise_site_url(site_url)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    probe, doc, tech, catalog, readiness, bundle = await _agents_document(session, normalised)
-    domain = normalised.split("//")[-1].strip("/")
-    site_status = await _derive_state(session, domain, doc, tech, readiness, bundle)
+    domain = urlparse(normalised).netloc
+    await _check_and_store(session, normalised, domain, user.email)
+    await session.commit()
+    return RedirectResponse(f"/sites/{domain}", status_code=status.HTTP_303_SEE_OTHER)
 
-    return templates.TemplateResponse(
-        request,
-        "agents.html",
-        {
-            "user": user,
-            "site_url": normalised,
-            "probe": probe,
-            "doc": doc,
-            "tech": tech,
-            "catalog": catalog,
-            "readiness": readiness,
-            "bundle": bundle,
-            "rendered": render_agents_md(doc),
-            "status": site_status,
-            "family_rows": site_status.family_counts(),
-            "domain": domain,
-            "client_count": len(site_status.for_client()),
-            "dev_count": len(site_status.for_developer()),
-        },
+
+async def _check_and_store(
+    session: AsyncSession, normalised: str, domain: str, checked_by: str
+) -> None:
+    """Run the live probe and write the snapshot. The only writer of that row.
+
+    One writer rather than one per caller, so the page, the refresh button and
+    the background job cannot store subtly different shapes -- which the codec
+    would then read back as a plausible object with the wrong values in it.
+    """
+    started = datetime.now(UTC)
+    probe, tech, readiness, declared = await probe_site_live(session, normalised)
+    elapsed = int((datetime.now(UTC) - started).total_seconds() * 1000)
+
+    stored_probe = probe_to_dict(probe)
+    # Carried inside the probe blob rather than in its own column: it is part of
+    # what one check established, and a column would have to be migrated the next
+    # time an operator can declare one more kind of endpoint.
+    stored_probe["declared"] = declared_to_list(declared)
+
+    await repo.save_snapshot(
+        session,
+        domain,
+        probe=stored_probe,
+        readiness=readiness_to_dict(readiness),
+        tech=tech_to_dict(tech),
+        fetched_by=checked_by,
+        duration_ms=elapsed,
     )
 
 
@@ -863,15 +1234,27 @@ async def agents_download(
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Re-probe and re-render rather than serving something remembered.
+    """Serve the file built from the snapshot the operator was just looking at.
 
-    A cached document could name an endpoint the site has since withdrawn, and
-    handing a client a file that instructs agents to call a dead endpoint is the
-    failure this whole feature is built to avoid. Four requests is a cheap price
-    for the file being true when it is downloaded.
+    This used to re-probe on every download, arguing that a remembered document
+    could name an endpoint the site had since withdrawn. The argument was right
+    about staleness and wrong about the remedy: re-probing meant the downloaded
+    file could differ from the one on screen, which is the divergence
+    `_assemble` exists to prevent, and it put thirty requests on a GET.
+
+    The staleness is now handled where it belongs -- every page shows how old its
+    snapshot is and offers Refresh, so an operator downloads a file they have
+    seen the age of.
     """
     normalised = normalise_site_url(site)
-    _probe, doc, _tech, catalog, _readiness, bundle = await _agents_document(session, normalised)
+    domain = urlparse(normalised).netloc
+    view = await _from_snapshot(session, domain)
+    if view is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"{domain} has not been checked yet, so there is no file to download.",
+        )
+    doc, catalog, bundle = view.doc, view.catalog, view.bundle
 
     # Any file the bundle produced, by name. Checked first because the family
     # tabs link here by artefact name -- without it every one of those links fell
@@ -907,23 +1290,26 @@ async def agents_download(
 
 
 async def _site_status(session: AsyncSession, domain: str):
-    """Everything the eight tabs render, derived once.
+    """Everything the site pages render, derived once from the stored probe.
 
     One derivation shared by every page is what stops the family tabs, the client
     checklist and the developer handover disagreeing about what is done.
+
+    Returns `(None, None)` for a domain that has never been checked. Callers show
+    the "not checked yet" state; none of them probes to find out, which is what
+    keeps a GET free and stops a typo'd domain in the URL bar firing thirty
+    requests at somebody's server.
     """
-    site_url = f"https://{domain}"
-    _probe, doc, tech, _catalog, readiness, bundle = await _agents_document(session, site_url)
-    return await _derive_state(session, domain, doc, tech, readiness, bundle), tech
+    view = await _from_snapshot(session, domain)
+    if view is None:
+        return None, None
+    return await _derive_state(
+        session, domain, view.doc, view.tech, view.readiness, view.bundle
+    ), view
 
 
 async def _derive_state(session: AsyncSession, domain: str, doc, tech, readiness, bundle):
-    """The four states, from pieces a caller already has.
-
-    Split out so `/agents` can show the same counts as the tabs without probing
-    the site a second time -- two derivations from two probes could disagree,
-    and the overview exists precisely to be trusted at a glance.
-    """
+    """The four states, from pieces a caller already has."""
     site_url = f"https://{domain}"
     artifacts = {a.name: a.body for a in bundle.artifacts}
     templates_for_site = build_templates(site_url, doc.site_name or domain, tech.platform.value)
@@ -940,15 +1326,39 @@ async def _derive_state(session: AsyncSession, domain: str, doc, tech, readiness
     return status
 
 
-def _component_context(request, user, domain, status, tech) -> dict:
+def _component_context(request, user, domain, status, view) -> dict:
+    """The context every component-bearing page shares.
+
+    `view` rather than `tech` so `checked_ago` travels with the data. Every one of
+    these pages shows figures from a stored probe, and each has to say how old it
+    is -- passing the timestamp alongside is what stops a template omitting it.
+    """
     return {
         "user": user,
         "domain": domain,
         "site_url": status.site_url,
         "site_type": status.site_type.value,
-        "platform": tech.platform.value,
+        "platform": view.tech.platform.value,
         "markable": {s.key for s in status.statuses if manually_markable(s.component)},
+        "checked_ago": view.checked_ago,
+        "is_stale": view.is_stale,
+        "label": "",
     }
+
+
+def _unchecked(request, user, domain: str, title: str):
+    """The page for a client nobody has probed yet.
+
+    Deliberately a page rather than a probe. Rendering this costs the client's
+    server nothing, and it means a mistyped domain in the URL bar is a dead end
+    instead of thirty requests at whoever owns it.
+    """
+    return templates.TemplateResponse(
+        request,
+        "unchecked.html",
+        {"user": user, "domain": domain, "title": title},
+        status_code=status.HTTP_404_NOT_FOUND if not domain else status.HTTP_200_OK,
+    )
 
 
 @app.get("/sites/{domain}/family/{family}", response_class=HTMLResponse)
@@ -964,7 +1374,10 @@ async def family_tab(
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such group.") from exc
 
-    site_status, tech = await _site_status(session, domain)
+    site_status, view = await _site_status(session, domain)
+    if site_status is None:
+        return _unchecked(request, user, domain, FAMILY_LABELS[wanted])
+
     # Not-applicable components are dropped from the tab rather than listed as
     # absent. A page of "does not apply" reads as a broken tool on exactly the
     # sites where the tool is most useful.
@@ -976,7 +1389,7 @@ async def family_tab(
         request,
         "family.html",
         {
-            **_component_context(request, user, domain, site_status, tech),
+            **_component_context(request, user, domain, site_status, view),
             "family_label": FAMILY_LABELS[wanted],
             "family_blurb": FAMILY_BLURBS[wanted],
             "statuses": statuses,
@@ -991,14 +1404,17 @@ async def client_checklist(
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    site_status, tech = await _site_status(session, domain)
+    site_status, view = await _site_status(session, domain)
+    if site_status is None:
+        return _unchecked(request, user, domain, "Your checklist")
+
     statuses = site_status.for_client()
 
     return templates.TemplateResponse(
         request,
         "checklist.html",
         {
-            **_component_context(request, user, domain, site_status, tech),
+            **_component_context(request, user, domain, site_status, view),
             "statuses": statuses,
             "done": sum(1 for s in statuses if s.state is ComponentState.LIVE),
             "total": len(statuses),
@@ -1014,13 +1430,15 @@ async def developer_handover(
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    site_status, tech = await _site_status(session, domain)
+    site_status, view = await _site_status(session, domain)
+    if site_status is None:
+        return _unchecked(request, user, domain, "Developer handover")
 
     return templates.TemplateResponse(
         request,
         "handover.html",
         {
-            **_component_context(request, user, domain, site_status, tech),
+            **_component_context(request, user, domain, site_status, view),
             "grouped": site_status.by_effort(),
             "total": len(site_status.for_developer()),
         },

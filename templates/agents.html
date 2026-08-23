@@ -1,15 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Site overview{% endblock %}
+{% block title %}Check a site{% endblock %}
 
 {% block content %}
 <div class="panel">
-    <h2>Generate for a site</h2>
+    <h1>Check a site</h1>
     <form method="post" action="/agents">
         <div class="row">
             <div>
                 <label for="site_url">Site URL</label>
-                <input type="text" id="site_url" name="site_url"
-                       placeholder="carsguide.com.au" value="{{ site_url or '' }}" required>
+                <input type="text" id="site_url" name="site_url" autocomplete="off" spellcheck="false"
+                       placeholder="carsguide.com.au…" value="{{ site_url or '' }}" required>
             </div>
             <div class="narrow">
                 <button class="primary" type="submit">Check the site</button>
@@ -17,92 +17,21 @@
         </div>
         <p class="muted">
             Reads what the site already publishes before writing anything. Nothing is
-            claimed in a generated file that was not found here.
+            claimed in a generated file that a probe did not confirm.
+        </p>
+        <p class="hint">
+            This is about thirty requests to the site, so it takes a few seconds and
+            is not repeated on every page view. The result is stored, and every page
+            that shows it says how old it is.
         </p>
     </form>
 </div>
 
-{% if probe %}
 <div class="panel">
-    <div class="spread">
-        <h3>{{ probe.site_url }}</h3>
-        <span class="muted">{{ tech.platform.value if tech else 'unknown' }}</span>
-    </div>
-
-    <div class="stat-grid">
-        {% if readiness %}
-        <div class="stat">
-            <div class="k">Agent readiness</div>
-            <div class="v">{{ readiness.score }}/100</div>
-        </div>
-        {% endif %}
-        {% if status %}
-        <div class="stat">
-            <div class="k">Components live</div>
-            <div class="v">{{ status.live_count }} of {{ status.applicable_count }}</div>
-        </div>
-        {% endif %}
-        {% if doc and doc.transactional and probe.has_ucp %}
-        <div class="stat">
-            <div class="k">UCP</div>
-            <div class="v">
-                <a href="{{ probe.ucp.url }}" target="_blank" rel="noopener">{{ doc.ucp_version or 'declared' }}</a>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-
-    {% if tech and tech.platform_evidence %}
-    <p class="hint">Platform evidence: {{ tech.platform_evidence }}</p>
-    {% endif %}
-</div>
-
-<div class="panel">
-    <h3>What the site publishes today</h3>
-    <table>
-        <thead><tr><th>Surface</th><th>State</th><th>Detail</th></tr></thead>
-        <tbody>
-        {% for surface in probe.surfaces() %}
-        <tr>
-            <td><span class="url">{{ surface.url }}</span></td>
-            <td>
-                <span class="pill {% if surface.state.value == 'present' %}ok{% elif surface.state.value == 'absent' %}wait{% else %}bad{% endif %}">
-                    {{ surface.state.value.replace('_', ' ') }}
-                </span>
-            </td>
-            <td class="muted">{{ surface.content_type or surface.detail or surface.status or '' }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    {% if probe.notes %}
-    <ul class="notes">
-        {% for note in probe.notes %}<li class="info">{{ note }}</li>{% endfor %}
-    </ul>
-    {% endif %}
-</div>
-{% endif %}
-
-{% if status %}
-<div class="panel">
-    <h3>Where each group stands</h3>
-    <table>
-        <thead><tr><th>Group</th><th class="num" colspan="4">Components</th></tr></thead>
-        <tbody>
-        {% for family, label, counts in family_rows %}
-        {% include "partials/family_summary.html" %}
-        {% endfor %}
-        </tbody>
-    </table>
-    <p class="hint">
-        Each group is a tab with the detail, the generated file and the command to
-        verify it.
+    <h2>Already on file?</h2>
+    <p class="muted">
+        Clients you have checked before are on the
+        <a href="/clients">clients list</a>, where opening one is instant.
     </p>
-
-    <div class="row">
-        <a class="button" href="/sites/{{ domain }}/checklist">Your checklist ({{ client_count }})</a>
-        <a class="button" href="/sites/{{ domain }}/handover">Developer handover ({{ dev_count }})</a>
-    </div>
 </div>
-{% endif %}
 {% endblock %}

@@ -5,7 +5,7 @@
 
 <div class="panel">
     <div class="spread">
-        <h2 style="margin:0">What this has cost to run</h2>
+        <h1>What this has cost to run</h1>
         <form method="get" action="/admin" class="inline-form">
             <select name="days" onchange="this.form.submit()">
                 {% for option in [7, 30, 90] %}
@@ -15,7 +15,7 @@
         </form>
     </div>
 
-    <div class="stat-grid" style="margin-top:1rem">
+    <div class="stat-grid spaced">
         <div class="stat"><div class="k">Total</div><div class="v">{{ usd(totals.total_usd, 2) }}</div></div>
         <div class="stat"><div class="k">Per run</div><div class="v">{{ usd(totals.cost_per_run, 4) }}</div></div>
         <div class="stat"><div class="k">Runs</div><div class="v">{{ totals.runs }}</div></div>
@@ -49,8 +49,9 @@
     <h2>By day</h2>
     {% if by_day %}
     {% set peak = by_day | map(attribute='1') | map(attribute='usd') | max %}
-    <table>
-        <thead><tr><th>Date</th><th class="num">Runs</th><th class="num">Cost</th><th style="width:45%"></th></tr></thead>
+    <div class="table-scroll">
+        <table>
+        <thead><tr><th>Date</th><th class="num">Runs</th><th class="num">Cost</th><th class="bar-col"></th></tr></thead>
         <tbody>
         {% for date, day in by_day %}
         <tr>
@@ -58,14 +59,15 @@
             <td class="num">{{ day.runs | int }}</td>
             <td class="num">{{ usd(day.usd, 4) }}</td>
             <td>
-                <div class="bar" style="margin:0.35rem 0">
+                <div class="bar tight">
                     <span style="width: {{ (100 * day.usd / peak) if peak else 0 }}%"></span>
                 </div>
             </td>
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     {% else %}
     <p class="empty">No runs in this window.</p>
     {% endif %}
@@ -74,7 +76,8 @@
 <div class="panel">
     <h2>By model</h2>
     {% if by_model %}
-    <table>
+    <div class="table-scroll">
+        <table>
         <thead><tr><th>Model</th><th class="num">Calls</th><th class="num">Input</th><th class="num">Output</th><th class="num">Cost</th></tr></thead>
         <tbody>
         {% for model, m in by_model %}
@@ -87,7 +90,8 @@
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     {% else %}
     <p class="empty">No model usage recorded in this window.</p>
     {% endif %}
@@ -96,7 +100,8 @@
 <div class="panel">
     <h2>Most expensive runs</h2>
     {% if rows %}
-    <table>
+    <div class="table-scroll">
+        <table>
         <thead>
         <tr><th>Site</th><th>Status</th><th class="num">Tokens</th><th class="num">SERP</th><th class="num">Cost</th><th>When</th><th>By</th></tr>
         </thead>
@@ -115,7 +120,8 @@
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     <p class="muted">A <strong>+</strong> means part of that run could not be priced, so its figure is a floor.</p>
     {% else %}
     <p class="empty">No runs in this window.</p>

@@ -53,7 +53,23 @@ def test_site_items_are_shown_but_marked_when_there_is_no_domain():
 
     assert brief.disabled
     assert brief.hint
-    assert brief.url == "/", "with no domain it points at the picker, not a dead path"
+    assert brief.url == "/clients", "with no domain it points at the picker"
+
+
+def test_the_picker_it_points_at_actually_exists():
+    """This assertion used to encode a fiction.
+
+    `nav.py` said disabled links "point at the picker rather than at a dead
+    path", and the test asserted they pointed at `/`. There was no picker: `/`
+    was the run starter, and the only way to reach a client was to find one of
+    their runs in the most recent forty and click it.
+    """
+    from app.main import app
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+
+    assert "/clients" in paths
+    assert flat(build_nav("/"))["Brief"].url in paths
 
 
 def test_site_items_become_usable_once_a_domain_is_known():
@@ -179,6 +195,9 @@ def _render(template: str, **extra):
         "done": 1,
         "total": 5,
         "dev_count": 12,
+        "checked_ago": "3 hours ago",
+        "is_stale": False,
+        "label": "",
         **extra,
     }
 
@@ -263,8 +282,36 @@ def test_the_nav_offers_every_family_and_both_action_lists():
 # -- the overview -------------------------------------------------------------
 
 
+def _readiness(passed: int = 4, of: int = 10):
+    """A real report rather than a stand-in.
+
+    A `SimpleNamespace(score=42)` renders the number and then explodes on
+    `summary()` -- the method carrying the sample the score came from, which is
+    exactly what a page must not omit. Building the real object means the test
+    exercises what the template actually calls.
+
+    Takes a pass count rather than a target score, because the score is a
+    weighted property and asking for an arbitrary number would mean the helper
+    quietly producing something else.
+    """
+    from app.core.components import SiteType, by_key
+    from app.scrape.readiness import CheckResult, CheckState, ReadinessReport
+
+    report = ReadinessReport(site_url="https://x.example", site_type=SiteType.CONTENT)
+    report.sampled = ["https://x.example/", "https://x.example/blog/a-post"]
+    for n in range(of):
+        state = CheckState.PASS if n < passed else CheckState.FAIL
+        report.results.append(CheckResult(by_key("llms-txt"), state, f"check {n}"))
+    return report
+
+
 def _overview(**extra):
-    """The /agents overview, with whatever the route would have passed."""
+    """The client overview, rendered."""
+    return _render("client_home.html", **{**_overview_context(), **extra})
+
+
+def _overview_context(**extra):
+    """Whatever the route would have passed. One definition, two readers."""
     from app.scrape.agents_probe import ProbeResult, Surface, SurfaceState
 
     probe = ProbeResult(
@@ -291,6 +338,13 @@ def _overview(**extra):
         templates=build_templates("https://x.example"),
     )
     context = {
+        "checked_ago": "3 hours ago",
+        "is_stale": False,
+        "label": "",
+        "onboarded": True,
+        "runs": [],
+        "mark_count": 2,
+        "metrics": {},
         "probe": probe,
         "doc": SimpleNamespace(transactional=False, ucp_version="", site_name="X"),
         "tech": SimpleNamespace(
@@ -298,7 +352,7 @@ def _overview(**extra):
             platform_evidence="generator meta tag",
         ),
         "catalog": None,
-        "readiness": SimpleNamespace(score=42),
+        "readiness": _readiness(),
         "status": status,
         "family_rows": status.family_counts(),
         "client_count": len(status.for_client()),
@@ -307,35 +361,44 @@ def _overview(**extra):
         "rendered": "",
         **extra,
     }
-    return _render("agents.html", **context)
+    return context
 
 
-def test_the_overview_renders_before_a_site_has_been_checked():
-    """The GET route passes nothing; StrictUndefined makes a forgotten key fail here."""
-    html = _render(
-        "agents.html",
-        probe=None,
-        doc=None,
-        tech=None,
-        catalog=None,
-        readiness=None,
-        status=None,
-        family_rows=[],
-        client_count=0,
-        dev_count=0,
-    )
+def test_the_check_form_renders_with_nothing_but_a_user():
+    """The GET route passes almost nothing; StrictUndefined catches a forgotten key."""
+    html = _render("agents.html", site_url="")
 
     assert "Check the site" in html
     assert 'class="side"' in html
 
 
-def test_the_overview_answers_how_the_site_is_doing_without_opening_a_tab():
+def test_the_client_overview_answers_how_the_site_is_doing_without_opening_a_tab():
     html = _overview()
 
-    assert "42/100" in html, "the readiness score"
+    assert f"{_readiness().score}/100" in html, "the readiness score"
     assert "wordpress" in html, "the platform"
     assert "llms.txt" in html, "what the site publishes today"
     assert "Your checklist" in html and "Developer handover" in html
+
+
+def test_every_page_built_on_a_stored_probe_says_how_old_it_is():
+    """A cached number shown as a live one is the failure caching introduces.
+
+    Asserted across every such page rather than on one, because the way this
+    fails is a new page that forgets the partial -- and it would look correct.
+    """
+    for template in ("family.html", "checklist.html", "handover.html"):
+        assert "Checked 3 hours ago" in _render(template), template
+
+    assert "Checked 3 hours ago" in _overview()
+
+
+def test_a_stale_snapshot_says_so_rather_than_just_showing_its_age():
+    """"Checked 2 days ago" is a fact. "Refresh before quoting it" is the advice."""
+    html = _render("family.html", checked_ago="2 days ago", is_stale=True)
+
+    assert "over a day old" in html
+    assert "refresh before quoting it" in html
 
 
 def test_the_overview_counts_agree_with_the_tabs():
@@ -372,3 +435,202 @@ def test_a_family_with_nothing_applicable_is_left_out_rather_than_shown_as_zero(
             s for s in status.family(family) if s.state is not ComponentState.NOT_APPLICABLE
         ]
         assert len(applicable) == counts["total"]
+
+
+# -- the client pages ---------------------------------------------------------
+
+
+def test_the_client_list_renders_with_and_without_clients():
+    """A first-run instance sees this page before anything else exists."""
+    empty = _render("clients.html", rows=[], deleted="")
+    assert "No clients yet" in empty
+    assert "Add a client" in empty
+
+    filled = _render(
+        "clients.html",
+        deleted="",
+        rows=[
+            {
+                "domain": "x.example",
+                "label": "Big Client",
+                "onboarded": True,
+                "snapshot": {"score": 53, "checked_ago": "2 hours ago", "is_stale": False},
+            },
+            {"domain": "y.example", "label": "", "onboarded": False, "snapshot": None},
+        ],
+    )
+    assert "Big Client" in filled
+    assert "53/100" in filled
+    assert "needs onboarding" in filled
+
+
+def test_a_client_never_checked_says_so_rather_than_showing_a_zero():
+    """`None` is "not checked". A 0/100 would read as a site that failed everything."""
+    html = _render(
+        "clients.html",
+        deleted="",
+        rows=[{"domain": "y.example", "label": "", "onboarded": False, "snapshot": None}],
+    )
+
+    assert "never checked" in html
+    assert "0/100" not in html
+
+
+def test_the_unchecked_page_offers_a_check_rather_than_running_one():
+    html = _render("unchecked.html", title="Your checklist")
+
+    assert "has not been checked yet" in html
+    assert "/sites/x.example/refresh" in html
+    assert "Checking reads about thirty pages" in html
+
+
+def test_the_settings_page_states_what_a_delete_would_remove():
+    """A confirm screen that says "are you sure" and nothing else is not consent."""
+    from app.db.repo import ClientDeletion
+
+    html = _render(
+        "client_settings.html",
+        exists=True,
+        error=None,
+        going=ClientDeletion(
+            domain="x.example", runs=2, pages=80, marks=3, metric_rows=412, snapshots=1, config=1
+        ),
+    )
+
+    assert "2 runs" in html and "80 crawled pages" in html and "412 search-metric rows" in html
+    assert "Type <code>x.example</code> to confirm" in html
+
+
+def test_the_danger_zone_is_hidden_from_a_non_admin():
+    from app.db.repo import ClientDeletion
+
+    nothing = ClientDeletion(
+        domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, config=1
+    )
+    html = _render(
+        "client_settings.html",
+        exists=True,
+        error=None,
+        going=nothing,
+        user=__import__("types").SimpleNamespace(email="a@b.c", is_admin=False),
+    )
+
+    assert "Danger zone" not in html
+    assert "Delete this client" not in html
+
+
+def test_the_add_client_page_renders():
+    html = _render("client_new.html", error=None)
+
+    assert "Add a client" in html
+    assert 'name="site_url"' in html
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["clients.html", "client_new.html", "client_home.html", "client_settings.html",
+     "unchecked.html", "agents.html", "family.html", "checklist.html", "handover.html"],
+)
+def test_every_page_renders_under_strict_undefined(template):
+    """The sweep the plan asked to grow from nine pages to the reshaped set.
+
+    A context key a route forgets fails here rather than as a 500 in production.
+    """
+    from app.db.repo import ClientDeletion
+
+    html = _render(
+        template,
+        rows=[],
+        deleted="",
+        error=None,
+        exists=True,
+        title="Overview",
+        site_url="",
+        going=ClientDeletion(
+            domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, config=1
+        ),
+        **(_overview_context() if template == "client_home.html" else {}),
+    )
+
+    assert 'class="side"' in html or template in ("login.html", "signup.html")
+    assert "<h1" in html, "every page opens at h1"
+
+
+# -- what the guidelines review found ----------------------------------------
+
+
+def test_every_page_offers_a_skip_link_before_the_sidebar():
+    """Up to fourteen nav links precede the content on every page.
+
+    Below the breakpoint the sidebar becomes a horizontal band, so a keyboard
+    user crosses all of them to reach anything.
+    """
+    html = _render("clients.html", rows=[], deleted="")
+
+    assert '<a class="skip" href="#main">' in html
+    assert 'id="main"' in html
+    assert html.index('class="skip"') < html.index('class="side"')
+
+
+def test_a_disabled_nav_item_says_why_to_a_screen_reader():
+    """It renders as an ordinary link with a `title`, and a title is mouse-only."""
+    # No domain, which is when the site-scoped items are the disabled ones.
+    html = _render("clients.html", rows=[], deleted="", domain="")
+
+    assert "visually-hidden" in html
+    assert "Pick a client first" in html
+
+
+def test_email_fields_are_typed_as_email():
+    """type=text gives no mobile keyboard hint and no browser validation."""
+    for template in ("login.html", "signup.html"):
+        html = _render(template, error=None, sso_enabled=False)
+        assert 'type="email"' in html, template
+        assert 'spellcheck="false"' in html, template
+
+
+def test_a_domain_field_does_not_invite_a_password_manager():
+    html = _render("client_new.html", error=None)
+
+    assert 'autocomplete="off"' in html
+    assert 'spellcheck="false"' in html
+
+
+def test_the_progress_poller_announces_itself():
+    """It swaps content every three seconds with no announcement otherwise."""
+    from pathlib import Path
+
+    run_html = Path("templates/run.html").read_text(encoding="utf-8")
+
+    assert 'aria-live="polite"' in run_html
+
+
+def test_the_stylesheet_honours_a_reduced_motion_preference():
+    from pathlib import Path
+
+    css = Path("static/css/main.css").read_text(encoding="utf-8")
+
+    assert "prefers-reduced-motion" in css
+    assert "color-scheme" in css
+    assert "touch-action: manipulation" in css
+
+
+def test_the_stylesheet_has_one_breakpoint_unit():
+    """720px and 60rem were the same file disagreeing with its own warning."""
+    import re
+    from pathlib import Path
+
+    css = Path("static/css/main.css").read_text(encoding="utf-8")
+    units = {m.group(1) for m in re.finditer(r"@media \(max-width: \d+(px|rem)\)", css)}
+
+    assert units == {"px"}, units
+
+
+def test_no_dead_rules_are_left_behind():
+    """`.admin-nav` was 21 lines styling a component no template rendered."""
+    from pathlib import Path
+
+    css = Path("static/css/main.css").read_text(encoding="utf-8")
+
+    assert ".admin-nav" not in css
+    assert ".right {" not in css

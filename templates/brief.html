@@ -2,7 +2,7 @@
 
 {% block content %}
 <div class="panel">
-    <h2>What should we know about {{ domain }}?</h2>
+    <h1>What should we know about {{ domain }}?</h1>
 
     {% if drift_reason %}
     <p class="notice wait">
@@ -96,7 +96,8 @@
     </p>
 
     {% if readiness.failures %}
-    <table>
+    <div class="table-scroll">
+        <table>
         <thead><tr><th>Priority</th><th>Component</th><th>What we found</th></tr></thead>
         <tbody>
         {% for r in readiness.failures %}
@@ -107,7 +108,8 @@
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     {% endif %}
 
     {% if readiness.manual %}
@@ -147,7 +149,8 @@
     {% endif %}
 
     {% if metrics %}
-    <table>
+    <div class="table-scroll">
+        <table>
         <thead><tr><th>Source</th><th class="num">URLs</th><th class="num">Clicks</th><th>Window</th><th>Added</th></tr></thead>
         <tbody>
         {% for source, m in metrics.items() %}
@@ -160,7 +163,8 @@
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     {% else %}
     <p class="muted">
         No metrics yet. Without them, groups are held for review rather than

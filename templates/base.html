@@ -14,9 +14,10 @@
     <script src="/static/js/htmx.min.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 {% block chrome %}
 <header class="top">
-    <a class="brand" href="/" aria-label="Prosperity Media — home">
+    <a class="brand" href="/clients" aria-label="Prosperity Media — clients">
         <img src="/static/img/pm-logo-white.svg" alt="" width="99" height="44">
     </a>
     <span class="bar-divider" aria-hidden="true"></span>
@@ -34,7 +35,7 @@
         user.is_admin if user else False,
     ) %}
     {% include "partials/sidebar.html" %}
-    <main>
+    <main id="main" tabindex="-1">
         {% block content %}{% endblock %}
     </main>
 </div>

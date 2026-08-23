@@ -1,0 +1,13 @@
+{# When this client was last probed, and a way to do it again.
+
+   Included on every page that shows a figure derived from a stored probe. The
+   figures are real but they are not live, and a cached number presented as a
+   current one is the one failure the snapshot table could introduce. So the age
+   travels with the data and every such page renders this. #}
+<p class="hint checked">
+    Checked {{ checked_ago }}{% if is_stale %} &mdash;
+    <strong>this is over a day old</strong>, refresh before quoting it to a client{% endif %}.
+    <form class="inline-form" method="post" action="/sites/{{ domain }}/refresh">
+        <button class="ghost" type="submit">Refresh</button>
+    </form>
+</p>

@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{{ label or domain }}{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <div class="spread">
+        <h1>{{ label or domain }}</h1>
+        <span class="muted">
+            {{ domain }} &middot; {{ platform }}
+            {% if not onboarded %}
+            &middot; <a href="/sites/{{ domain }}/brief">not onboarded</a>
+            {% endif %}
+        </span>
+    </div>
+
+    <div class="stat-grid">
+        <div class="stat">
+            <div class="k">Agent readiness</div>
+            <div class="v">{{ readiness.score }}/100</div>
+        </div>
+        <div class="stat">
+            <div class="k">Components live</div>
+            <div class="v">{{ status.live_count }} of {{ status.applicable_count }}</div>
+        </div>
+        <div class="stat">
+            <div class="k">Your checklist</div>
+            <div class="v"><a href="/sites/{{ domain }}/checklist">{{ client_count }}</a></div>
+        </div>
+        <div class="stat">
+            <div class="k">Needs a developer</div>
+            <div class="v"><a href="/sites/{{ domain }}/handover">{{ dev_count }}</a></div>
+        </div>
+    </div>
+
+    {% include "partials/checked.html" %}
+    <p class="hint">{{ readiness.summary() }}</p>
+</div>
+
+<div class="panel">
+    <h2>Where each group stands</h2>
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>Group</th><th class="num" colspan="4">Components</th></tr></thead>
+            <tbody>
+            {% for family, family_label, counts in family_rows %}
+            {% include "partials/family_summary.html" %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="panel">
+    <h2>What the site publishes today</h2>
+    {% if probe.surfaces() %}
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>Surface</th><th>State</th><th>Detail</th></tr></thead>
+            <tbody>
+            {% for surface in probe.surfaces() %}
+            <tr>
+                <td><span class="url">{{ surface.url }}</span></td>
+                <td>
+                    <span class="pill {% if surface.state.value == 'present' %}ok{% elif surface.state.value == 'absent' %}wait{% else %}bad{% endif %}">
+                        {{ surface.state.value.replace('_', ' ') }}
+                    </span>
+                </td>
+                <td class="muted">{{ surface.content_type or surface.detail or surface.status or '' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty">No agent-facing surfaces answered.</p>
+    {% endif %}
+    {% if probe.notes %}
+    <ul class="notes">{% for note in probe.notes %}<li class="info">{{ note }}</li>{% endfor %}</ul>
+    {% endif %}
+</div>
+
+<div class="panel">
+    <h2>What we know</h2>
+    <div class="stat-grid">
+        <div class="stat">
+            <div class="k">Brief</div>
+            <div class="v">
+                <a href="/sites/{{ domain }}/brief">{{ 'answered' if onboarded else 'not answered' }}</a>
+            </div>
+        </div>
+        <div class="stat">
+            <div class="k">Manual marks</div>
+            <div class="v">{{ mark_count }}</div>
+        </div>
+        <div class="stat">
+            <div class="k">Search data</div>
+            <div class="v">
+                {% set urls = metrics.values()|map(attribute='urls')|sum %}
+                {% if urls %}{{ urls }} URLs{% else %}none{% endif %}
+            </div>
+        </div>
+        <div class="stat">
+            <div class="k">Runs</div>
+            <div class="v">{{ runs|length }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="spread">
+        <h2>llms.txt runs</h2>
+        <a class="button" href="/">Start a run</a>
+    </div>
+    {% if runs %}
+    <div class="table-scroll">
+        <table>
+            <thead>
+            <tr><th>Started</th><th>Status</th><th class="num">Pages</th><th>By</th></tr>
+            </thead>
+            <tbody>
+            {% for run in runs %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+                <td>
+                    {% set s = run.status %}
+                    <span class="pill {% if s == 'complete' %}ok{% elif s == 'failed' %}bad{% elif s == 'awaiting_review' %}wait{% else %}run{% endif %}">{{ s.replace('_', ' ') }}</span>
+                </td>
+                <td class="num">{{ run.sitemap_html or '—' }}</td>
+                <td class="muted">{{ run.created_by }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty">No runs for this client yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

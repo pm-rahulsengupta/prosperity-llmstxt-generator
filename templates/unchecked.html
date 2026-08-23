@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ domain }}{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <h1>{{ domain }}</h1>
+    <p class="muted">
+        This site has not been checked yet, so there is nothing to show on
+        {{ title }}.
+    </p>
+    <p class="hint">
+        Checking reads about thirty pages and files from {{ domain }}. It is not
+        done automatically on page load &mdash; opening a tab should not cost a
+        client's server anything, and a mistyped domain should not send requests
+        to whoever owns it.
+    </p>
+    <form method="post" action="/sites/{{ domain }}/refresh">
+        <button class="primary" type="submit">Check {{ domain }} now</button>
+    </form>
+</div>
+
+<div class="panel">
+    <h2>Or start from the beginning</h2>
+    <p class="muted">
+        If this is a new client, onboarding first means the check has the brief to
+        work from &mdash; what the site is for, which endpoints it declares, and
+        what must never be published.
+    </p>
+    <div class="row">
+        <a class="button" href="/sites/{{ domain }}/brief">Onboard {{ domain }}</a>
+        <a class="button" href="/clients">All clients</a>
+    </div>
+</div>
+{% endblock %}

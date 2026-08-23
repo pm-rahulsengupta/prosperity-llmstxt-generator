@@ -4,14 +4,15 @@
 {% block content %}
 
 <div class="panel">
-    <h2>All runs</h2>
+    <h1>All runs</h1>
     <p class="muted">
         Every run on this instance, newest first, with what it cost and what it
         produced. The run pages themselves show no cost &mdash; it is an internal
         number and does not belong next to a client's file.
     </p>
     {% if rows %}
-    <table>
+    <div class="table-scroll">
+        <table>
         <thead>
         <tr>
             <th>Site</th><th>Status</th><th class="num">Sitemap</th><th class="num">Indexed</th>
@@ -37,7 +38,8 @@
         </tr>
         {% endfor %}
         </tbody>
-    </table>
+        </table>
+    </div>
     {% else %}
     <p class="empty">No runs yet.</p>
     {% endif %}

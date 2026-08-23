@@ -4,30 +4,30 @@
 {% block chrome %}{% endblock %}
 
 {% block content %}
-<img class="auth-mark" src="/static/img/pm-logo-green.svg" alt="Prosperity Media">
-<div class="panel" style="max-width: 26rem; margin: 4rem auto">
-    <h2>Claim this instance</h2>
+<img class="auth-mark" src="/static/img/pm-logo-green.svg" alt="Prosperity Media" width="160" height="71">
+<div class="panel auth-card">
+    <h1>Claim this instance</h1>
     <p class="muted">
         This deployment has no accounts yet. The first person to register becomes its
         admin, and self-service signup closes permanently at that point &mdash;
         everyone else is added from the Accounts page.
     </p>
     {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
-    <form method="post" action="/signup" style="margin-top:1rem">
-        <div style="margin-bottom:0.75rem">
+    <form method="post" action="/signup">
+        <div class="field">
             <label for="name">Name</label>
             <input type="text" id="name" name="name" autocomplete="name">
         </div>
-        <div style="margin-bottom:0.75rem">
+        <div class="field">
             <label for="email">Email</label>
-            <input type="text" id="email" name="email" autocomplete="username" required autofocus>
+            <input type="email" id="email" name="email" spellcheck="false" autocomplete="username" required autofocus>
         </div>
-        <div style="margin-bottom:1rem">
+        <div class="field">
             <label for="password">Password &mdash; at least 12 characters</label>
             <input type="password" id="password" name="password" autocomplete="new-password"
                    minlength="12" required>
         </div>
-        <button class="primary" type="submit" style="width:100%">Claim it</button>
+        <button class="primary" type="submit">Claim it</button>
     </form>
 </div>
 {% endblock %}

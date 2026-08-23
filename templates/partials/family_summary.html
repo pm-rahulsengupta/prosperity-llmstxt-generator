@@ -4,7 +4,7 @@
    require opening six tabs. The counts come from the same `SiteStatus` the tabs
    render, so this cannot disagree with what a tab shows. #}
 <tr>
-    <td><a href="/sites/{{ domain }}/family/{{ family.value }}">{{ label }}</a></td>
+    <td><a href="/sites/{{ domain }}/family/{{ family.value }}">{{ family_label }}</a></td>
     <td class="num">{% if counts.live %}<span class="pill ok">{{ counts.live }} live</span>{% endif %}</td>
     <td class="num">{% if counts.ready %}<span class="pill wait">{{ counts.ready }} ready</span>{% endif %}</td>
     <td class="num">{% if counts.template %}<span class="pill run">{{ counts.template }} template</span>{% endif %}</td>
