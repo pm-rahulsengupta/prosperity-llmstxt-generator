@@ -433,7 +433,7 @@ def build_bundle(
         if name not in produced:
             bundle.notes.append(
                 f"{name} is called for by this scenario but was not generated — "
-                "run the llms.txt generator for this site first."
+                "run a crawl for this site first."
             )
 
     for endpoint in bundle.unreachable:

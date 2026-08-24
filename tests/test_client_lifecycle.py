@@ -136,7 +136,9 @@ async def test_a_label_survives_a_later_plan_approval(session):
     await repo.save_site_config(
         session, "x.example", plan={}, max_pages=0, updated_by="t@x.com", label="Big Client"
     )
-    await repo.save_site_config(session, "x.example", plan={"v": 2}, max_pages=9, updated_by="t@x.com")
+    await repo.save_site_config(
+        session, "x.example", plan={"v": 2}, max_pages=9, updated_by="t@x.com"
+    )
     await session.commit()
 
     config = await repo.load_site_config(session, "x.example")

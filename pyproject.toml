@@ -1,7 +1,7 @@
 [project]
 name = "prosperity-llmstxt-generator"
 version = "0.1.0"
-description = "Generates spec-compliant llms.txt and llms-full.txt for client sites."
+description = "AI SEO Technical Discovery Support Tool — audits a site's agent readiness and generates the files that fix it."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.121.0",

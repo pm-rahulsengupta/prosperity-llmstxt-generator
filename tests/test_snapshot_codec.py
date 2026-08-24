@@ -34,7 +34,9 @@ def a_probe() -> ProbeResult:
             body="# a very long document" * 500,
         ),
         agents_md=Surface(url="https://x.example/agents.md", state=SurfaceState.ABSENT, status=404),
-        ucp=Surface(url="https://x.example/.well-known/ucp", state=SurfaceState.PRESENT, status=200),
+        ucp=Surface(
+            url="https://x.example/.well-known/ucp", state=SurfaceState.PRESENT, status=200
+        ),
         ucp_profile=UcpProfile(
             version="2026-01",
             supported_versions=("2026-01", "2025-11"),
@@ -155,7 +157,9 @@ def test_a_retired_component_is_dropped_rather_than_faked():
     that no longer exists.
     """
     stored = readiness_to_dict(a_report())
-    stored["results"].append({"key": "a-check-we-deleted", "state": "pass", "detail": "", "url": ""})
+    stored["results"].append(
+        {"key": "a-check-we-deleted", "state": "pass", "detail": "", "url": ""}
+    )
 
     restored = readiness_from_dict(stored)
 

@@ -45,6 +45,43 @@
     <p class="hint">Verify: <code>{{ status.verify }}</code></p>
     {% endif %}
 
+    {# Spec compliance of what we generated. Shown only where a rule set exists:
+       three artifacts have none written, and rendering silence as a pass would
+       be the inflation the whole engine exists to prevent. #}
+    {% if status.publishable and reports is defined %}
+        {% set report = reports.get(status.key) %}
+        {% if report %}
+        <p class="hint">
+            Spec check:
+            <span class="pill {% if report.capped_by == 'error' %}bad{% elif report.failures %}wait{% else %}ok{% endif %}">
+                {{ report.score }}/100
+            </span>
+            {% if report.failures %}{{ report.failures|length }} to fix{% endif %}
+            {% if report.skipped %}<span class="muted">&middot; {{ report.skipped|length }} not checked</span>{% endif %}
+        </p>
+        {% if report.failures %}
+        <details class="spec">
+            <summary>What fails</summary>
+            <ul class="notes">
+            {% for finding in report.failures %}
+                <li class="{% if report.capped_by == 'error' %}error{% else %}info{% endif %}">
+                    <code>{{ finding.rule_id }}</code> {{ finding.message }}
+                    {% if finding.examples %}
+                    <br><span class="muted">e.g. {{ finding.examples[0] }}</span>
+                    {% endif %}
+                </li>
+            {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+        {% elif judged is defined and status.artifact_name not in judged %}
+        <p class="hint muted">
+            No spec rules exist for {{ status.artifact_name }} yet, so this file is
+            generated but not checked.
+        </p>
+        {% endif %}
+    {% endif %}
+
     {# Only where nothing can check it. A tick on a probe-decided component would
        let someone assert llms.txt is published while it returns 404. #}
     {% if markable and status.key in markable %}

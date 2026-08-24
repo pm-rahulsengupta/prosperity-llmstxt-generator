@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}llms.txt generator{% endblock %} &middot; Prosperity Media</title>
+    <title>{% block title %}Discovery{% endblock %} &middot; AI SEO Technical Discovery Support Tool</title>
     <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
     <!-- crossorigin is required even same-origin: font fetches are CORS-mode, and
          without it the browser downloads the file twice. -->
@@ -21,7 +21,7 @@
         <img src="/static/img/pm-logo-white.svg" alt="" width="99" height="44">
     </a>
     <span class="bar-divider" aria-hidden="true"></span>
-    <span class="tool">llms.txt generator</span>
+    <span class="tool">AI SEO Technical Discovery Support Tool</span>
     <span class="who">
         {% if not llm_enabled %}<span class="pill wait">no LLM key &mdash; heuristics only</span>{% endif %}
         {% if user %}{{ user.email }}{% if user.is_admin %} &middot; <a href="/admin">admin</a>{% endif %} &middot; <a href="/logout">sign out</a>{% endif %}
@@ -33,6 +33,7 @@
         request.url.path if request else "/",
         domain if domain is defined else (run.domain if run is defined and run else ""),
         user.is_admin if user else False,
+        nav_gaps if nav_gaps is defined else None,
     ) %}
     {% include "partials/sidebar.html" %}
     <main id="main" tabindex="-1">

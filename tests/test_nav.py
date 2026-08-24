@@ -16,32 +16,97 @@ def flat(groups):
     return {item.title: item for group in groups for item in group.items}
 
 
-def test_the_generate_group_always_offers_both_files():
+def test_no_nav_item_is_named_after_a_file_it_does_not_open():
+    """The old sidebar had a "Generate" group offering "llms.txt" and "agents.md".
+
+    Neither opened a file. `llms.txt` was the crawl-run starter and `agents.md`
+    was the check-a-site form -- two processes named after two files that also
+    exist as components in the Content and Agent-instructions families, two
+    groups further down. The same name meant two things on one screen.
+    """
+    from app.core.components import COMPONENTS
+
+    artifacts = {c.artifact for c in COMPONENTS if c.artifact}
+    named_after_a_file = {t for t in flat(build_nav("/", "x.example")) if t in artifacts}
+
+    assert named_after_a_file == set(), named_after_a_file
+
+
+def test_the_crawl_runner_is_named_for_what_it_does():
     items = flat(build_nav("/"))
-    assert "llms.txt" in items
-    assert "agents.md" in items
+
+    assert "Crawl runs" in items
+    assert "Check any site" in items
 
 
 def test_the_index_is_active_only_on_the_index():
     """`/` is a prefix of every path and would otherwise light everywhere."""
-    assert flat(build_nav("/"))["llms.txt"].active
-    assert not flat(build_nav("/agents"))["llms.txt"].active
-    assert not flat(build_nav("/admin"))["llms.txt"].active
+    assert flat(build_nav("/"))["Crawl runs"].active
+    assert not flat(build_nav("/agents"))["Crawl runs"].active
+    assert not flat(build_nav("/admin"))["Crawl runs"].active
 
 
 def test_a_run_page_lights_the_section_it_belongs_to():
-    """A run is the output of the llms.txt flow.
+    """A run is the output of the crawl flow.
 
     Leaving the sidebar entirely dark on the page an operator spends most of
     their time on is a worse answer than naming its section.
     """
-    assert flat(build_nav("/runs/abc-123"))["llms.txt"].active
+    assert flat(build_nav("/runs/abc-123"))["Crawl runs"].active
 
 
-def test_the_agents_tab_lights_on_its_own_pages():
+def test_the_check_form_lights_on_its_own_page():
     items = flat(build_nav("/agents"))
-    assert items["agents.md"].active
-    assert not items["llms.txt"].active
+    assert items["Check any site"].active
+    assert not items["Crawl runs"].active
+
+
+# -- gap counts ---------------------------------------------------------------
+
+
+def test_a_family_with_outstanding_work_carries_its_count():
+    from app.core.components import Family
+
+    items = flat(build_nav("/", "x.example", gaps={Family.CRAWL: 2}))
+
+    assert items["Crawl rules"].gap == 2
+
+
+def test_measured_and_clear_is_zero_not_absent():
+    """`0` and `None` are different answers and the nav must not merge them.
+
+    Zero means every applicable component in that family is live. `None` means
+    nothing has been measured -- no client, or no stored probe. A family with no
+    data must not read as a family with no problems.
+    """
+    from app.core.components import Family
+
+    measured = flat(build_nav("/", "x.example", gaps={Family.CONTENT: 0}))
+    unmeasured = flat(build_nav("/", "x.example"))
+
+    assert measured["Content"].gap == 0
+    assert unmeasured["Content"].gap is None
+
+
+def test_an_unmeasured_family_renders_no_pill_rather_than_a_zero():
+    html = _render("clients.html", rows=[], deleted="", domain="x.example")
+
+    assert 'class="gap"' not in html
+
+
+def test_a_measured_family_renders_its_count():
+    from app.core.components import Family
+
+    html = _render(
+        "clients.html",
+        rows=[],
+        deleted="",
+        domain="x.example",
+        nav_gaps={Family.CRAWL: 3, Family.CONTENT: 0},
+    )
+
+    assert ">3<" in html
+    assert "gap done" in html, "zero renders a tick, not an empty space"
 
 
 def test_site_items_are_shown_but_marked_when_there_is_no_domain():
@@ -152,7 +217,7 @@ def test_the_sidebar_does_not_break_existing_pages(template):
         env.undefined = previous
 
     assert 'class="side"' in html
-    assert "agents.md" in html
+    assert "Check any site" in html
 
 
 # -- the eight new pages ------------------------------------------------------
@@ -198,6 +263,8 @@ def _render(template: str, **extra):
         "checked_ago": "3 hours ago",
         "is_stale": False,
         "label": "",
+        "reports": {},
+        "judged": __import__("app.core.evidence", fromlist=["JUDGED_BY"]).JUDGED_BY,
         **extra,
     }
 
@@ -394,7 +461,7 @@ def test_every_page_built_on_a_stored_probe_says_how_old_it_is():
 
 
 def test_a_stale_snapshot_says_so_rather_than_just_showing_its_age():
-    """"Checked 2 days ago" is a fact. "Refresh before quoting it" is the advice."""
+    """ "Checked 2 days ago" is a fact. "Refresh before quoting it" is the advice."""
     html = _render("family.html", checked_ago="2 days ago", is_stale=True)
 
     assert "over a day old" in html
@@ -528,8 +595,17 @@ def test_the_add_client_page_renders():
 
 @pytest.mark.parametrize(
     "template",
-    ["clients.html", "client_new.html", "client_home.html", "client_settings.html",
-     "unchecked.html", "agents.html", "family.html", "checklist.html", "handover.html"],
+    [
+        "clients.html",
+        "client_new.html",
+        "client_home.html",
+        "client_settings.html",
+        "unchecked.html",
+        "agents.html",
+        "family.html",
+        "checklist.html",
+        "handover.html",
+    ],
 )
 def test_every_page_renders_under_strict_undefined(template):
     """The sweep the plan asked to grow from nine pages to the reshaped set.
@@ -634,3 +710,67 @@ def test_no_dead_rules_are_left_behind():
 
     assert ".admin-nav" not in css
     assert ".right {" not in css
+
+
+# -- the spec report on a component -------------------------------------------
+
+
+def _report(passes: bool = True):
+    """A real Report from the real engine, not a stand-in."""
+    from app.core.rules import audit_agents
+
+    body = "# X\n\nHome: https://x.example\n"
+    if not passes:
+        body += "\nCall https://invented.example/api for stock.\n"
+    return audit_agents(body, site_url="https://x.example", verified_urls=["https://x.example"])
+
+
+def test_a_generated_file_shows_its_spec_score():
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+
+    status = derive("https://x.example", SiteType.CONTENT, artifacts={"llms.txt": "# x"})
+    html = _render(
+        "family.html",
+        statuses=[status.by_key("llms-txt")],
+        markable=set(),
+        reports={"llms-txt": _report()},
+    )
+
+    assert "Spec check" in html
+    assert "/100" in html
+
+
+def test_a_failing_file_names_the_rule_that_failed():
+    """A score with no reason is a number nobody can act on."""
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+
+    status = derive("https://x.example", SiteType.CONTENT, artifacts={"llms.txt": "# x"})
+    html = _render(
+        "family.html",
+        statuses=[status.by_key("llms-txt")],
+        markable=set(),
+        reports={"llms-txt": _report(passes=False)},
+    )
+
+    assert "AGT-004" in html
+    assert "no probe confirmed" in html
+    assert "invented.example" in html, "the example, so it can be found and removed"
+
+
+def test_an_artifact_with_no_rule_set_says_so_rather_than_implying_a_pass():
+    """Three artifacts have no rules written. Silence would read as clean."""
+    from app.core.components import SiteType
+    from app.core.site_state import derive
+
+    status = derive("https://x.example", SiteType.CONTENT, artifacts={"robots.txt": "# r"})
+    html = _render(
+        "family.html",
+        statuses=[status.by_key("robots")],
+        markable=set(),
+        reports={},
+    )
+
+    assert "No spec rules exist" in html
+    assert "Spec check" not in html

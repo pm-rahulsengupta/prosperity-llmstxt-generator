@@ -225,7 +225,7 @@ def render_catalog(catalog: AiCatalog, generated_on: date | None = None) -> str:
     # nobody can date is a file nobody can tell is stale, and this convention is
     # eight weeks old.
     document["x-generated"] = {
-        "by": "Prosperity llms.txt generator",
+        "by": "Prosperity AI SEO Technical Discovery Support Tool",
         "on": (generated_on or date.today()).isoformat(),
         "spec": SPEC_URL,
     }

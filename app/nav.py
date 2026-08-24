@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.core.components import FAMILY_LABELS
+from app.core.components import FAMILY_LABELS, Family
 
 __all__ = ["NavGroup", "NavItem", "build_nav"]
 
@@ -32,6 +32,13 @@ class NavItem:
     active: bool = False
     disabled: bool = False
     hint: str = ""
+    # How many applicable components in this group are not yet live.
+    #
+    # `None` means not measured -- no client selected, or no probe stored -- and
+    # renders nothing. `0` means measured and clear, and renders a tick. The
+    # distinction is the same one the probes draw everywhere else: a family with
+    # no data must not read as a family with no problems.
+    gap: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,8 +58,21 @@ def _active(path: str, url: str) -> bool:
     return path == url or path.startswith(url.rstrip("/") + "/")
 
 
-def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGroup]:
-    """Build the sidebar for one request."""
+def build_nav(
+    path: str,
+    domain: str = "",
+    is_admin: bool = False,
+    gaps: dict[Family, int] | None = None,
+) -> list[NavGroup]:
+    """Build the sidebar for one request.
+
+    `gaps` is how many applicable components each family still has outstanding.
+    Routes that have derived a `SiteStatus` pass it and the sidebar answers
+    "where is the work" without opening a tab; routes that have not pass nothing
+    and it stays a plain menu. Passing a wrong-but-plausible zero would be worse
+    than passing nothing, which is why the parameter is optional rather than
+    defaulted to an empty dict.
+    """
     scoped = bool(domain)
     site_hint = "" if scoped else "Pick a client first"
 
@@ -76,47 +96,47 @@ def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGr
                     active=_active(path, "/clients/new"),
                 ),
                 NavItem(
+                    "Check any site",
+                    "/agents",
+                    active=_active(path, "/agents"),
+                ),
+                # The crawl that feeds the Content family. It is an input, not a
+                # file, which is why it is no longer called "llms.txt".
+                NavItem(
+                    "Crawl runs",
+                    "/",
+                    active=_active(path, "/") or _active(path, "/runs"),
+                ),
+            ],
+        ),
+        NavGroup(
+            label="Discovery",
+            items=[
+                NavItem(
                     "Overview",
                     site_url(""),
                     # Exact match only. `/sites/{d}` is a prefix of every scoped
-                    # page, so a prefix match here would light Overview on the
+                    # page, so a prefix match would light Overview on the
                     # checklist, the handover and all six family tabs at once.
                     active=scoped and path.rstrip("/") == f"/sites/{domain}",
                     disabled=not scoped,
                     hint=site_hint,
                 ),
-            ],
-        ),
-        NavGroup(
-            label="Generate",
-            items=[
-                # `/runs/...` lights this too: a run is the output of the
-                # llms.txt flow, and leaving the whole sidebar dark on the page an
-                # operator spends most of their time on is a worse answer than
-                # naming the section it belongs to.
-                NavItem(
-                    "llms.txt",
-                    "/",
-                    active=_active(path, "/") or _active(path, "/runs"),
+                *(
+                    NavItem(
+                        label,
+                        site_url(f"/family/{family.value}"),
+                        active=scoped and _active(path, f"/sites/{domain}/family/{family.value}"),
+                        disabled=not scoped,
+                        hint=site_hint,
+                        gap=(gaps or {}).get(family),
+                    )
+                    for family, label in FAMILY_LABELS.items()
                 ),
-                NavItem("agents.md", "/agents", active=_active(path, "/agents")),
             ],
         ),
         NavGroup(
-            label="Files",
-            items=[
-                NavItem(
-                    label,
-                    site_url(f"/family/{family.value}"),
-                    active=scoped and _active(path, f"/sites/{domain}/family/{family.value}"),
-                    disabled=not scoped,
-                    hint=site_hint,
-                )
-                for family, label in FAMILY_LABELS.items()
-            ],
-        ),
-        NavGroup(
-            label="Actions",
+            label="Deliverables",
             items=[
                 NavItem(
                     "Your checklist",
@@ -135,7 +155,7 @@ def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGr
             ],
         ),
         NavGroup(
-            label="Site",
+            label="Site data",
             items=[
                 NavItem(
                     "Brief",
@@ -175,7 +195,7 @@ def build_nav(path: str, domain: str = "", is_admin: bool = False) -> list[NavGr
                 label="Admin",
                 items=[
                     NavItem("Costs", "/admin", active=path == "/admin"),
-                    NavItem("Runs", "/admin/runs", active=_active(path, "/admin/runs")),
+                    NavItem("All runs", "/admin/runs", active=_active(path, "/admin/runs")),
                     NavItem("Accounts", "/accounts", active=_active(path, "/accounts")),
                 ],
             )

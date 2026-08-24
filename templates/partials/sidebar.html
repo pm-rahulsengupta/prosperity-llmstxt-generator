@@ -17,6 +17,13 @@
                    {% if item.disabled %}aria-describedby="hint-{{ loop.index }}-{{ loop.index0 }}"{% endif %}
                    {% if item.hint %}title="{{ item.hint }}"{% endif %}>
                     {{ item.title }}
+                    {% if item.gap is not none %}
+                        {% if item.gap %}
+                        <span class="gap" title="{{ item.gap }} not yet live">{{ item.gap }}</span>
+                        {% else %}
+                        <span class="gap done" title="all live" aria-label="all live">&check;</span>
+                        {% endif %}
+                    {% endif %}
                     {% if item.disabled and item.hint %}
                     <span class="visually-hidden" id="hint-{{ loop.index }}-{{ loop.index0 }}">
                         &mdash; {{ item.hint }}

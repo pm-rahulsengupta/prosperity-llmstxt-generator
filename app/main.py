@@ -66,6 +66,7 @@ from app.core.components import (
     by_key,
 )
 from app.core.edits import EditTarget, apply_operations
+from app.core.evidence import JUDGED_BY, reports_for
 from app.core.metrics import DateRange
 from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
 from app.core.pipeline import rebuild
@@ -887,6 +888,9 @@ class SiteView:
     fetched_at: datetime
     fetched_by: str = ""
     duration_ms: int = 0
+    # URLs a completed crawl fetched. Carried here because `agents.md` cites them
+    # and AGT-004 has to agree that they are evidence -- see `app/core/evidence.py`.
+    crawled_urls: tuple[str, ...] = ()
 
     @property
     def age(self) -> timedelta:
@@ -941,6 +945,7 @@ async def _from_snapshot(session: AsyncSession, domain: str):
         fetched_at=snapshot.fetched_at,
         fetched_by=snapshot.fetched_by,
         duration_ms=snapshot.duration_ms,
+        crawled_urls=tuple(p.url for p in pages if p.included),
     )
 
 
@@ -1193,6 +1198,12 @@ async def agents_generate(
 
     domain = urlparse(normalised).netloc
     await _check_and_store(session, normalised, domain, user.email)
+
+    # Checking a site makes it a known client. Without this the snapshot exists,
+    # `/sites/{domain}` renders, and `/clients` -- which lists configs -- never
+    # shows it: a working page nothing links to.
+    if await repo.load_site_config(session, domain) is None:
+        await repo.save_site_config(session, domain, plan={}, max_pages=0, updated_by=user.email)
     await session.commit()
     return RedirectResponse(f"/sites/{domain}", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -1343,6 +1354,18 @@ def _component_context(request, user, domain, status, view) -> dict:
         "checked_ago": view.checked_ago,
         "is_stale": view.is_stale,
         "label": "",
+        # Outstanding work per family, for the sidebar. Derived from the same
+        # `SiteStatus` the page body renders, so a count in the nav cannot
+        # disagree with the tab it points at.
+        "nav_gaps": {
+            family: counts["total"] - counts["live"]
+            for family, _label, counts in status.family_counts()
+        },
+        # Spec compliance of what we generated, keyed by component. Cheap: the
+        # rules do no I/O. Absent for an artifact that has no rule set, which the
+        # partial renders as "no checks exist" rather than as a pass.
+        "reports": reports_for(view),
+        "judged": JUDGED_BY,
     }
 
 
