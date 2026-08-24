@@ -20,6 +20,7 @@ from app.core.metrics import DateRange, PageMetrics
 from app.core.models import GenerationResult, PageEntry
 from app.core.onboarding import SiteBrief, matches_any
 from app.db.models import (
+    ArtifactEdit,
     ComponentMark,
     DocumentRevision,
     Page,
@@ -298,11 +299,20 @@ class ClientDeletion:
     marks: int
     metric_rows: int
     snapshots: int
+    edits: int
     config: int
 
     @property
     def total(self) -> int:
-        return self.runs + self.pages + self.marks + self.metric_rows + self.snapshots + self.config
+        return (
+            self.runs
+            + self.pages
+            + self.marks
+            + self.metric_rows
+            + self.snapshots
+            + self.edits
+            + self.config
+        )
 
     def summary(self) -> str:
         parts = []
@@ -311,6 +321,7 @@ class ClientDeletion:
             (self.pages, "crawled page"),
             (self.marks, "manual mark"),
             (self.metric_rows, "search-metric row"),
+            (self.edits, "saved refinement"),
         ):
             if count:
                 parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
@@ -347,6 +358,7 @@ async def _client_row_counts(session: AsyncSession, domain: str) -> ClientDeleti
         marks=await count(ComponentMark, ComponentMark.domain),
         metric_rows=await count(SiteMetric, SiteMetric.domain),
         snapshots=await count(SiteSnapshot, SiteSnapshot.domain),
+        edits=await count(ArtifactEdit, ArtifactEdit.domain),
         config=await count(SiteConfig, SiteConfig.domain),
     )
 
@@ -374,6 +386,7 @@ async def delete_client(session: AsyncSession, domain: str) -> ClientDeletion:
     await session.execute(delete(ComponentMark).where(ComponentMark.domain == domain))
     await session.execute(delete(SiteMetric).where(SiteMetric.domain == domain))
     await session.execute(delete(SiteSnapshot).where(SiteSnapshot.domain == domain))
+    await session.execute(delete(ArtifactEdit).where(ArtifactEdit.domain == domain))
     await session.execute(delete(SiteConfig).where(SiteConfig.domain == domain))
     await session.flush()
     return counts
@@ -416,6 +429,81 @@ async def save_snapshot(
     snapshot.fetched_at = datetime.now(UTC)
     await session.flush()
     return snapshot
+
+
+async def load_edit(session: AsyncSession, domain: str, component_key: str):
+    """The stored refinement for one artifact, or None. None means never edited."""
+    result = await session.execute(
+        select(ArtifactEdit).where(
+            ArtifactEdit.domain == domain, ArtifactEdit.component_key == component_key
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def save_edit(
+    session: AsyncSession,
+    domain: str,
+    component_key: str,
+    operations: list[dict],
+    facts: list[dict],
+    edited_by: str,
+):
+    """Replace this artifact's refinement whole.
+
+    Whole rather than appended: the row is the current state of what the operator
+    asked for, so that regenerating the file replays exactly that and nothing
+    accumulated. The turn-by-turn history is `ChatMessage`, which is a log and is
+    allowed to grow.
+    """
+    edit = await load_edit(session, domain, component_key)
+    if edit is None:
+        edit = ArtifactEdit(domain=domain, component_key=component_key)
+        session.add(edit)
+    edit.operations = operations
+    edit.facts = facts
+    edit.edited_by = edited_by
+    edit.edited_at = datetime.now(UTC)
+    await session.flush()
+    return edit
+
+
+MAX_REFINE_MESSAGES = 24
+
+
+async def record_chat(
+    session: AsyncSession, domain: str, role: str, body: str, author: str = ""
+) -> None:
+    """Append one turn to an artifact's conversation, capped.
+
+    Capped rather than unbounded because this lives inside a JSONB column and a
+    long conversation would make every page render carry it. Twenty-four turns is
+    a dozen exchanges, which is more than any single refinement has needed.
+
+    Writes the row even when nothing was applied: a refused turn is exactly what
+    an operator needs to see when they wonder why the file did not change.
+    """
+    edit = await load_edit(session, domain, "agents-md")
+    if edit is None:
+        edit = ArtifactEdit(domain=domain, component_key="agents-md")
+        session.add(edit)
+    turn = {"role": role, "body": body, "author": author, "at": datetime.now(UTC).isoformat()}
+    edit.messages = [*(edit.messages or []), turn][-MAX_REFINE_MESSAGES:]
+    await session.flush()
+
+
+async def recent_chat_for_domain(session: AsyncSession, domain: str) -> list[dict]:
+    edit = await load_edit(session, domain, "agents-md")
+    return list(edit.messages or []) if edit else []
+
+
+async def clear_edit(session: AsyncSession, domain: str, component_key: str) -> None:
+    """Discard a refinement and go back to what the generator produces."""
+    await session.execute(
+        delete(ArtifactEdit).where(
+            ArtifactEdit.domain == domain, ArtifactEdit.component_key == component_key
+        )
+    )
 
 
 async def replace_site_metrics(

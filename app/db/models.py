@@ -519,3 +519,49 @@ class SiteSnapshot(Base):
     # How long the probe took. Recorded because it is the number that decides
     # whether this stays a background job or could ever go back inline.
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ArtifactEdit(Base):
+    """Conversational refinements to a generated file, as operations.
+
+    Operations rather than the resulting text, for the reason
+    `app/llm/prompts/chat.py` gives about llms.txt and which applies harder here:
+    stored text is a snapshot of a file that is otherwise a pure function of the
+    evidence, so the moment a re-probe changes the evidence the stored copy is
+    a claim about a site as it was. Stored operations replay onto whatever the
+    generator produces next, so a refinement survives a refresh instead of
+    silently going stale.
+
+    One row per domain and component. A refine turn rewrites it whole -- the
+    operations are cumulative within the row, and the row is the current state of
+    "what this operator asked for", not a log. `ChatMessage` is the log.
+
+    `facts` are operator-asserted prose the probe cannot check, kept beside the
+    operations because they are the same kind of thing: something a person said,
+    which has to render attributed and survive a regeneration.
+    """
+
+    __tablename__ = "artifact_edits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    component_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    operations: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
+    facts: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
+    # The turns that produced this, newest last, capped. `ChatMessage` is
+    # run-scoped and a refinement is domain-scoped, so it cannot be reused here.
+    # Kept beside the operations rather than in its own table because a
+    # conversation with no surviving edit is still worth showing -- a refused
+    # turn is exactly what an operator needs to see when they wonder why nothing
+    # changed.
+    messages: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
+    edited_by: Mapped[str] = mapped_column(String(320), default="")
+    edited_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("domain", "component_key", name="uq_artifact_edits_domain_component"),
+    )

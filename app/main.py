@@ -92,7 +92,7 @@ from app.core.templates_lib import build_templates
 from app.db import repo
 from app.db.base import get_session, session_scope
 from app.db.models import ChatMessage, DocumentRevision, RunStatus
-from app.llm.client import LLMClient, LLMUsage
+from app.llm.client import LLMClient, LLMUsage, Stage
 from app.llm.prompts.plan import CrawlPlan
 from app.llm.stages import apply_chat_turn, suggest_brief
 from app.metrics.gsc_csv import parse_gsc_export
@@ -935,6 +935,39 @@ class SiteView:
         return self.age > timedelta(days=1)
 
 
+async def _refined(session: AsyncSession, domain: str, doc):
+    """Apply the stored refinement for this domain, if there is one.
+
+    Returns the document unchanged and no facts where nothing was refined, so
+    every caller can use this without branching.
+    """
+    from app.core.refine import AssertedFact, RefineOp, apply_refinements
+
+    stored = await repo.load_edit(session, domain, "agents-md")
+    if stored is None:
+        return doc, []
+
+    operations = [RefineOp(**o) for o in (stored.operations or [])]
+    facts = [AssertedFact(**f) for f in (stored.facts or [])]
+    refined, facts, _report = apply_refinements(doc, facts, operations, author=stored.edited_by)
+    return refined, facts
+
+
+def _replace_artifact(bundle, name: str, body: str) -> None:
+    """Swap one artifact's body, keeping its path and media type.
+
+    `Artifact` is frozen, so this replaces rather than mutates -- which is the
+    behaviour wanted anyway: a half-updated bundle would be worse than either
+    state.
+    """
+    from dataclasses import replace as _replace
+
+    for index, artifact in enumerate(bundle.artifacts):
+        if artifact.name == name:
+            bundle.artifacts[index] = _replace(artifact, body=body)
+            return
+
+
 async def _from_snapshot(session: AsyncSession, domain: str):
     """Everything the site pages render, from the stored probe. No network.
 
@@ -961,6 +994,15 @@ async def _from_snapshot(session: AsyncSession, domain: str):
     doc, catalog, bundle = _assemble(
         normalised, domain, probe, tech, readiness, declared, brief, config, run, pages
     )
+
+    # Stored refinements, replayed onto the freshly generated document. Operations
+    # rather than a stored body is what makes this safe: the file is still a
+    # function of the evidence, with an operator's edits on top, so a re-probe
+    # that changes the evidence changes the file and the edits still apply.
+    doc, facts = await _refined(session, domain, doc)
+    if facts or await repo.load_edit(session, domain, "agents-md"):
+        _replace_artifact(bundle, "agents.md", render_agents_md(doc, facts=facts))
+
     return SiteView(
         domain=domain,
         site_url=normalised,
@@ -1266,6 +1308,239 @@ async def _check_and_store(
     )
 
 
+# -- refining a generated file ----------------------------------------------
+
+
+REFINABLE = {"agents-md"}
+
+
+async def _refine_state(session: AsyncSession, domain: str):
+    """The document, its stored refinements, and the rendered result.
+
+    One place that assembles all three, because the panel, the turn handler and
+    the download must agree about what the current file is. Two assemblies would
+    let an operator refine one thing and download another.
+    """
+    view = await _from_snapshot(session, domain)
+    if view is None:
+        return None, None, [], ""
+
+    # `_from_snapshot` has already applied the refinements, so `view.doc` is the
+    # refined document. Re-deriving the facts is the only extra step.
+    stored = await repo.load_edit(session, domain, "agents-md")
+    from app.core.refine import AssertedFact
+
+    facts = [AssertedFact(**f) for f in (stored.facts if stored else [])]
+    return view, view.doc, facts, render_agents_md(view.doc, facts=facts)
+
+
+@app.get("/sites/{domain}/refine", response_class=HTMLResponse)
+async def refine_panel(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    view, doc, facts, rendered = await _refine_state(session, domain)
+    if view is None:
+        return _unchecked(request, user, domain, "Refine")
+    return await _render_refine(request, session, domain, user, doc, facts, rendered)
+
+
+async def _render_refine(request, session, domain, user, doc, facts, rendered):
+    from app.core.evidence import evidence_for
+    from app.core.rules import audit_agents
+
+    view = await _from_snapshot(session, domain)
+    evidence = evidence_for(view)
+    report = audit_agents(
+        rendered,
+        site_url=evidence.site_url,
+        verified_urls=evidence.as_list,
+        transactional=evidence.transactional,
+        content_type=evidence.content_type,
+    )
+    stored = await repo.load_edit(session, domain, "agents-md")
+    return templates.TemplateResponse(
+        request,
+        "partials/refine.html",
+        {
+            "user": user,
+            "domain": domain,
+            "rendered": rendered,
+            "facts": facts,
+            "report": report,
+            "edited": stored is not None,
+            "edited_by": stored.edited_by if stored else "",
+            "messages": await repo.recent_chat_for_domain(session, domain),
+        },
+    )
+
+
+@app.post("/sites/{domain}/refine", response_class=HTMLResponse)
+async def refine_turn(
+    request: Request,
+    domain: str,
+    message: str = Form(...),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One conversational edit, gated by the same rules that judge the file.
+
+    The ordering is the point, and it is stricter than the llms.txt editor's:
+
+    1. Audit what the file is now, so "was it already failing" is answerable.
+    2. Ask the model for operations.
+    3. Apply what `apply_refinements` allows.
+    4. Audit the result.
+    5. Keep it **only** if AGT-004 passes and no ERROR rule newly fails and no
+       existing failure grew.
+
+    The llms.txt gate compares error *codes* and lets an edit worsen a failure it
+    already had. This compares rule ids and counts, because "it was already a bit
+    broken" is not a reason to let something break it further.
+    """
+    from app.core.evidence import evidence_for
+    from app.core.refine import apply_refinements
+    from app.core.rules import audit_agents
+    from app.llm.prompts import refine as refine_prompt
+
+    view, doc, facts, rendered = await _refine_state(session, domain)
+    if view is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Check the site before refining its files.")
+
+    evidence = evidence_for(view)
+
+    def judge(text: str):
+        return audit_agents(
+            text,
+            site_url=evidence.site_url,
+            verified_urls=evidence.as_list,
+            transactional=evidence.transactional,
+            content_type=evidence.content_type,
+        )
+
+    before = judge(rendered)
+
+    urls = sorted(
+        {c.url for c in [*doc.capabilities, *doc.read_only_urls]} | {p.url for p in doc.policies}
+    )
+    usage = LLMUsage()
+    data = await LLMClient(settings, usage).structured(
+        stage=Stage.CHAT,
+        system=refine_prompt.SYSTEM,
+        user=refine_prompt.build_user_message(message, doc, facts, rendered),
+        schema=refine_prompt.schema(urls),
+        schema_name="refine_operations",
+    )
+    await repo.record_chat(session, domain, "user", message.strip(), author=user.email)
+
+    if data is None:
+        await repo.record_chat(
+            session,
+            domain,
+            "assistant",
+            "The model did not return a usable edit. Nothing was changed."
+            + (" No OpenAI key is configured." if not settings.llm_enabled else ""),
+            author="model",
+        )
+        await session.commit()
+        return await _render_refine(request, session, domain, user, doc, facts, rendered)
+
+    reply, operations = refine_prompt.parse(data)
+    edited_doc, edited_facts, applied = apply_refinements(
+        doc, list(facts), operations, author=user.email
+    )
+    candidate = render_agents_md(edited_doc, facts=edited_facts)
+    after = judge(candidate)
+
+    broke = _regressions(before, after)
+    if broke:
+        await repo.record_chat(
+            session,
+            domain,
+            "assistant",
+            f"That edit would have made the file worse ({'; '.join(broke)}), so I have not "
+            "applied it. Nothing changed.",
+            author="model",
+        )
+        await session.commit()
+        return await _render_refine(request, session, domain, user, doc, facts, rendered)
+
+    stored = await repo.load_edit(session, domain, "agents-md")
+    kept = [{"op": o.op, "url": o.url, "text": o.text} for o in operations]
+    await repo.save_edit(
+        session,
+        domain,
+        "agents-md",
+        operations=[*(stored.operations if stored else []), *kept]
+        if applied.changed
+        else (stored.operations if stored else []),
+        facts=[
+            {"text": f.text, "noted_by": f.noted_by, "noted_at": f.noted_at} for f in edited_facts
+        ],
+        edited_by=user.email,
+    )
+
+    note = reply or "Done."
+    if applied.rejected:
+        note += " Refused: " + "; ".join(applied.rejected)
+    await repo.record_chat(session, domain, "assistant", note, author="model")
+    await session.commit()
+    return await _render_refine(request, session, domain, user, edited_doc, edited_facts, candidate)
+
+
+def _regressions(before, after) -> list[str]:
+    """What the edit broke. Empty means it is safe to keep.
+
+    Three tests, and the second and third are what the existing chat gate lacks.
+    """
+    from app.core.rules import AGENTS_BY_ID
+    from app.core.rules.registry import Severity
+
+    broken: list[str] = []
+
+    # 1. The invariant. Not "newly failed" -- failed at all. An edit must never
+    #    leave a URL in the file that no probe confirmed, even if one was already
+    #    there.
+    if after.failed("AGT-004"):
+        finding = after.by_id("AGT-004")
+        broken.append(f"AGT-004: {finding.message}")
+
+    was = {f.rule_id: f for f in before.failures}
+    for finding in after.failures:
+        rule = AGENTS_BY_ID.get(finding.rule_id)
+        if rule is None or rule.severity is not Severity.ERROR:
+            continue
+        # 2. A rule that did not fail before.
+        if finding.rule_id not in was:
+            broken.append(f"{finding.rule_id} would start failing")
+        # 3. A rule that failed before and now fails harder. "It was already a
+        #    bit broken" is not permission to break it further.
+        elif finding.count > was[finding.rule_id].count:
+            broken.append(
+                f"{finding.rule_id} would go from {was[finding.rule_id].count} to {finding.count}"
+            )
+
+    return broken
+
+
+@app.post("/sites/{domain}/refine/reset", response_class=HTMLResponse)
+async def refine_reset(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Discard every refinement and go back to what the generator produces."""
+    await repo.clear_edit(session, domain, "agents-md")
+    await session.commit()
+    view, doc, facts, rendered = await _refine_state(session, domain)
+    if view is None:
+        return _unchecked(request, user, domain, "Refine")
+    return await _render_refine(request, session, domain, user, doc, facts, rendered)
+
+
 @app.get("/agents/download")
 async def agents_download(
     site: str,
@@ -1446,6 +1721,9 @@ async def family_tab(
             "family_label": FAMILY_LABELS[wanted],
             "family_blurb": FAMILY_BLURBS[wanted],
             "statuses": statuses,
+            # Refining is offered where the artifact is prose an operator would
+            # want to reword. Configuration and machine data are not.
+            "refinable": any(s.key in REFINABLE and s.publishable for s in statuses),
         },
     )
 

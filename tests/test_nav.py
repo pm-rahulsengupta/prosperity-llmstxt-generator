@@ -264,6 +264,7 @@ def _render(template: str, **extra):
         "is_stale": False,
         "label": "",
         "reports": {},
+        "refinable": False,
         "judged": __import__("app.core.evidence", fromlist=["JUDGED_BY"]).JUDGED_BY,
         **extra,
     }
@@ -560,7 +561,14 @@ def test_the_settings_page_states_what_a_delete_would_remove():
         exists=True,
         error=None,
         going=ClientDeletion(
-            domain="x.example", runs=2, pages=80, marks=3, metric_rows=412, snapshots=1, config=1
+            domain="x.example",
+            runs=2,
+            pages=80,
+            marks=3,
+            metric_rows=412,
+            snapshots=1,
+            edits=1,
+            config=1,
         ),
     )
 
@@ -572,7 +580,7 @@ def test_the_danger_zone_is_hidden_from_a_non_admin():
     from app.db.repo import ClientDeletion
 
     nothing = ClientDeletion(
-        domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, config=1
+        domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, edits=0, config=1
     )
     html = _render(
         "client_settings.html",
@@ -623,7 +631,14 @@ def test_every_page_renders_under_strict_undefined(template):
         title="Overview",
         site_url="",
         going=ClientDeletion(
-            domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, config=1
+            domain="x.example",
+            runs=0,
+            pages=0,
+            marks=0,
+            metric_rows=0,
+            snapshots=0,
+            edits=0,
+            config=1,
         ),
         **(_overview_context() if template == "client_home.html" else {}),
     )

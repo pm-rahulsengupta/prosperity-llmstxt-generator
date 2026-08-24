@@ -38,8 +38,17 @@ CONVENTION_NOTE = (
 )
 
 
-def render_agents_md(doc: AgentsDoc, generated_on: date | None = None) -> str:
-    """Render the document. Same input, same bytes, always."""
+def render_agents_md(
+    doc: AgentsDoc, generated_on: date | None = None, *, facts: list | None = None
+) -> str:
+    """Render the document. Same input, same bytes, always.
+
+    `facts` are operator-asserted prose the probe could not check. They render in
+    their own section, each attributed and dated, and never interleaved with
+    probe-derived lines -- a person vouching for a sentence is a different kind
+    of claim from a probe confirming an endpoint, and an agent reading this gets
+    to tell which it is looking at.
+    """
     out: list[str] = []
     title = doc.site_name or doc.site_url
     out.append(f"# {title}")
@@ -53,6 +62,17 @@ def render_agents_md(doc: AgentsDoc, generated_on: date | None = None) -> str:
         if block:
             out.append("")
             out.extend(block)
+
+    if facts:
+        out.append("")
+        out.append("## Stated by the site owner")
+        out.append("")
+        out.append(
+            "The following were provided by the site's team and have not been "
+            "independently verified by this tool."
+        )
+        out.append("")
+        out.extend(fact.render() for fact in facts)
 
     stamp = (generated_on or date.today()).isoformat()
     out.append("")

@@ -17,6 +17,18 @@
     {% include "partials/component.html" %}
     {% endfor %}
 </div>
+
+{# Only where there is prose worth refining. robots.txt and _headers are
+   configuration; ai-catalog.json is machine data. #}
+{% if refinable %}
+<div class="panel" id="refine"
+     hx-get="/sites/{{ domain }}/refine"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    <h2>Refine agents.md</h2>
+    <p class="muted">Loading&hellip;</p>
+</div>
+{% endif %}
 {% else %}
 <div class="panel">
     <p class="empty">

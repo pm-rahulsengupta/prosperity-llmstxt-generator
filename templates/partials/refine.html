@@ -1,0 +1,94 @@
+{# The refine panel, swapped whole on every turn.
+
+   Shows the rendered file beside the conversation, because a request like "the
+   summary is too long" only makes sense against what is on screen -- and the
+   spec report beside both, because the gate that decides whether an edit is kept
+   is the same one shown here. #}
+<div class="spread">
+    <h2>Refine agents.md</h2>
+    <span class="pill {% if report.capped_by == 'error' %}bad{% elif report.failures %}wait{% else %}ok{% endif %}">
+        {{ report.score }}/100
+    </span>
+</div>
+
+<p class="muted">
+    Ask for changes in plain English &mdash; "make the summary specific to Sydney",
+    "drop the feed link", "note that we reply within one business day". Edits are
+    applied to the document and the file is rebuilt, so they survive a re-check.
+</p>
+
+<p class="hint">
+    Nothing here can add a URL or an endpoint. An agent follows what this file
+    says, so every address in it came from a probe. To name a new one, declare it
+    in <a href="/sites/{{ domain }}/brief">the brief</a> and it appears once it
+    answers.
+</p>
+
+{% if report.failures %}
+<ul class="notes">
+    {% for finding in report.failures %}
+    <li class="{% if report.capped_by == 'error' %}error{% else %}info{% endif %}">
+        <code>{{ finding.rule_id }}</code> {{ finding.message }}
+    </li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+{% if messages %}
+<div class="chat-log">
+    {% for m in messages %}
+    <div class="chat-turn {{ m.role }}">
+        <div class="chat-body">{{ m.body }}</div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<form hx-post="/sites/{{ domain }}/refine"
+      hx-target="#refine"
+      hx-swap="innerHTML"
+      hx-disabled-elt="find button, find input"
+      hx-on::after-request="this.reset()">
+    <div class="row">
+        <div>
+            <label for="message">What would you like changed?</label>
+            <input type="text" id="message" name="message" required
+                   autocomplete="off" spellcheck="false"
+                   placeholder="Make the summary specific to what we actually do…">
+        </div>
+        <div class="narrow"><button class="primary" type="submit">Send</button></div>
+    </div>
+</form>
+
+{% if facts %}
+<div class="panel">
+    <h3>Stated by you</h3>
+    <p class="hint">
+        These render in the file marked as unverified, with your name and the date
+        against them. No probe can check them, so the file says so rather than
+        presenting them as findings.
+    </p>
+    <ul class="notes">
+        {% for fact in facts %}
+        <li class="info">{{ fact.text }} <span class="muted">&mdash; {{ fact.noted_by }}, {{ fact.noted_at }}</span></li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="spread spaced">
+    <span class="hint">
+        {% if edited %}Refined by {{ edited_by }}.{% else %}No changes yet &mdash; this is what the generator produced.{% endif %}
+    </span>
+    <span>
+        <a class="button" href="/agents/download?site={{ ('https://' ~ domain)|urlencode }}&amp;kind=agents.md">Download agents.md</a>
+        {% if edited %}
+        <form class="inline-form" hx-post="/sites/{{ domain }}/refine/reset"
+              hx-target="#refine" hx-swap="innerHTML">
+            <button class="ghost" type="submit">Discard refinements</button>
+        </form>
+        {% endif %}
+    </span>
+</div>
+
+<pre class="output">{{ rendered }}</pre>
