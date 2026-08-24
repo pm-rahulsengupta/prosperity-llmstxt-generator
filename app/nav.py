@@ -22,6 +22,15 @@ from dataclasses import dataclass, field
 
 from app.core.components import FAMILY_LABELS, Family
 
+FAMILY_ICONS: dict[Family, str] = {
+    Family.CRAWL: "crawl",
+    Family.CONTENT: "content",
+    Family.AGENTS: "agents",
+    Family.CAPABILITIES: "capabilities",
+    Family.DELIVERY: "delivery",
+    Family.PAGE: "page",
+}
+
 __all__ = ["NavGroup", "NavItem", "build_nav"]
 
 
@@ -32,6 +41,10 @@ class NavItem:
     active: bool = False
     disabled: bool = False
     hint: str = ""
+    # Names an icon in `partials/icons.html`. Empty renders the fallback dot
+    # rather than nothing, so a typo shows as a wrong icon instead of an item
+    # whose label sits half a gutter left of every sibling.
+    icon: str = ""
     # How many applicable components in this group are not yet live.
     #
     # `None` means not measured -- no client selected, or no probe stored -- and
@@ -89,16 +102,18 @@ def build_nav(
                 # Exact, not prefix: `/clients` is a prefix of `/clients/new`,
                 # which lit both and left the sidebar saying it did not know
                 # where the operator was.
-                NavItem("All clients", "/clients", active=path.rstrip("/") == "/clients"),
+                NavItem("All clients", "/clients", active=path.rstrip("/") == "/clients", icon="clients"),
                 NavItem(
                     "Add a client",
                     "/clients/new",
                     active=_active(path, "/clients/new"),
+                    icon="add",
                 ),
                 NavItem(
                     "Check any site",
                     "/agents",
                     active=_active(path, "/agents"),
+                    icon="check-site",
                 ),
                 # The crawl that feeds the Content family. It is an input, not a
                 # file, which is why it is no longer called "llms.txt".
@@ -106,6 +121,7 @@ def build_nav(
                     "Crawl runs",
                     "/",
                     active=_active(path, "/") or _active(path, "/runs"),
+                    icon="runs",
                 ),
                 # The fallback when a site refuses our crawler. Sits beside the
                 # crawl rather than hidden in a settings page, because the moment
@@ -114,6 +130,7 @@ def build_nav(
                     "Import a crawl",
                     "/imports/screaming-frog",
                     active=_active(path, "/imports"),
+                    icon="import",
                 ),
             ],
         ),
@@ -129,6 +146,7 @@ def build_nav(
                     active=scoped and path.rstrip("/") == f"/sites/{domain}",
                     disabled=not scoped,
                     hint=site_hint,
+                    icon="overview",
                 ),
                 *(
                     NavItem(
@@ -138,6 +156,7 @@ def build_nav(
                         disabled=not scoped,
                         hint=site_hint,
                         gap=(gaps or {}).get(family),
+                        icon=FAMILY_ICONS.get(family, ""),
                     )
                     for family, label in FAMILY_LABELS.items()
                 ),
@@ -152,6 +171,7 @@ def build_nav(
                     active=scoped and _active(path, f"/sites/{domain}/checklist"),
                     disabled=not scoped,
                     hint=site_hint,
+                    icon="checklist",
                 ),
                 NavItem(
                     "Developer handover",
@@ -159,6 +179,7 @@ def build_nav(
                     active=scoped and _active(path, f"/sites/{domain}/handover"),
                     disabled=not scoped,
                     hint=site_hint,
+                    icon="handover",
                 ),
             ],
         ),
@@ -171,6 +192,7 @@ def build_nav(
                     active=scoped and _active(path, f"/sites/{domain}/brief"),
                     disabled=not scoped,
                     hint=site_hint,
+                    icon="brief",
                 ),
                 # "Search data" used to sit here pointing at the same URL as Brief
                 # with `active=False` hardcoded, so it could never light and
@@ -182,6 +204,7 @@ def build_nav(
                     active=False,
                     disabled=not scoped,
                     hint=site_hint or "Upload or fetch Search Console data",
+                    icon="search-data",
                 ),
                 NavItem(
                     "Settings",
@@ -189,6 +212,7 @@ def build_nav(
                     active=scoped and _active(path, f"/sites/{domain}/settings"),
                     disabled=not scoped,
                     hint=site_hint,
+                    icon="settings",
                 ),
             ],
         ),
@@ -202,9 +226,9 @@ def build_nav(
             NavGroup(
                 label="Admin",
                 items=[
-                    NavItem("Costs", "/admin", active=path == "/admin"),
-                    NavItem("All runs", "/admin/runs", active=_active(path, "/admin/runs")),
-                    NavItem("Accounts", "/accounts", active=_active(path, "/accounts")),
+                    NavItem("Costs", "/admin", active=path == "/admin", icon="costs"),
+                    NavItem("All runs", "/admin/runs", active=_active(path, "/admin/runs"), icon="all-runs"),
+                    NavItem("Accounts", "/accounts", active=_active(path, "/accounts"), icon="accounts"),
                 ],
             )
         )

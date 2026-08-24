@@ -4,6 +4,7 @@
    render, pointing at the picker, rather than being hidden -- GEO Tracker takes
    the same line with its Team page: a visible item that explains what it needs
    beats one nobody can find. #}
+{% from "partials/icons.html" import icon %}
 <nav class="side" aria-label="Sections">
     {% for group in nav_groups %}
     <div class="side-group">
@@ -16,7 +17,8 @@
                    {% if item.active %}aria-current="page"{% endif %}
                    {% if item.disabled %}aria-describedby="hint-{{ loop.index }}-{{ loop.index0 }}"{% endif %}
                    {% if item.hint %}title="{{ item.hint }}"{% endif %}>
-                    {{ item.title }}
+                    {{ icon(item.icon) }}
+                    <span class="side-title">{{ item.title }}</span>
                     {% if item.gap is not none %}
                         {% if item.gap %}
                         <span class="gap" title="{{ item.gap }} not yet live">{{ item.gap }}</span>

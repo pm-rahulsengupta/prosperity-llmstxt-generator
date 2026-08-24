@@ -87,6 +87,14 @@
     --pm-on-dark-soft: #aab3b8;   /* 6.59:1 on gunmetal */
     --pm-on-dark-veil: rgba(255, 255, 255, 0.12);
     --pm-on-dark-edge: rgba(255, 255, 255, 0.28);
+    /* The sidebar's raised surface, taken from GEO Tracker's --sidebar-accent.
+       White on it is 11.68:1, so an active item stays comfortably readable. */
+    --pm-on-dark-fill: #2e3a41;
+    /* Dimmer than -soft, for group labels and items that need a client first.
+       4.59:1 on gunmetal -- AA for normal text, which a disabled item still is.
+       It never lands on --pm-on-dark-fill, where it would fail: a disabled item
+       is by definition not the current one. */
+    --pm-on-dark-muted: #8b9599;
 
     /* ── Surfaces ───────────────────────────────────────────────────────── */
     --pm-bg:           var(--pm-pale-grey);
@@ -600,8 +608,17 @@ button.destructive {
 }
 
 /* -- left-hand navigation ---------------------------------------------------
-   Mirrors GEO Tracker's grouped sidebar. Server-rendered, so there is no state
-   to keep in sync and no flash of the wrong active item on load.
+   A gunmetal panel, matching GEO Tracker's sidebar and continuing the dark
+   chrome that already starts at the top bar, so the two read as one shape
+   rather than a dark bar sitting above an unrelated light menu.
+
+   Gunmetal with white text is an approved core-colour pairing at 14.05:1. It
+   also fixes a pill that could not be seen: `.gap` is a 12%-white veil with
+   white text, which over the old near-white sidebar was white on white, so
+   every gap count was invisible unless its item happened to be active.
+
+   Server-rendered, so there is no state to keep in sync and no flash of the
+   wrong active item on load.
 
    Below the breakpoint it becomes a horizontal strip above the content rather
    than a drawer: a drawer needs JavaScript to open, and a nav that cannot be
@@ -610,47 +627,79 @@ button.destructive {
 .shell { display: flex; align-items: flex-start; gap: 1.5rem; }
 
 .side {
-    flex: 0 0 13rem;
+    flex: 0 0 13.5rem;
     position: sticky;
     top: 1.5rem;
-    padding: 0.5rem 0;
+    padding: 0.9rem 0.5rem;
+    background: var(--pm-gunmetal);
+    border-radius: var(--pm-radius);
 }
 
-.side-group + .side-group { margin-top: 1.25rem; }
+.side-group + .side-group {
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--pm-on-dark-veil);
+}
 
 .side-label {
-    margin: 0 0 0.4rem;
-    padding-left: 0.7rem;
-    font-size: var(--pm-xs);
-    letter-spacing: 0.06em;
+    margin: 0 0 0.35rem;
+    padding-left: 0.6rem;
+    font-size: var(--pm-2xs);
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--pm-ink-muted);
+    color: var(--pm-on-dark-muted);
 }
 
 .side ul { list-style: none; margin: 0; padding: 0; }
 
 .side a {
-    display: block;
-    padding: 0.4rem 0.7rem;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.4rem 0.6rem;
     border-radius: var(--pm-radius-sm);
-    border-left: 3px solid transparent;
     font-size: var(--pm-sm);
-    color: var(--pm-ink);
+    color: var(--pm-on-dark-soft);
     text-decoration: none;
 }
 
-.side a:hover { background: var(--pm-sunken); }
+/* The label takes the slack so a gap pill sits hard against the right edge and
+   the pills line up down the panel instead of trailing each label. */
+.side .side-title { flex: 1 1 auto; }
 
+/* Never let a long label squeeze the glyph into an ellipse. */
+.side .ico { flex: 0 0 auto; color: var(--pm-on-dark-muted); }
+
+.side a:hover { background: var(--pm-on-dark-veil); color: var(--pm-white); }
+.side a:hover .ico { color: var(--pm-on-dark-soft); }
+
+/* Two signals, not one. The fill carries at a glance; the emerald rail says
+   which item without relying on a brightness difference alone -- the same
+   reason status is never colour-only elsewhere in this tool. */
 .side a.on {
-    background: var(--pm-emerald-wash);
-    border-left-color: var(--pm-emerald);
+    position: relative;
+    background: var(--pm-on-dark-fill);
+    color: var(--pm-white);
     font-weight: 500;
 }
+.side a.on::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0.35rem;
+    bottom: 0.35rem;
+    width: 3px;
+    border-radius: 999px;
+    background: var(--pm-emerald);
+}
+.side a.on .ico { color: var(--pm-emerald); }
 
 /* Reachable, and honest that it needs something first. Hiding it would leave an
    operator hunting for a page that exists. */
-.side a.off { color: var(--pm-ink-muted); }
-.side a.off:hover { background: transparent; cursor: help; }
+.side a.off { color: var(--pm-on-dark-muted); }
+.side a.off .ico { color: #6b7479; }
+.side a.off:hover { background: transparent; color: var(--pm-on-dark-muted); cursor: help; }
+.side a.off:hover .ico { color: #6b7479; }
 
 .shell > main { flex: 1 1 auto; min-width: 0; }
 
@@ -659,9 +708,11 @@ button.destructive {
    type-scale note above warns about, reintroduced here. */
 @media (max-width: 960px) {
     .shell { display: block; }
-    .side { position: static; padding-bottom: 1rem; }
+    .side { position: static; margin-bottom: 1rem; padding: 0.9rem 0.75rem; }
     .side-group { display: inline-block; margin-right: 1.5rem; vertical-align: top; }
-    .side-group + .side-group { margin-top: 0; }
+    /* The rule that separates stacked groups becomes a line down the middle of
+       a wrapped row, so it goes with the stacking. */
+    .side-group + .side-group { margin-top: 0; padding-top: 0; border-top: none; }
     .side ul { display: flex; gap: 0.25rem; flex-wrap: wrap; }
 }
 

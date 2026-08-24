@@ -816,3 +816,48 @@ def test_every_generated_artifact_now_has_a_rule_set():
     artifacts = {c.artifact for c in COMPONENTS if c.artifact}
 
     assert artifacts - set(JUDGED_BY) == set(), "an artifact is generated and unchecked"
+
+
+def test_every_nav_item_names_an_icon():
+    """A missing icon renders the fallback dot, which is legible but wrong.
+
+    The failure it guards is quiet: an item added without one still works, still
+    lines up, and just carries a circle for a glyph until somebody notices.
+    """
+    groups = build_nav("/clients", "example.com", is_admin=True)
+
+    without = [item.title for group in groups for item in group.items if not item.icon]
+
+    assert without == [], f"nav items with no icon: {without}"
+
+
+def test_every_family_has_its_own_icon():
+    """`FAMILY_ICONS` is a second map keyed like `FAMILY_LABELS`.
+
+    Adding a seventh family to the labels and forgetting this one is the exact
+    way the placeholder gets shipped, and `.get(family, "")` is what makes it
+    silent rather than an error.
+    """
+    from app.core.components import FAMILY_LABELS
+    from app.nav import FAMILY_ICONS
+
+    assert set(FAMILY_ICONS) == set(FAMILY_LABELS)
+
+
+def test_the_icon_macro_draws_every_name_the_nav_asks_for():
+    """The nav and the macro are two files agreeing by string.
+
+    Asserted against the rendered SVG rather than the source, because a name the
+    macro does not know falls through to `{% else %}` and still renders -- so the
+    only observable difference is which shape comes out.
+    """
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+
+    env = Environment(loader=FileSystemLoader("templates"), undefined=StrictUndefined, autoescape=True)
+    macro = env.get_template("partials/icons.html").module.icon
+    fallback = str(macro("no-such-icon"))
+
+    names = {item.icon for group in build_nav("/clients", "example.com", is_admin=True) for item in group.items}
+    unknown = sorted(name for name in names if str(macro(name)) == fallback)
+
+    assert unknown == [], f"icons.html has no shape for: {unknown}"
