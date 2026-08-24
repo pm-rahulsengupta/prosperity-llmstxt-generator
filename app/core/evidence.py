@@ -123,16 +123,30 @@ def _content_type_of(view) -> str | None:
 # -- applying the rules to what was generated --------------------------------
 
 
-#: Which rule set judges which artifact. Three artifacts are absent on purpose:
-#: `robots.txt`, `ai-catalog.json` and `_headers` have no rule set written, and
-#: inventing a pass for them would be worse than saying so. The UI reads this
-#: mapping to decide between "checked" and "no checks exist yet", so a component
-#: missing from here renders the second rather than an implied clean bill.
+#: Which rule set judges which artifact. Every generated artifact now has one.
+#: The UI still reads this mapping to decide between "checked" and "no checks
+#: exist yet", so a future artifact added without a rule set renders honestly as
+#: unchecked rather than as an implied clean bill.
 JUDGED_BY: dict[str, str] = {
     "llms.txt": "index",
     "llms-full.txt": "full",
     "agents.md": "agents",
+    "robots.txt": "crawl",
+    "_headers": "headers",
+    "ai-catalog.json": "catalog",
 }
+
+
+def _policy_of(view) -> str | None:
+    """The AI bot policy the operator stated, or None where they did not.
+
+    CRW-009 compares the published file against this. `None` makes it skip,
+    because a file disagreeing with an intent nobody recorded is a question for
+    a person rather than a finding.
+    """
+    brief = getattr(view, "brief", None)
+    policy = getattr(brief, "ai_bot_policy", None)
+    return getattr(policy, "value", None)
 
 
 def reports_for(view) -> dict[str, object]:
@@ -142,7 +156,7 @@ def reports_for(view) -> dict[str, object]:
     bundle -- so this can run on a GET without the caching the probe needed.
     """
     from app.core.components import COMPONENTS
-    from app.core.rules import audit, audit_agents
+    from app.core.rules import audit, audit_agents, audit_catalog, audit_crawl, audit_headers
 
     if view is None:
         return {}
@@ -163,6 +177,24 @@ def reports_for(view) -> dict[str, object]:
                 verified_urls=ev.as_list,
                 transactional=ev.transactional,
                 content_type=ev.content_type,
+            )
+        elif which == "crawl":
+            # `fetched=False`: this is the block we generate, an addition to a
+            # file we never see. The rules about a catch-all group and about
+            # search crawlers are properties of the merged result and skip here.
+            reports[component.key] = audit_crawl(
+                body,
+                intended_policy=_policy_of(view),
+                site_url=ev.site_url,
+                fetched=False,
+            )
+        elif which == "headers":
+            reports[component.key] = audit_headers(
+                body, artifacts=set(bodies), site_url=ev.site_url
+            )
+        elif which == "catalog":
+            reports[component.key] = audit_catalog(
+                body, artifacts=set(bodies), site_url=ev.site_url
             )
         elif which == "index":
             reports[component.key] = audit(index_text=body)

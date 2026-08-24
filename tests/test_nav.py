@@ -581,7 +581,15 @@ def test_the_danger_zone_is_hidden_from_a_non_admin():
     from app.db.repo import ClientDeletion
 
     nothing = ClientDeletion(
-        domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, edits=0, spend_rows=0, config=1
+        domain="x.example",
+        runs=0,
+        pages=0,
+        marks=0,
+        metric_rows=0,
+        snapshots=0,
+        edits=0,
+        spend_rows=0,
+        config=1,
     )
     html = _render(
         "client_settings.html",
@@ -777,7 +785,13 @@ def test_a_failing_file_names_the_rule_that_failed():
 
 
 def test_an_artifact_with_no_rule_set_says_so_rather_than_implying_a_pass():
-    """Three artifacts have no rules written. Silence would read as clean."""
+    """Every artifact has rules today. A future one added without them must not
+    render as a silent pass.
+
+    Written against a `judged` mapping that omits the artifact rather than
+    against a specific filename, so it keeps testing the behaviour after the
+    gap it was written for was closed.
+    """
     from app.core.components import SiteType
     from app.core.site_state import derive
 
@@ -787,7 +801,18 @@ def test_an_artifact_with_no_rule_set_says_so_rather_than_implying_a_pass():
         statuses=[status.by_key("robots")],
         markable=set(),
         reports={},
+        judged={"llms.txt": "index"},
     )
 
     assert "No spec rules exist" in html
     assert "Spec check" not in html
+
+
+def test_every_generated_artifact_now_has_a_rule_set():
+    """The gap the CRW, HDR and CAT sets were written to close."""
+    from app.core.components import COMPONENTS
+    from app.core.evidence import JUDGED_BY
+
+    artifacts = {c.artifact for c in COMPONENTS if c.artifact}
+
+    assert artifacts - set(JUDGED_BY) == set(), "an artifact is generated and unchecked"

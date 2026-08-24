@@ -90,7 +90,9 @@ async def test_an_admin_signing_in_with_google_is_still_an_admin(sessions):
 async def test_a_deactivated_account_cannot_sign_in_through_google(sessions):
     """`is_active` was read on the password path and never on the Google one."""
     session = await sessions()
-    owner = await accounts.claim_instance(session, "owner@prosperitymedia.com.au", "a-long-enough-pw")
+    owner = await accounts.claim_instance(
+        session, "owner@prosperitymedia.com.au", "a-long-enough-pw"
+    )
     teammate = await accounts.create_teammate(
         session, owner, "sacked@prosperitymedia.com.au", "another-long-pw"
     )

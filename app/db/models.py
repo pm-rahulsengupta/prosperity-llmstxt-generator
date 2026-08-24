@@ -611,7 +611,9 @@ class LlmSpend(Base):
     calls: Mapped[int] = mapped_column(Integer, default=0)
     # Why a call fell back, when it did. A refusal costs nothing and still needs
     # to be visible: a silent fallback looks the same as a success on a bill.
-    fallbacks: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
+    fallbacks: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
     spent_by: Mapped[str] = mapped_column(String(320), default="")
     spent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

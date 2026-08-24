@@ -13,6 +13,14 @@ that work belongs in the QA stage and an unscored advisory list.
 from __future__ import annotations
 
 from app.core.rules.agents_rules import AGENTS_RULES, AgentsContext
+from app.core.rules.crawl_rules import CRAWL_BY_ID, CRAWL_RULES, CrawlContext
+from app.core.rules.delivery_rules import (
+    CATALOG_BY_ID,
+    CATALOG_RULES,
+    HEADER_BY_ID,
+    HEADER_RULES,
+    DeliveryContext,
+)
 from app.core.rules.document import FullDoc, IndexDoc, parse_full, parse_index
 from app.core.rules.full_rules import FULL_RULES
 from app.core.rules.index_rules import INDEX_RULES
@@ -175,6 +183,45 @@ def audit_agents(
 
     findings = [rule.run(ctx) for rule in AGENTS_RULES]
     return score_report(findings, AGENTS_BY_ID)
+
+
+def audit_crawl(
+    text: str,
+    *,
+    intended_policy: str | None = None,
+    site_url: str = "",
+    fetched: bool = False,
+) -> Report:
+    """Run the CRW rules over a robots.txt and score it.
+
+    Its own denominator, like `audit_agents`. A robots.txt scored against the IDX
+    rules would be marked down for having no link lines.
+
+    `fetched` distinguishes the site's live file from the block this tool
+    generates. The generated block is an addition, not a whole file, so the rules
+    about a catch-all group and about search crawlers skip rather than fail --
+    they are properties of the merged result and the addition is not the merge.
+    """
+    ctx = CrawlContext(
+        text,
+        intended_policy=intended_policy,
+        site_url=site_url,
+        fetched=fetched,
+    )
+    findings = [rule.run(ctx) for rule in CRAWL_RULES]
+    return score_report(findings, CRAWL_BY_ID)
+
+
+def audit_headers(text: str, *, artifacts: set[str] | None = None, site_url: str = "") -> Report:
+    """Run the HDR rules over a `_headers` file."""
+    ctx = DeliveryContext(text, artifacts=artifacts, site_url=site_url)
+    return score_report([rule.run(ctx) for rule in HEADER_RULES], HEADER_BY_ID)
+
+
+def audit_catalog(text: str, *, artifacts: set[str] | None = None, site_url: str = "") -> Report:
+    """Run the CAT rules over an `ai-catalog.json`."""
+    ctx = DeliveryContext(text, artifacts=artifacts, site_url=site_url)
+    return score_report([rule.run(ctx) for rule in CATALOG_RULES], CATALOG_BY_ID)
 
 
 def render_text(report: Report, *, verbose: bool = False) -> str:

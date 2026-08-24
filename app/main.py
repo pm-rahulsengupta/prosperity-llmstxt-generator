@@ -157,6 +157,7 @@ mimetypes.add_type("image/svg+xml", ".svg")
 
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
+
 @app.exception_handler(StarletteHTTPException)
 async def _auth_redirect(request: Request, exc: StarletteHTTPException) -> Response:
     """Turn `require_user`'s 401 into a redirect the browser will actually follow.
@@ -179,7 +180,6 @@ async def _auth_redirect(request: Request, exc: StarletteHTTPException) -> Respo
             return Response(status_code=status.HTTP_200_OK, headers={"HX-Redirect": location})
         return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
     return await http_exception_handler(request, exc)
-
 
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
@@ -993,6 +993,10 @@ class SiteView:
     # URLs a completed crawl fetched. Carried here because `agents.md` cites them
     # and AGT-004 has to agree that they are evidence -- see `app/core/evidence.py`.
     crawled_urls: tuple[str, ...] = ()
+    # The onboarding answers. CRW-009 compares the published robots.txt against
+    # the AI bot policy stated here; without it the rule skips rather than
+    # guessing which of the file and the intent is wrong.
+    brief: object = None
 
     @property
     def age(self) -> timedelta:
@@ -1090,6 +1094,7 @@ async def _from_snapshot(session: AsyncSession, domain: str):
         fetched_by=snapshot.fetched_by,
         duration_ms=snapshot.duration_ms,
         crawled_urls=tuple(p.url for p in pages if p.included),
+        brief=brief,
     )
 
 
@@ -2227,9 +2232,7 @@ async def chat_edit(
     session.add(ChatMessage(run_id=run_id, role="user", body=message.strip(), author=user.email))
     # This route had no usage object at all, so every chat turn on this tool's
     # most expensive model reached the costs page as nothing.
-    await repo.record_spend(
-        session, usage, domain=run.domain, run_id=run_id, spent_by=user.email
-    )
+    await repo.record_spend(session, usage, domain=run.domain, run_id=run_id, spent_by=user.email)
 
     if turn.rejected or not turn.operations:
         reply = turn.rejected or turn.reply or "No change was needed."
