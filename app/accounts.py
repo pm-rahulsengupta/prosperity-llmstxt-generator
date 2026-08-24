@@ -162,6 +162,59 @@ async def authenticate(session: AsyncSession, email: str, password: str) -> User
     return user
 
 
+async def resolve_sso(session: AsyncSession, email: str, name: str = "") -> User:
+    """Find or create the account behind a verified Google identity.
+
+    Google sign-in used to bypass this table entirely: `auth_callback` built a
+    `User` straight from the ID token claims, and that dataclass defaults
+    `is_admin` to False. So **an admin who signed in with Google was not an
+    admin** -- /admin, /accounts and the client-delete Danger Zone were all
+    unreachable -- and `is_active` was never consulted, so a deactivated person
+    could still sign in through Google. Neither showed up while the password form
+    was the main path.
+
+    Provisioning on first sign-in rather than refusing is the same access the
+    old code already granted; the difference is that the account now exists as a
+    row, so it appears on /accounts and can be deactivated. The domain was
+    already checked against the signed token before we get here, so this can only
+    create accounts inside the allowed domains.
+
+    The first Google identity into an unclaimed instance becomes the admin, which
+    mirrors `claim_instance` and holds the same advisory lock, so two concurrent
+    first sign-ins cannot both win.
+    """
+    await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SIGNUP_LOCK_KEY})
+
+    address = email.strip().lower()
+    user = await find_by_email(session, address)
+
+    if user is not None:
+        if not user.is_active:
+            raise SignupClosed(f"{address} has been deactivated on this instance.")
+        # A name from Google is fresher than one typed once at signup.
+        if name.strip() and not user.name:
+            user.name = name.strip()
+        user.last_login_at = datetime.now(UTC)
+        return user
+
+    first = not await is_bootstrapped(session)
+    user = User(
+        email=address,
+        name=name.strip(),
+        # No password hash: this account signs in through Google. `verify_password`
+        # already refuses a None hash, so it cannot be used on the password form.
+        password_hash=None,
+        is_admin=first,
+        is_active=True,
+        created_by="self" if first else "google-sso",
+        last_login_at=datetime.now(UTC),
+    )
+    session.add(user)
+    await session.flush()
+    logger.info("provisioned %s from Google SSO (admin=%s)", user.email, first)
+    return user
+
+
 async def list_users(session: AsyncSession) -> list[User]:
     result = await session.execute(select(User).order_by(User.created_at))
     return list(result.scalars())

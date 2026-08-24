@@ -128,3 +128,49 @@
     {% endif %}
 </div>
 {% endblock %}
+
+<div class="panel">
+    <div class="spread">
+        <h2>Interactive spend</h2>
+        <span class="muted">{{ interactive_calls }} calls &middot; ceiling {{ interactive_ceiling }}/client/day</span>
+    </div>
+    <p class="muted">
+        The refine panel, the chat editor and the brief wizard. Tracked separately
+        from pipeline spend because it is operator-driven rather than bounded by a
+        job, and because until 2026-08-24 none of it was recorded at all &mdash; it
+        reached this page as nothing rather than as unpriced.
+    </p>
+    {% if by_stage %}
+    <div class="table-scroll">
+        <table>
+            <thead>
+            <tr>
+                <th>Stage</th><th class="num">Calls</th><th class="num">Prompt</th>
+                <th class="num">Completion</th><th class="num">Cost</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for stage, e in by_stage %}
+            <tr>
+                <td>{{ stage }}</td>
+                <td class="num">{{ e.calls|int }}</td>
+                <td class="num">{{ e.prompt|int }}</td>
+                <td class="num">{{ e.completion|int }}</td>
+                <td class="num">
+                    {{ usd(e.usd) }}{% if e.unpriced %}
+                    <span class="pill wait" title="{{ e.unpriced|int }} tokens on a model with no rate">+ unpriced</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+            <tfoot>
+            <tr><td><strong>Total</strong></td><td class="num"></td><td class="num"></td>
+                <td class="num"></td><td class="num"><strong>{{ usd(interactive_usd) }}</strong></td></tr>
+            </tfoot>
+        </table>
+    </div>
+    {% else %}
+    <p class="empty">No interactive calls in this window.</p>
+    {% endif %}
+</div>

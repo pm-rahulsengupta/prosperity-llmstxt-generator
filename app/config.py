@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     # stay "needs a person" and the report says so.
     pagespeed_api_key: str = ""
 
+    # A per-domain daily ceiling on interactive LLM calls -- the refine panel and
+    # the brief wizard. Not a dollar cap: a runaway loop is countable long before
+    # it is expensive, and counting needs no rate table. When it is hit the caller
+    # is told, because a refusal that reads as "the model had nothing to add" is
+    # the silent-cap failure the conventions forbid.
+    max_interactive_calls_per_day: int = Field(default=120, ge=1, le=5_000)
+
     firecrawl_base_url: str = "https://api.firecrawl.dev/v2"
 
     # --- Google Search Console (the metrics source that repairs page ranking) --

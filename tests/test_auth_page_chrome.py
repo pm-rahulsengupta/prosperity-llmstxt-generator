@@ -76,7 +76,7 @@ def test_google_button_appears_only_when_sso_is_configured(env):
     env.globals["sso_enabled"] = True
     html = _render(env, "login.html", user=None, error=None)
     assert 'href="/login/google"' in html
-    assert "Sign in with Google" in html
+    assert "Continue with Google" in html
 
 
 def test_a_signed_in_page_still_renders_the_sidebar(env):
@@ -101,4 +101,7 @@ def test_admin_creates_accounts_note_is_scoped_to_the_no_sso_world(env):
     on = _render(env, "login.html", user=None, error=None)
     assert "An admin creates them" not in on
     assert "self-service signup" not in on
-    assert "Any Prosperity Media Google account can sign in." in on
+    # The accurate description now: Google provisions the account on first
+    # sign-in, and an admin can still take it away.
+    assert "created on first sign-in" in on
+    assert "deactivate" in on

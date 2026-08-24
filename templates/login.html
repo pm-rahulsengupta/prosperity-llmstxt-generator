@@ -8,28 +8,35 @@
 <div class="panel auth-card">
     <h1>Sign in</h1>
     {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
-    <form method="post" action="/login">
-        <div class="field">
-            <label for="email">Email</label>
-            <input type="email" id="email" name="email" spellcheck="false" autocomplete="username" required autofocus>
-        </div>
-        <div class="field">
-            <label for="password">Password</label>
-            <input type="password" id="password" name="password" autocomplete="current-password" required>
-        </div>
-        <button class="primary" type="submit">Sign in</button>
-    </form>
-    {# The "an admin creates them" note is only true where password accounts are
-       the only door. With Google configured, a Workspace account IS the way in and
-       needs nobody to create anything -- so the note misdescribes the product to
-       exactly the people it is shown to. Scope it to the world where it holds. #}
+
     {% if sso_enabled %}
-    <p class="alt"><a class="button ghost" href="/login/google">Sign in with Google</a></p>
-    <p class="muted alt">Any Prosperity Media Google account can sign in.</p>
+    <a class="button primary sso" href="/login/google">Continue with Google</a>
+    <p class="hint">
+        Prosperity Media accounts only. Your account is created on first sign-in
+        and an admin can deactivate it from Accounts.
+    </p>
+
+    {# A documented break-glass, not a second front door. Google is the only
+       advertised path, but if the OAuth client breaks -- an expired secret, a
+       redirect URI that stopped matching -- hiding this entirely would lock the
+       one admin out of their own tool with no recovery short of a redeploy. #}
+    <details class="alt-signin">
+        <summary>Sign in with a password instead</summary>
+        <p class="hint">
+            For accounts that predate Google sign-in, or if Google is unavailable.
+        </p>
+        {% include "partials/password_form.html" %}
+    </details>
     {% else %}
+    <p class="notice">
+        Google sign-in is not configured on this deployment, so password sign-in
+        is the only route in. Set <code>GOOGLE_CLIENT_ID</code> and
+        <code>GOOGLE_CLIENT_SECRET</code> to enable it.
+    </p>
+    {% include "partials/password_form.html" %}
     <p class="muted alt">
-        No account? An admin creates them &mdash; there is no self-service signup once
-        this instance has an owner.
+        No account? An admin creates them &mdash; there is no self-service signup
+        once this instance has an owner.
     </p>
     {% endif %}
 </div>

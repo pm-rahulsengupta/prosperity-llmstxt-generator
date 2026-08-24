@@ -770,3 +770,20 @@ pre.doc.template {
 }
 .gap.done { background: none; color: var(--pm-emerald); font-weight: 400; }
 .side a.on .gap { background: var(--pm-gunmetal); color: var(--pm-white); }
+
+/* -- sign-in ----------------------------------------------------------------
+   Google is the advertised path; the password form sits behind a disclosure as
+   a documented break-glass. See templates/login.html for why it still exists. */
+.auth-card .button.sso {
+    display: block;
+    width: 100%;
+    text-align: center;
+    margin-bottom: 0.75rem;
+}
+.alt-signin { margin-top: 1.25rem; border-top: 1px solid var(--pm-rule); padding-top: 0.75rem; }
+.alt-signin summary {
+    cursor: pointer;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink-muted);
+}
+.alt-signin[open] summary { margin-bottom: 0.5rem; }

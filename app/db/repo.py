@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 from sqlalchemy import delete, desc, func, select
@@ -23,6 +23,7 @@ from app.db.models import (
     ArtifactEdit,
     ComponentMark,
     DocumentRevision,
+    LlmSpend,
     Page,
     Run,
     RunEvent,
@@ -300,6 +301,7 @@ class ClientDeletion:
     metric_rows: int
     snapshots: int
     edits: int
+    spend_rows: int
     config: int
 
     @property
@@ -311,6 +313,7 @@ class ClientDeletion:
             + self.metric_rows
             + self.snapshots
             + self.edits
+            + self.spend_rows
             + self.config
         )
 
@@ -322,6 +325,7 @@ class ClientDeletion:
             (self.marks, "manual mark"),
             (self.metric_rows, "search-metric row"),
             (self.edits, "saved refinement"),
+            (self.spend_rows, "recorded LLM call"),
         ):
             if count:
                 parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
@@ -359,6 +363,7 @@ async def _client_row_counts(session: AsyncSession, domain: str) -> ClientDeleti
         metric_rows=await count(SiteMetric, SiteMetric.domain),
         snapshots=await count(SiteSnapshot, SiteSnapshot.domain),
         edits=await count(ArtifactEdit, ArtifactEdit.domain),
+        spend_rows=await count(LlmSpend, LlmSpend.domain),
         config=await count(SiteConfig, SiteConfig.domain),
     )
 
@@ -387,6 +392,7 @@ async def delete_client(session: AsyncSession, domain: str) -> ClientDeletion:
     await session.execute(delete(SiteMetric).where(SiteMetric.domain == domain))
     await session.execute(delete(SiteSnapshot).where(SiteSnapshot.domain == domain))
     await session.execute(delete(ArtifactEdit).where(ArtifactEdit.domain == domain))
+    await session.execute(delete(LlmSpend).where(LlmSpend.domain == domain))
     await session.execute(delete(SiteConfig).where(SiteConfig.domain == domain))
     await session.flush()
     return counts
@@ -504,6 +510,90 @@ async def clear_edit(session: AsyncSession, domain: str, component_key: str) -> 
             ArtifactEdit.domain == domain, ArtifactEdit.component_key == component_key
         )
     )
+
+
+# -- interactive LLM spend --------------------------------------------------
+
+
+async def record_spend(
+    session: AsyncSession,
+    usage,
+    *,
+    domain: str = "",
+    run_id: uuid.UUID | None = None,
+    spent_by: str = "",
+) -> None:
+    """Persist what one interactive call actually used. One row per model.
+
+    Called by every route that builds an `LLMClient` outside the job queue. The
+    three that existed before this did not, so their spend reached nothing --
+    see `LlmSpend`'s docstring.
+
+    A call that produced no tokens still writes a row when it recorded a
+    fallback, because a refusal that cost nothing is exactly the thing an
+    operator needs to see when they wonder why a page did not change.
+    """
+    data = usage.as_dict()
+    by_model = data.get("by_model") or {}
+    fallbacks = data.get("fallbacks") or []
+    calls = data.get("calls") or {}
+    stage = next(iter(calls), "") if calls else ""
+
+    if not by_model:
+        if fallbacks:
+            session.add(
+                LlmSpend(
+                    domain=domain,
+                    run_id=run_id,
+                    stage=stage,
+                    model="",
+                    calls=sum(int(n) for n in calls.values()),
+                    fallbacks=list(fallbacks),
+                    spent_by=spent_by,
+                )
+            )
+        return
+
+    for model, counts in by_model.items():
+        session.add(
+            LlmSpend(
+                domain=domain,
+                run_id=run_id,
+                stage=stage,
+                model=model,
+                prompt_tokens=int(counts.get("prompt") or 0),
+                completion_tokens=int(counts.get("completion") or 0),
+                calls=sum(int(n) for n in calls.values()),
+                fallbacks=list(fallbacks),
+                spent_by=spent_by,
+            )
+        )
+    await session.flush()
+
+
+async def spend_today(session: AsyncSession, domain: str) -> int:
+    """How many interactive calls this domain has cost today, UTC.
+
+    Counts calls rather than dollars: the ceiling exists to stop a runaway loop,
+    and a loop is countable before it is expensive. Dollars are reported on the
+    costs page, where `pricing.py` converts tokens at read time.
+    """
+    since = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    result = await session.execute(
+        select(func.coalesce(func.sum(LlmSpend.calls), 0)).where(
+            LlmSpend.domain == domain, LlmSpend.spent_at >= since
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def interactive_spend_since(session: AsyncSession, days: int = 30) -> list[LlmSpend]:
+    """Every interactive row in the window, for the costs page."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    result = await session.execute(
+        select(LlmSpend).where(LlmSpend.spent_at >= since).order_by(desc(LlmSpend.spent_at))
+    )
+    return list(result.scalars())
 
 
 async def replace_site_metrics(

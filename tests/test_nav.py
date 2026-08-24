@@ -568,6 +568,7 @@ def test_the_settings_page_states_what_a_delete_would_remove():
             metric_rows=412,
             snapshots=1,
             edits=1,
+            spend_rows=0,
             config=1,
         ),
     )
@@ -580,7 +581,7 @@ def test_the_danger_zone_is_hidden_from_a_non_admin():
     from app.db.repo import ClientDeletion
 
     nothing = ClientDeletion(
-        domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, edits=0, config=1
+        domain="x.example", runs=0, pages=0, marks=0, metric_rows=0, snapshots=0, edits=0, spend_rows=0, config=1
     )
     html = _render(
         "client_settings.html",
@@ -638,6 +639,7 @@ def test_every_page_renders_under_strict_undefined(template):
             metric_rows=0,
             snapshots=0,
             edits=0,
+            spend_rows=0,
             config=1,
         ),
         **(_overview_context() if template == "client_home.html" else {}),

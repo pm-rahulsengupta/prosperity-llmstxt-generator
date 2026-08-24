@@ -565,3 +565,54 @@ class ArtifactEdit(Base):
     __table_args__ = (
         UniqueConstraint("domain", "component_key", name="uq_artifact_edits_domain_component"),
     )
+
+
+class LlmSpend(Base):
+    """One interactive LLM call, so it reaches the costs page.
+
+    The pipeline's spend has always been recorded, onto `Run.stats["llm"]` by
+    `app/jobs/tasks.py`. Interactive spend never was. `chat_edit` built an
+    `LLMClient` with no usage object at all; `refine_turn` and `suggest_brief`
+    built one, passed it, and then never read it -- so the `LLMUsage` filled up
+    and was garbage-collected with the request.
+
+    `cost_of` reads `Run.stats` and nothing else, which means /admin did not
+    report these as unpriced. It reported them as **not having happened**, while
+    they ran on `llm_model_chat`, defaulting to `gpt-4o` and the most expensive
+    model in the rate table. The costs page's own rule -- "a model with no rate
+    is not free, it is unknown" -- was being broken one layer above where it is
+    enforced.
+
+    A table rather than a JSONB column on some existing row, because interactive
+    spend is not a property of a run or of an edit: `suggest_brief` happens before
+    any run exists, and a refine turn belongs to a domain. One row per call keeps
+    it auditable and lets the ceiling be a cheap COUNT.
+
+    Tokens are stored and dollars are not. `pricing.py` converts at read time, so
+    correcting a rate reprices history rather than leaving old rows wrong -- the
+    same reason `Run.stats` stores tokens.
+    """
+
+    __tablename__ = "llm_spend"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Which client the spend was on behalf of. Nullable because `suggest_brief`
+    # can run against a domain nobody has onboarded yet.
+    domain: Mapped[str] = mapped_column(String(255), default="", index=True)
+    # Set where the call belongs to a run, so pipeline and interactive spend can
+    # be reconciled against `Run.stats` rather than double-counted.
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    stage: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    model: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+    # Why a call fell back, when it did. A refusal costs nothing and still needs
+    # to be visible: a silent fallback looks the same as a success on a bill.
+    fallbacks: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]", nullable=False)
+    spent_by: Mapped[str] = mapped_column(String(320), default="")
+    spent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )

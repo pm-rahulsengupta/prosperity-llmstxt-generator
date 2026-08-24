@@ -247,12 +247,40 @@ async def login_google(request: Request):
 
 
 @app.get("/auth/callback", include_in_schema=False)
-async def auth_callback(request: Request):
+async def auth_callback(request: Request, session: AsyncSession = Depends(get_session)):
+    """Complete a Google sign-in against the account row, not just the token.
+
+    `user_from_claims` validates the domain from the signed token and returns a
+    `User` whose `is_admin` defaults to False. Signing that in directly -- which
+    is what this route used to do -- meant every Google sign-in was a non-admin
+    regardless of the account row, and `is_active` was never checked.
+    """
     if not settings.sso_enabled:
         return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
     token = await oauth.google.authorize_access_token(request)
-    user = user_from_claims(token.get("userinfo") or {}, settings)
-    sign_in(request, user)
+    claims = user_from_claims(token.get("userinfo") or {}, settings)
+
+    try:
+        row = await accounts.resolve_sso(session, claims.email, claims.name)
+    except accounts.SignupClosed as exc:
+        await session.rollback()
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"user": None, "error": str(exc)},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    sign_in(
+        request,
+        User(
+            email=row.email,
+            name=row.name or claims.name,
+            picture=claims.picture,
+            is_admin=row.is_admin,
+        ),
+    )
+    await session.commit()
     return RedirectResponse("/", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -294,8 +322,19 @@ async def login_submit(
 
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_form(request: Request, session: AsyncSession = Depends(get_session)):
+    """Claim a fresh instance with a password -- only where Google is not an option.
+
+    With SSO configured this redirects into Google, and that is a security fix
+    rather than a preference: `claim_instance` performs **no domain check**, so
+    on a public deployment whoever finds the URL first can claim it with any
+    address at all. Google validates the domain from the signed ID token before
+    `resolve_sso` provisions anything, so the same first-one-wins bootstrap
+    becomes restricted to the company's own accounts.
+    """
     if await accounts.is_bootstrapped(session):
         return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
+    if settings.sso_enabled:
+        return RedirectResponse("/login/google", status_code=status.HTTP_303_SEE_OTHER)
     return templates.TemplateResponse(request, "signup.html", {"user": None, "error": None})
 
 
@@ -551,6 +590,8 @@ async def suggest_brief_route(
 
     stored = await repo.load_brief(session, domain)
     usage = LLMUsage()
+    # Recorded at the end of this handler. The wizard runs before any run exists,
+    # which is why `LlmSpend.run_id` is nullable.
     suggestion = await suggest_brief(
         LLMClient(settings, usage),
         site_url,
@@ -561,6 +602,12 @@ async def suggest_brief_route(
         homepage,
         known_urls=recon.urls,
     )
+
+    # The wizard's spend, which previously reached nothing. Committed here rather
+    # than at the end so a template error cannot lose the record of money already
+    # spent with the vendor.
+    await repo.record_spend(session, usage, domain=domain, spent_by=user.email)
+    await session.commit()
 
     # Suggestions fill only what the operator has not already answered. Overwriting
     # a considered answer with a guess is the one way this feature could do harm.
@@ -1449,6 +1496,23 @@ async def refine_turn(
 
     before = judge(rendered)
 
+    # The ceiling, checked before the call rather than after. Said out loud when
+    # it bites: a refusal that reads as "the model had nothing to add" is the
+    # silent cap the conventions forbid.
+    spent = await repo.spend_today(session, domain)
+    if spent >= settings.max_interactive_calls_per_day:
+        await repo.record_chat(
+            session,
+            domain,
+            "assistant",
+            f"Daily limit reached for this client: {spent} interactive calls today, "
+            f"against a ceiling of {settings.max_interactive_calls_per_day}. Nothing "
+            "was changed. Raise MAX_INTERACTIVE_CALLS_PER_DAY or try tomorrow.",
+            author="system",
+        )
+        await session.commit()
+        return await _render_refine(request, session, domain, user, doc, facts, rendered)
+
     urls = sorted(
         {c.url for c in [*doc.capabilities, *doc.read_only_urls]} | {p.url for p in doc.policies}
     )
@@ -1460,6 +1524,9 @@ async def refine_turn(
         schema=refine_prompt.schema(urls),
         schema_name="refine_operations",
     )
+    # Persisted whether or not the model returned anything usable. A refused turn
+    # still spent tokens, and a fallback still needs to be visible.
+    await repo.record_spend(session, usage, domain=domain, spent_by=user.email)
     await repo.record_chat(session, domain, "user", message.strip(), author=user.email)
 
     if data is None:
@@ -2146,8 +2213,9 @@ async def chat_edit(
     before = _result_from_rows(run, pages)
     excluded_urls = [page.url for page in pages if not page.included]
 
+    usage = LLMUsage()
     turn = await apply_chat_turn(
-        LLMClient(settings),
+        LLMClient(settings, usage),
         request=message,
         site_name=run.site_name,
         site_summary=run.site_summary,
@@ -2157,6 +2225,11 @@ async def chat_edit(
     )
 
     session.add(ChatMessage(run_id=run_id, role="user", body=message.strip(), author=user.email))
+    # This route had no usage object at all, so every chat turn on this tool's
+    # most expensive model reached the costs page as nothing.
+    await repo.record_spend(
+        session, usage, domain=run.domain, run_id=run_id, spent_by=user.email
+    )
 
     if turn.rejected or not turn.operations:
         reply = turn.rejected or turn.reply or "No change was needed."
@@ -2309,6 +2382,33 @@ async def admin_home(
     window = max(1, min(days, 365))
     runs = await repo.runs_since(session, days=window)
 
+    # Two sources, kept separate. Pipeline spend lives on `Run.stats`; interactive
+    # spend -- the refine panel, the chat editor, the brief wizard -- lives in
+    # `llm_spend`, because it is not a property of a run and one of the three
+    # happens before any run exists. Summing them into a single figure would hide
+    # which half is growing, and the interactive half is the operator-driven one.
+    interactive = await repo.interactive_spend_since(session, days=window)
+    by_stage: dict[str, dict[str, float]] = {}
+    for row in interactive:
+        entry = by_stage.setdefault(
+            row.stage or "unknown",
+            {"calls": 0, "prompt": 0, "completion": 0, "usd": 0.0, "unpriced": 0},
+        )
+        entry["calls"] += row.calls
+        entry["prompt"] += row.prompt_tokens
+        entry["completion"] += row.completion_tokens
+        rates = rate_for(row.model) if row.model else None
+        if rates is None:
+            # Same rule as `cost_of`: a model with no rate is unknown, not free.
+            entry["unpriced"] += row.prompt_tokens + row.completion_tokens
+            continue
+        input_rate, output_rate = rates
+        entry["usd"] += (row.prompt_tokens / 1_000_000) * input_rate
+        entry["usd"] += (row.completion_tokens / 1_000_000) * output_rate
+
+    interactive_usd = sum(e["usd"] for e in by_stage.values())
+    interactive_calls = sum(int(e["calls"]) for e in by_stage.values())
+
     costs = [cost_of(run.stats) for run in runs]
     totals = totals_of(costs)
     rows = sorted(zip(runs, costs, strict=True), key=lambda pair: pair[1].total_usd, reverse=True)
@@ -2343,6 +2443,10 @@ async def admin_home(
             "days": window,
             "rows": rows[:60],
             "totals": totals,
+            "by_stage": sorted(by_stage.items()),
+            "interactive_usd": interactive_usd,
+            "interactive_calls": interactive_calls,
+            "interactive_ceiling": settings.max_interactive_calls_per_day,
             "by_day": sorted(by_day.items()),
             "by_model": sorted(by_model.items(), key=lambda kv: -kv[1]["usd"]),
             "serp_rate": SERP_CALL_USD,

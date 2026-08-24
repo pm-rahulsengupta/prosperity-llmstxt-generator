@@ -263,3 +263,95 @@ async def test_refreshing_replaces_the_snapshot_and_moves_its_timestamp(session)
     assert (await repo.preview_client_deletion(session, "x.example")).snapshots == 1, (
         "replaced, not appended"
     )
+
+
+# -- interactive LLM spend ----------------------------------------------------
+
+
+async def test_a_recorded_call_reaches_the_costs_page(session):
+    """Until 2026-08-24 interactive spend reached nothing.
+
+    Three routes built an `LLMClient` and let the `LLMUsage` be
+    garbage-collected, so `/admin` reported them as not having happened rather
+    than as unpriced -- on the most expensive configured model.
+    """
+    from app.llm.client import LLMUsage, Stage
+
+    usage = LLMUsage()
+    usage.record(Stage.CHAT, 1_200, 300, model="gpt-4o")
+    await repo.record_spend(session, usage, domain="x.example", spent_by="a@b.c")
+    await session.commit()
+
+    rows = await repo.interactive_spend_since(session, days=1)
+
+    assert len(rows) == 1
+    assert rows[0].model == "gpt-4o"
+    assert rows[0].prompt_tokens == 1_200
+    assert rows[0].completion_tokens == 300
+    assert rows[0].domain == "x.example"
+
+
+async def test_tokens_are_stored_and_dollars_are_not(session):
+    """So a rate correction reprices history instead of leaving old rows wrong."""
+    from app.core.pricing import rate_for
+    from app.llm.client import LLMUsage, Stage
+
+    usage = LLMUsage()
+    usage.record(Stage.CHAT, 1_000_000, 0, model="gpt-4o")
+    await repo.record_spend(session, usage, domain="x.example")
+    await session.commit()
+
+    row = (await repo.interactive_spend_since(session, days=1))[0]
+    assert not hasattr(row, "usd"), "priced at read time, never stored"
+
+    input_rate, _ = rate_for(row.model)
+    assert (row.prompt_tokens / 1_000_000) * input_rate == input_rate
+
+
+async def test_a_refusal_that_cost_nothing_is_still_recorded(session):
+    """A fallback looks identical to a success on a bill unless it is visible."""
+    from app.llm.client import LLMUsage, Stage
+
+    usage = LLMUsage()
+    usage.record_fallback(Stage.CHAT, "no OPENAI_API_KEY configured")
+    await repo.record_spend(session, usage, domain="x.example")
+    await session.commit()
+
+    rows = await repo.interactive_spend_since(session, days=1)
+
+    assert len(rows) == 1
+    assert rows[0].prompt_tokens == 0
+    assert "no OPENAI_API_KEY configured" in rows[0].fallbacks[0]
+
+
+async def test_the_daily_count_is_per_domain(session):
+    """One busy client must not spend another client's allowance."""
+    from app.llm.client import LLMUsage, Stage
+
+    for domain in ("busy.example", "busy.example", "quiet.example"):
+        usage = LLMUsage()
+        usage.record(Stage.CHAT, 10, 5, model="gpt-4o")
+        await repo.record_spend(session, usage, domain=domain)
+    await session.commit()
+
+    assert await repo.spend_today(session, "busy.example") == 2
+    assert await repo.spend_today(session, "quiet.example") == 1
+    assert await repo.spend_today(session, "never.example") == 0
+
+
+async def test_deleting_a_client_takes_its_spend_history(session):
+    """`llm_spend` is keyed on a bare domain like everything else here."""
+    from app.llm.client import LLMUsage, Stage
+
+    usage = LLMUsage()
+    usage.record(Stage.CHAT, 10, 5, model="gpt-4o")
+    await repo.record_spend(session, usage, domain="doomed.example")
+    await repo.save_site_config(
+        session, "doomed.example", plan={}, max_pages=0, updated_by="t@x.com"
+    )
+    await session.commit()
+
+    await repo.delete_client(session, "doomed.example")
+    await session.commit()
+
+    assert await repo.spend_today(session, "doomed.example") == 0
