@@ -16,6 +16,74 @@ not happened yet when the code was committed.
 
 ---
 
+## 2026-08-24
+
+Deployed `bb22a6b` — web and worker. Three commits: the rename and the rule
+engine (`13a7f0a`), hosted Lighthouse and CrUX (`14b0bbb`), the AI refine layer
+(`bb22a6b`).
+
+**Measured**
+
+- 809 tests, ruff clean
+- prosperitymedia.com.au: readiness **53/100**, 6 of 20 components live
+- agents.md spec score **98/100** — the one failure is AGT-013 (INFO, no
+  llms.txt pointer), which is correct: the site does not publish one yet
+- CLS **0.01** from real users, origin-wide, steady over 25 periods
+- tap targets **FAIL on 2 of 3** sampled pages
+- probe ~40s with Lighthouse and CrUX; page render from the snapshot ~0.03s
+
+**Changed**
+
+- Renamed to the AI SEO Technical Discovery Support Tool. Two of the strings are
+  client-facing — the `agents.md.liquid` credit and the `ai-catalog.json` `"by"`
+  field — so the golden fixture diff was reviewed rather than regenerated blind.
+- The sidebar's "Generate" group is gone. It offered "llms.txt" and "agents.md"
+  and neither opened a file. Families now carry an outstanding count, with
+  `None` rendering nothing because nothing was measured and `0` rendering a tick.
+- **Wired the rule engine in.** It had been dead code: nothing outside `tests/`
+  imported `app/core/rules/`, so AGT-004 — *"Every URL in the file must be one
+  the probe confirmed"* — had never once run.
+- Lighthouse via PageSpeed and CrUX now settle `cls` and `tap-targets`.
+- The AI refine layer, as operations on `AgentsDoc` rather than on file text.
+
+**Learned**
+
+- **Wiring the rules in immediately found a disagreement.** AGT-004 failed our
+  own agents.md on twelve URLs, all twelve crawled pages. `_assemble` had it
+  right and `evidence.py` had it wrong: a crawled page is evidence for a link an
+  agent *reads*, even though it is not evidence for an endpoint an agent
+  *calls*. I had applied endpoint reasoning to links.
+- **AGT-006 then caught a defect in the refine layer**, before it shipped:
+  attribution was putting the operator's email into a file the rule correctly
+  describes as *"fetched by anyone, forever"*.
+- **Verifying vendor APIs beat trusting our own docs, twice.** `tap-targets` does
+  not exist in Lighthouse 13 (it is `target-size`), and PageSpeed's embedded
+  field data was empty for a site that does have some — CrUX queried directly at
+  origin granularity answers where the page-level query 404s.
+- **Two latent bugs surfaced that the Lighthouse work would have activated**: a
+  manual tick could override a *failing* probe, and the UI kept offering the
+  tick for checks a probe had just decided.
+
+**Correction to `bb22a6b`'s commit message**
+
+That message says *"Chat spend is now recorded"*. **It is not.** `refine_turn`
+creates an `LLMUsage` and passes it to `LLMClient`, and then never reads it —
+all three exit paths ignore it and it is garbage-collected with the request.
+Passing the argument was necessary and not sufficient.
+
+Three sites leak, not one: `refine_turn` (`app/main.py:1428`), `chat_edit`
+(`:2121`, no usage object at all) and `suggest_brief` (`:526`, same shape as
+refine). `cost_of` reads `Run.stats` and nothing else, so `/admin` does not
+report these as unpriced — it reports them as **not having happened**, while
+they run on `gpt-4o`. There is still no spend ceiling anywhere.
+
+Fixing it needs a decision, not just a line: `ArtifactEdit` has no numeric
+column, so domain-scoped spend needs a migration rather than an attribution to
+some arbitrary `Run`. Written up as Phase 1 of
+`tools/plans/02-llmstxt-completion.md`.
+
+---
+
 ## 2026-08-21 — finish the registry consolidation
 
 Deployed `bd3a70d` — web and worker, migrations clean (none in this commit),
