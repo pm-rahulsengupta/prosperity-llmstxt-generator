@@ -146,7 +146,12 @@ def test_llms_full_respects_its_character_budget(sf_csv: str) -> None:
     result, _ = generate(
         SITE,
         entries,
-        GenerateOptions(site_name="Example", generated_on=FIXED_DATE, full_max_chars=12_000),
+        GenerateOptions(
+            site_name="Example",
+            generated_on=FIXED_DATE,
+            generate_full=True,
+            full_max_chars=12_000,
+        ),
     )
 
     assert len(result.llms_full) <= 12_500, "budget plus the truncation note"

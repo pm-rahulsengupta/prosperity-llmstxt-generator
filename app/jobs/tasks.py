@@ -307,6 +307,9 @@ async def generate_task(run_id: str) -> None:
         domain = run.domain
         source = run.source
         plan = CrawlPlan.from_dict(run.plan or {})
+        # Read here, with the run attached, rather than at the assemble stage
+        # where it would be a detached instance three session scopes later.
+        wants_full = bool((run.plan or {}).get("generate_full", False))
         cap = run.max_pages or settings.crawl_default_max_pages
         site_brief = await repo.load_brief(session, domain)
         await repo.set_status(session, run, RunStatus.CRAWLING)
@@ -516,6 +519,11 @@ async def generate_task(run_id: str) -> None:
             site_url=site_url,
             entries=entries,
             options=GenerateOptions(
+                # Read from the plan the operator approved. It defaulted to True
+                # and nothing set it, so every run built a full-text file --
+                # minutes of LLM work and a megabyte of storage -- whether or not
+                # the goal called for one.
+                generate_full=wants_full,
                 filters=FilterOptions(dedup=True, near_duplicates=False, thin_content=True),
                 pattern=plan.site_pattern,
                 site_name=(blurb.site_name if blurb else "") or plan.site_name,

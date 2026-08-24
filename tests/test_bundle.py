@@ -73,7 +73,29 @@ def test_a_shop_gets_the_catalog_and_a_firm_does_not():
 
 def test_a_publisher_gets_the_full_text_file():
     assert bundle_for("read_and_cite").get("llms-full.txt") is not None
-    assert bundle_for("contact_agency").get("llms-full.txt") is None
+
+
+def test_a_generated_full_text_file_is_offered_even_where_the_goal_does_not_need_it():
+    """We generate it for every run, so hiding it wastes what was already paid for.
+
+    `GenerateOptions.generate_full` defaults to True and nothing set it, so the
+    pipeline built an llms-full for all seven goals and the bundle surfaced it
+    for one. A file we produced and hid is worse than one we never made: it is
+    unreviewed, unjudged, and still sitting in the database.
+    """
+    firm = bundle_for("contact_agency")
+    artifact = firm.get("llms-full.txt")
+
+    assert artifact is not None
+    assert "does not require it" in artifact.note, "offered, and labelled as optional"
+
+
+def test_the_scenario_still_decides_what_a_goal_calls_for():
+    """The change is about delivery, not about the recommendation."""
+    from app.core.bundle import scenario_files
+
+    assert "llms-full.txt" in scenario_files("read_and_cite")
+    assert "llms-full.txt" not in scenario_files("contact_agency")
 
 
 def test_files_outside_the_scenario_are_named_rather_than_missing():
@@ -251,3 +273,29 @@ def test_choosing_to_block_training_adds_a_cdn_task():
     task = next(t for t in bundle.tasks if t.component == title("web-bot-auth"))
 
     assert "Googlebot" in task.platform_hint
+
+
+def test_the_full_text_file_is_off_unless_asked_for():
+    """It defaulted to on and nothing set it, so every run paid for one.
+
+    Minutes of summarising and about a megabyte of storage, for a file six of the
+    seven goals do not call for and which the bundle then hid.
+    """
+    from app.core.pipeline import GenerateOptions
+
+    assert GenerateOptions().generate_full is False, (
+        "the default decides what every run costs when no caller passes it"
+    )
+
+
+def test_the_pipeline_reads_the_switch_from_the_approved_plan():
+    """Asserted against the source: the failure is a future edit dropping the
+    argument, which silently restores the always-on behaviour."""
+    import inspect
+
+    from app.jobs import tasks
+
+    source = inspect.getsource(tasks.generate_task)
+
+    assert "generate_full=wants_full" in source
+    assert 'run.plan or {}).get("generate_full"' in source, "read while the run is attached"

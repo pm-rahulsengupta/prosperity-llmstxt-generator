@@ -17,6 +17,15 @@
                 <button class="primary" type="submit">Start</button>
             </div>
         </div>
+        <label class="check">
+            <input type="checkbox" name="generate_full" value="true">
+            Also build <code>llms-full.txt</code>
+            <span class="hint">
+                The whole corpus in one file, for agents that want to read rather
+                than navigate. It costs summarising time and about a megabyte, so
+                it is off unless the goal is to be read and cited.
+            </span>
+        </label>
         <p class="muted">
             Reads robots.txt and the sitemaps, checks how many pages Google indexes,
             and proposes a crawl plan. Nothing is crawled until you approve the plan.

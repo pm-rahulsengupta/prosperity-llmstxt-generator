@@ -445,6 +445,7 @@ async def create_run(
     request: Request,
     site_url: str = Form(...),
     max_pages: int = Form(0),
+    generate_full: bool = Form(False),
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -455,6 +456,10 @@ async def create_run(
 
     run = await repo.create_run(session, normalised, created_by=user.email)
     run.max_pages = max_pages
+    # Stored on the plan rather than in a column: it is a decision about this
+    # run, it travels with the plan the operator approves, and it needs no
+    # migration. `generate_task` reads it back the same way.
+    run.plan = {**(run.plan or {}), "generate_full": bool(generate_full)}
     run_id = str(run.id)
 
     existing = await repo.load_site_config(session, run.domain)

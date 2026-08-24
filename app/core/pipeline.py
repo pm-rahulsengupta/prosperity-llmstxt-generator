@@ -36,7 +36,10 @@ class FilterOptions:
 @dataclass(slots=True)
 class GenerateOptions:
     pattern: str = PATTERN_CATALOG
-    generate_full: bool = True
+    # Off by default. It was True and no caller ever set it, so every run built a
+    # full-text file -- minutes of summarising and about a megabyte -- for a goal
+    # that in six cases out of seven does not call for one. The run form asks.
+    generate_full: bool = False
     full_max_chars: int = DEFAULT_FULL_MAX_CHARS
     site_name: str = ""
     site_summary: str = ""

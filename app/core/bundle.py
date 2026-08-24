@@ -393,9 +393,29 @@ def build_bundle(
         )
     if "llms.txt" in wanted and llms_txt:
         bundle.artifacts.append(Artifact("llms.txt", "/llms.txt", llms_txt, "text/markdown"))
-    if "llms-full.txt" in wanted and llms_full:
+    # Offered whenever one exists, not only where the scenario names it. The
+    # pipeline generates llms-full for every run -- `GenerateOptions.generate_full`
+    # defaults to True and nothing was setting it -- so gating delivery on the
+    # scenario meant paying to build the file for all seven goals and surfacing it
+    # for one. A file we produced and hid is worse than one we never made: it is
+    # unreviewed, unjudged, and still sitting in the database.
+    #
+    # The scenario table still decides what a goal *calls for*; it no longer
+    # decides what an operator is allowed to see.
+    if llms_full:
         bundle.artifacts.append(
-            Artifact("llms-full.txt", "/llms-full.txt", llms_full, "text/markdown")
+            Artifact(
+                "llms-full.txt",
+                "/llms-full.txt",
+                llms_full,
+                "text/markdown",
+                note=(
+                    ""
+                    if "llms-full.txt" in wanted
+                    else "Generated, though this goal does not require it. Publish only "
+                    "if you want agents to read the whole corpus."
+                ),
+            )
         )
     if "agents.md" in wanted and agents_md:
         bundle.artifacts.append(Artifact("agents.md", "/agents.md", agents_md, "text/markdown"))
