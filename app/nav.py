@@ -107,6 +107,14 @@ def build_nav(
                     "/",
                     active=_active(path, "/") or _active(path, "/runs"),
                 ),
+                # The fallback when a site refuses our crawler. Sits beside the
+                # crawl rather than hidden in a settings page, because the moment
+                # you need it is the moment a crawl just failed.
+                NavItem(
+                    "Import a crawl",
+                    "/imports/screaming-frog",
+                    active=_active(path, "/imports"),
+                ),
             ],
         ),
         NavGroup(

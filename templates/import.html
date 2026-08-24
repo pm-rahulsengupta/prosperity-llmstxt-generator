@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Import a crawl{% endblock %}
+
+{% block content %}
+<div class="panel">
+    <h1>Import a Screaming Frog crawl</h1>
+    <p class="muted">
+        For a site this tool cannot read itself &mdash; a WAF, bot protection, or a
+        staging environment behind auth. Screaming Frog runs from your machine with
+        the client's blessing, so an export is a crawl that already succeeded.
+    </p>
+
+    {% if error %}<ul class="notes"><li class="error">{{ error }}</li></ul>{% endif %}
+
+    <form method="post" action="/imports/screaming-frog" enctype="multipart/form-data">
+        <div class="row">
+            <div>
+                <label for="site_url">Site URL</label>
+                <input type="text" id="site_url" name="site_url"
+                       autocomplete="off" spellcheck="false"
+                       placeholder="carsguide.com.au&hellip;" required>
+            </div>
+            <div class="narrow">
+                <label for="max_urls">Page cap</label>
+                <input type="number" id="max_urls" name="max_urls" min="0"
+                       placeholder="all">
+            </div>
+        </div>
+
+        <div class="field spaced">
+            <label for="export">Internal &rarr; All, exported as CSV</label>
+            <input type="file" id="export" name="export" accept=".csv,text/csv" required>
+            <p class="hint">
+                In Screaming Frog: <strong>Internal</strong> tab, filter
+                <strong>All</strong>, then <strong>Export</strong>. The columns this
+                needs are Address, Status Code, Content Type, Indexability, Title,
+                Meta Description, H1, Word Count and the inlink counts &mdash; all of
+                which that export carries by default.
+            </p>
+        </div>
+
+        <button class="primary" type="submit">Import and generate</button>
+    </form>
+</div>
+
+<div class="panel">
+    <h2>What happens to it</h2>
+    <p class="muted">
+        Only indexable HTML pages that answered 200 are kept &mdash; Screaming Frog's
+        own verdict is trusted, since it saw the response and we did not.
+    </p>
+    <p class="muted">
+        <strong>The crawl plan is skipped.</strong> That review step exists to decide
+        what to fetch before paying to fetch it. You have already crawled, and already
+        chosen what to export, so there is nothing left to decide. Triage, summarising
+        and assembly run as normal.
+    </p>
+    <p class="hint">
+        Embargo patterns from the brief still apply. A row matching one is discarded
+        and never stored, exactly as a crawl would refuse to fetch it &mdash; an upload
+        must not be a way around a rule about what may be kept.
+    </p>
+</div>
+{% endblock %}

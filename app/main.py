@@ -23,7 +23,7 @@ from urllib.parse import quote, urlparse
 from uuid import UUID
 
 import httpx
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -67,10 +67,16 @@ from app.core.components import (
     SiteType,
     by_key,
 )
+from app.core.csv_source import parse_screaming_frog_csv
 from app.core.edits import EditTarget, apply_operations
 from app.core.evidence import JUDGED_BY, reports_for
 from app.core.metrics import DateRange
-from app.core.onboarding import QUESTIONS, SiteBrief, brief_from_answers
+from app.core.onboarding import (
+    QUESTIONS,
+    SiteBrief,
+    brief_from_answers,
+    split_embargoed,
+)
 from app.core.pipeline import rebuild
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import (
@@ -94,6 +100,7 @@ from app.core.templates_lib import build_templates
 from app.db import repo
 from app.db.base import get_session, session_scope
 from app.db.models import ChatMessage, DocumentRevision, RunStatus
+from app.jobs.tasks import SOURCE_IMPORT
 from app.llm.client import LLMClient, LLMUsage, Stage
 from app.llm.prompts.plan import CrawlPlan
 from app.llm.stages import apply_chat_turn, suggest_brief
@@ -1313,6 +1320,133 @@ async def delete_client_route(
     return RedirectResponse(
         "/clients?deleted=" + quote(f"{domain}: {removed.summary()}"),
         status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/imports/screaming-frog", response_class=HTMLResponse)
+async def import_form(request: Request, user: User = Depends(require_user)):
+    """Upload a crawl instead of performing one.
+
+    The fallback for a site we cannot read: a WAF, a bot-protection rule, or a
+    staging environment behind auth. Screaming Frog runs from the operator's own
+    machine with the client's blessing, so an Internal All export is a crawl that
+    already happened and already succeeded.
+    """
+    return templates.TemplateResponse(
+        request, "import.html", {"user": user, "error": None, "report": None}
+    )
+
+
+@app.post("/imports/screaming-frog", response_class=HTMLResponse)
+async def import_screaming_frog(
+    request: Request,
+    site_url: str = Form(...),
+    export: UploadFile = File(...),
+    max_urls: int = Form(0),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Parse an Internal All export into a run, then generate from it.
+
+    **The plan-review gate is skipped, deliberately.** That gate exists to decide
+    what to crawl before spending on crawling it. An import has already been
+    crawled -- by the operator, in Screaming Frog, where they already chose what
+    to export. There is nothing left to decide before the spend, because the
+    spend already happened.
+    """
+    try:
+        normalised = normalise_site_url(site_url)
+    except ValueError as exc:
+        return _import_error(request, user, str(exc))
+
+    raw = await export.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        # Screaming Frog writes UTF-16 when the export is made on Windows with
+        # certain locale settings, and the failure is otherwise a wall of
+        # mojibake rather than a message.
+        try:
+            text = raw.decode("utf-16")
+        except UnicodeDecodeError:
+            return _import_error(
+                request, user, "That file is not UTF-8 or UTF-16 text. Export it again as CSV."
+            )
+
+    entries = parse_screaming_frog_csv(text, max_urls=max(0, max_urls))
+    if not entries:
+        return _import_error(
+            request,
+            user,
+            "No usable rows. An Internal All export needs Address, Status Code, "
+            "Content Type and Indexability columns, and only indexable HTML pages "
+            "that answered 200 are kept.",
+        )
+
+    domain = urlparse(normalised).netloc
+    off_site = [e.url for e in entries if domain not in urlparse(e.url).netloc]
+    if off_site:
+        # A pasted export from the wrong crawl is easy to do and expensive to
+        # discover later, when a client's file cites another client's pages.
+        return _import_error(
+            request,
+            user,
+            f"{len(off_site)} row(s) are not on {domain}, so this export is for a "
+            f"different site. First was {off_site[0]}.",
+        )
+
+    run = await repo.create_run(session, normalised, created_by=user.email, source=SOURCE_IMPORT)
+    run.max_pages = len(entries)
+    brief = await repo.load_brief(session, domain)
+    config = await repo.load_site_config(session, domain)
+
+    plan = CrawlPlan(
+        site_name=(config.label if config and config.label else domain),
+        site_pattern=(config.plan or {}).get("site_pattern", "catalog") if config else "catalog",
+        source=SOURCE_IMPORT,
+        reasoning=f"Imported {len(entries)} pages from a Screaming Frog export.",
+        recommended_page_cap=len(entries),
+    )
+    run.plan = plan.to_dict()
+    run.plan_source = SOURCE_IMPORT
+    run.pattern = plan.site_pattern
+    run.site_name = plan.site_name
+
+    # Embargo applies to an import exactly as it does to a crawl. The patterns
+    # exist so certain pages are never stored, and an upload is a way for them to
+    # arrive that skips the fetch-time filter entirely.
+    kept, suppressed = split_embargoed([e.url for e in entries], brief)
+    allowed = set(kept)
+    entries = [e for e in entries if e.url in allowed]
+    if not entries:
+        return _import_error(
+            request, user, "Every row in that export matches an embargo pattern for this client."
+        )
+
+    await repo.replace_pages(session, run.id, entries)
+    await repo.set_status(session, run, RunStatus.CRAWLING)
+    for pattern, count in sorted(suppressed.items()):
+        await repo.record_event(
+            session,
+            run.id,
+            "crawl",
+            f"Embargo {pattern!r}: {count} imported row(s) discarded and not stored",
+        )
+    run_id = str(run.id)
+    await session.commit()
+
+    from app.jobs.tasks import generate_task
+
+    await generate_task.defer_async(run_id=run_id)
+    return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _import_error(request: Request, user: User, message: str):
+    return templates.TemplateResponse(
+        request,
+        "import.html",
+        {"user": user, "error": message, "report": None},
+        status_code=status.HTTP_400_BAD_REQUEST,
     )
 
 

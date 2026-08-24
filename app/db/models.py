@@ -62,6 +62,16 @@ def _uuid() -> uuid.UUID:
     return uuid.uuid4()
 
 
+#: How a run's pages arrived. `Run.source` has carried a value since the first
+#: migration and until now only ever held "crawl".
+#:
+#: Defined here rather than in `app.jobs.tasks` so the web process can name it
+#: without importing the job graph -- every other job reference in `main.py`
+#: takes the same care, via a function-local import.
+SOURCE_CRAWL = "crawl"
+SOURCE_IMPORT = "screaming-frog"
+
+
 class Run(Base):
     __tablename__ = "runs"
 

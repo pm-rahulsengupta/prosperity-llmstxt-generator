@@ -35,7 +35,7 @@ from app.core.ranking import (
 from app.core.text import content_fingerprint
 from app.db import repo
 from app.db.base import session_scope
-from app.db.models import RunStatus
+from app.db.models import SOURCE_IMPORT, RunStatus
 from app.jobs.queue import QUEUE_CRAWL, app
 from app.llm.client import LLMClient, LLMUsage
 from app.llm.prompts.plan import CrawlPlan
@@ -262,6 +262,35 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
         )
 
 
+def _entry_from_row(row) -> PageEntry:
+    """Rebuild a `PageEntry` from a stored page.
+
+    An import writes rows before the job starts, so the job reads them back
+    rather than fetching. Every field the pipeline scores on is carried across;
+    a field Screaming Frog did not export stays at its default, which is the
+    same shape a crawl produces for a page that answered without it.
+    """
+    return PageEntry(
+        url=row.url,
+        title=row.title or "",
+        description=row.description or "",
+        h1=row.h1 or "",
+        word_count=row.word_count or 0,
+        text_ratio=row.text_ratio or 0.0,
+        crawl_depth=row.crawl_depth if row.crawl_depth is not None else -1,
+        folder_depth=row.folder_depth or 0,
+        inlinks=row.inlinks or 0,
+        unique_inlinks=row.unique_inlinks or 0,
+        outlinks=row.outlinks or 0,
+        external_outlinks=row.external_outlinks or 0,
+        link_score=row.link_score or 0,
+        content_hash=row.content_hash or "",
+        canonical=row.canonical or "",
+        markdown=row.markdown or "",
+        status_code=row.status_code or 0,
+    )
+
+
 @app.task(name="generate", queue=QUEUE_CRAWL, retry=1)
 async def generate_task(run_id: str) -> None:
     """Crawl, triage, summarise, assemble, review. Runs only after plan approval."""
@@ -276,6 +305,7 @@ async def generate_task(run_id: str) -> None:
             return
         site_url = run.site_url
         domain = run.domain
+        source = run.source
         plan = CrawlPlan.from_dict(run.plan or {})
         cap = run.max_pages or settings.crawl_default_max_pages
         site_brief = await repo.load_brief(session, domain)
@@ -283,94 +313,124 @@ async def generate_task(run_id: str) -> None:
         await repo.record_event(session, rid, "crawl", "Re-reading sitemaps")
 
     try:
-        await _abort_if_cancelled(rid, "crawl")
-        pre = await run_preflight(site_url, settings)
-        urls = select_urls(pre.recon, plan, cap)
+        if source == SOURCE_IMPORT:
+            # The pages are already stored: an operator uploaded a Screaming Frog
+            # export because we cannot reach this site ourselves. Skipping the
+            # crawl is the whole point -- a WAF that blocks our fetcher blocks
+            # the preflight too, so re-reading the sitemap here would fail for
+            # exactly the reason the import exists.
+            async with session_scope() as session:
+                entries = [_entry_from_row(row) for row in await repo.get_pages(session, rid)]
+            if not entries:
+                raise RuntimeError("The import produced no usable pages.")
 
-        # Embargo is enforced here, before the fetch, because "excluded from the
-        # output" is not what anyone means by it. A page withheld for legal or
-        # confidentiality reasons must not have its body sitting in our database
-        # either, and the only point at which that is cheap to guarantee is
-        # before it is requested. Filtering later would leave the content stored
-        # and make the fix a deletion job.
-        urls, suppressed = split_embargoed(urls, site_brief)
+            scores = {entry.url: importance_score(entry) for entry in entries}
+            for entry in entries:
+                entry.is_optional = is_optional_page(entry)
 
-        async with session_scope() as session:
-            # Logged even though the patterns are withheld from the model. The
-            # operator has to be able to answer "why does this page never
-            # appear", and a silent disappearance leaves no trail to answer it
-            # with -- especially since the planner can propose an embargoed group
-            # on its own and never be told it was overruled.
-            for pattern, count in sorted(suppressed.items()):
+            async with session_scope() as session:
+                await repo.replace_pages(session, rid, entries, scores)
                 await repo.record_event(
                     session,
                     rid,
                     "crawl",
-                    f"Embargo {pattern!r}: {count} URL(s) not crawled and not stored",
+                    f"Imported {len(entries)} pages from a Screaming Frog export. "
+                    "Nothing was fetched from the site.",
+                    done=len(entries),
+                    total=len(entries),
                 )
-            await repo.record_event(
-                session, rid, "crawl", f"Fetching {len(urls)} pages", done=0, total=len(urls)
-            )
+                run = await repo.get_run(session, rid)
+                if run is not None:
+                    await repo.set_status(session, run, RunStatus.TRIAGING)
+        else:
+            await _abort_if_cancelled(rid, "crawl")
+            pre = await run_preflight(site_url, settings)
+            urls = select_urls(pre.recon, plan, cap)
 
-        fetcher = build_fetcher(settings, allow_browser=True)
-        depths = _depth_by_url(urls, pre.recon.site_url)
-        results = await fetcher.fetch_many(urls)
+            # Embargo is enforced here, before the fetch, because "excluded from the
+            # output" is not what anyone means by it. A page withheld for legal or
+            # confidentiality reasons must not have its body sitting in our database
+            # either, and the only point at which that is cheap to guarantee is
+            # before it is requested. Filtering later would leave the content stored
+            # and make the fix a deletion job.
+            urls, suppressed = split_embargoed(urls, site_brief)
 
-        entries: list[PageEntry] = []
-        for result in results:
-            if not result.ok or result.page is None:
-                continue
-            page = result.page
-            entries.append(
-                PageEntry(
-                    url=page.url or result.url,
-                    title=page.title,
-                    description=page.description,
-                    h1=page.h1,
-                    word_count=page.word_count,
-                    markdown=page.markdown,
-                    canonical=page.canonical,
-                    status_code=result.status,
-                    fetch_tier=str(result.tier or ""),
-                    # Recorded from the crawl, not left at the default. The source
-                    # never set this, which is why `## Optional` was always empty on
-                    # every crawl-sourced file it ever produced.
-                    crawl_depth=depths.get(result.url, 1),
-                    # Without this `deduplicate` is inert on a crawl: it keys on
-                    # `content_hash` and `canonical`, and the scraper populated
-                    # neither, so two URLs serving identical content both shipped.
-                    content_hash=content_fingerprint(page.markdown),
+            async with session_scope() as session:
+                # Logged even though the patterns are withheld from the model. The
+                # operator has to be able to answer "why does this page never
+                # appear", and a silent disappearance leaves no trail to answer it
+                # with -- especially since the planner can propose an embargoed group
+                # on its own and never be told it was overruled.
+                for pattern, count in sorted(suppressed.items()):
+                    await repo.record_event(
+                        session,
+                        rid,
+                        "crawl",
+                        f"Embargo {pattern!r}: {count} URL(s) not crawled and not stored",
+                    )
+                await repo.record_event(
+                    session, rid, "crawl", f"Fetching {len(urls)} pages", done=0, total=len(urls)
                 )
-            )
 
-        if not entries:
-            raise RuntimeError("No pages could be fetched. Check robots rules and the plan.")
+            fetcher = build_fetcher(settings, allow_browser=True)
+            depths = _depth_by_url(urls, pre.recon.site_url)
+            results = await fetcher.fetch_many(urls)
 
-        scores = {entry.url: importance_score(entry) for entry in entries}
-        for entry in entries:
-            entry.is_optional = is_optional_page(entry)
+            entries: list[PageEntry] = []
+            for result in results:
+                if not result.ok or result.page is None:
+                    continue
+                page = result.page
+                entries.append(
+                    PageEntry(
+                        url=page.url or result.url,
+                        title=page.title,
+                        description=page.description,
+                        h1=page.h1,
+                        word_count=page.word_count,
+                        markdown=page.markdown,
+                        canonical=page.canonical,
+                        status_code=result.status,
+                        fetch_tier=str(result.tier or ""),
+                        # Recorded from the crawl, not left at the default. The source
+                        # never set this, which is why `## Optional` was always empty on
+                        # every crawl-sourced file it ever produced.
+                        crawl_depth=depths.get(result.url, 1),
+                        # Without this `deduplicate` is inert on a crawl: it keys on
+                        # `content_hash` and `canonical`, and the scraper populated
+                        # neither, so two URLs serving identical content both shipped.
+                        content_hash=content_fingerprint(page.markdown),
+                    )
+                )
 
-        async with session_scope() as session:
-            await repo.replace_pages(session, rid, entries, scores)
-            await repo.record_event(
-                session,
-                rid,
-                "crawl",
-                f"Fetched {len(entries)} of {len(urls)}; tiers {fetcher.stats.by_tier}",
-                done=len(entries),
-                total=len(urls),
-            )
-            run = await repo.get_run(session, rid)
-            if run is not None:
-                run.stats = {
-                    **(run.stats or {}),
-                    "fetch": {
-                        "by_tier": dict(fetcher.stats.by_tier),
-                        "failed": fetcher.stats.failed,
-                        "requested": len(urls),
-                    },
-                }
-                await repo.set_status(session, run, RunStatus.TRIAGING)
+            if not entries:
+                raise RuntimeError("No pages could be fetched. Check robots rules and the plan.")
+
+            scores = {entry.url: importance_score(entry) for entry in entries}
+            for entry in entries:
+                entry.is_optional = is_optional_page(entry)
+
+            async with session_scope() as session:
+                await repo.replace_pages(session, rid, entries, scores)
+                await repo.record_event(
+                    session,
+                    rid,
+                    "crawl",
+                    f"Fetched {len(entries)} of {len(urls)}; tiers {fetcher.stats.by_tier}",
+                    done=len(entries),
+                    total=len(urls),
+                )
+                run = await repo.get_run(session, rid)
+                if run is not None:
+                    run.stats = {
+                        **(run.stats or {}),
+                        "fetch": {
+                            "by_tier": dict(fetcher.stats.by_tier),
+                            "failed": fetcher.stats.failed,
+                            "requested": len(urls),
+                        },
+                    }
+                    await repo.set_status(session, run, RunStatus.TRIAGING)
 
         # -- triage ---------------------------------------------------------
         await _abort_if_cancelled(rid, "triage")
