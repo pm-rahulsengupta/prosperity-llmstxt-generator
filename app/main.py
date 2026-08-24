@@ -24,10 +24,12 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import accounts
@@ -154,6 +156,31 @@ mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+@app.exception_handler(StarletteHTTPException)
+async def _auth_redirect(request: Request, exc: StarletteHTTPException) -> Response:
+    """Turn `require_user`'s 401 into a redirect the browser will actually follow.
+
+    `require_user` raises 401 with a `Location` header (app/auth.py:130-134), but
+    browsers only follow `Location` on a 3xx -- on a 401 they render the body. With
+    no handler registered, an expired session mid-request painted
+    `{"detail":"Sign in to continue."}` onto the page, and for an HTMX poll it
+    swapped that JSON straight into the DOM.
+
+    HTMX will not follow a 303 either: it issues the redirect as an XHR and swaps
+    the login page into the target element. The documented escape is the
+    `HX-Redirect` response header, which htmx turns into a full client-side
+    navigation -- and it must ride on a 2xx, because htmx does not swap or process
+    error responses by default.
+    """
+    location = (exc.headers or {}).get("Location")
+    if exc.status_code == status.HTTP_401_UNAUTHORIZED and location:
+        if request.headers.get("HX-Request") == "true":
+            return Response(status_code=status.HTTP_200_OK, headers={"HX-Redirect": location})
+        return RedirectResponse(location, status_code=status.HTTP_303_SEE_OTHER)
+    return await http_exception_handler(request, exc)
+
+
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 templates.env.globals["usd"] = usd
