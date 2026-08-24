@@ -29,6 +29,18 @@
 </header>
 {% endblock %}
 <div class="shell">
+    {# Gate the sidebar on a signed-in user.
+
+       `{% block chrome %}` only blanks the header -- the sidebar sits outside it,
+       so the login and signup pages were rendering the entire navigation to a
+       signed-out visitor: "Overview - Pick a client first" and eleven siblings
+       stacked above the sign-in form. That leaks the product's structure to
+       anyone who loads the URL and reads as broken.
+
+       Every page that shows a sidebar is behind `require_user`, so keying on
+       `user` also stops the next auth page inheriting the same bug. It skips the
+       `build_nav` call for anonymous requests as a side effect. #}
+    {% if user %}
     {% set nav_groups = build_nav(
         request.url.path if request else "/",
         domain if domain is defined else (run.domain if run is defined and run else ""),
@@ -36,6 +48,7 @@
         nav_gaps if nav_gaps is defined else None,
     ) %}
     {% include "partials/sidebar.html" %}
+    {% endif %}
     <main id="main" tabindex="-1">
         {% block content %}{% endblock %}
     </main>
