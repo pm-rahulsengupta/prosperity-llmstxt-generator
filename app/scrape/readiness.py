@@ -491,6 +491,8 @@ async def audit_readiness(
     site_type: SiteType = SiteType.CONTENT,
     timeout: float = 20.0,
     sample_urls: list[str] | None = None,
+    lighthouse: list | None = None,
+    crux=None,
 ) -> ReadinessReport:
     """Run every checkable item, and report the rest as needing a person.
 
@@ -589,6 +591,14 @@ async def audit_readiness(
                 )
             continue
 
+        if item.key in LIGHTHOUSE_KEYS and (lighthouse or crux):
+            state, detail = _from_browser(item.key, lighthouse or [], crux)
+            if state is not None:
+                report.results.append(CheckResult(item, state, detail, origin + "/"))
+                continue
+            # Fell through: PageSpeed ran but could not decide this one. That is
+            # still "needs a person", not a pass.
+
         if item.layer == 1 or item.key in {"webmcp", "web-bot-auth"}:
             report.results.append(CheckResult(item, CheckState.MANUAL, item.verify))
             continue
@@ -645,3 +655,71 @@ async def audit_readiness(
         report.results.append(CheckResult(item, state, detail, origin + item.path))
 
     return report
+
+
+# -- Lighthouse-decided checks ------------------------------------------------
+#
+# The two of the six manual components that a real browser can settle, and that
+# already name Lighthouse in their own verify string. Kept here rather than in
+# `pagespeed.py` because this is the module that decides what a check state
+# means; that one only knows how to measure.
+
+LIGHTHOUSE_KEYS = frozenset({"cls", "tap-targets"})
+
+
+def _from_browser(key: str, findings: list, crux=None) -> tuple[CheckState | None, str]:
+    """Worst answer wins across the sampled pages, as everywhere else here.
+
+    Returns `(None, "")` when a browser ran but could not decide -- a Lighthouse
+    version without the audit, or a page it refused. The caller then falls
+    through to MANUAL, because "we could not tell" and "it is fine" are different
+    answers and only one of them is a pass.
+    """
+    from app.scrape.pagespeed import CLS_GOOD
+
+    if key == "cls":
+        return _cls_verdict(findings, crux, CLS_GOOD)
+
+    usable = [f for f in findings if f.usable]
+    if not usable:
+        return None, ""
+    decided = [f for f in usable if f.tap_targets_ok is not None]
+    if not decided:
+        return None, ""
+    failing = [f for f in decided if not f.tap_targets_ok]
+    if failing:
+        return CheckState.FAIL, (
+            f"controls under 24x24px on {len(failing)} of {len(decided)} page(s) — "
+            f"{failing[0].tap_targets_detail or failing[0].url}"
+        )
+    return CheckState.PASS, f"all controls large enough — {len(decided)} page(s) checked"
+
+
+def _cls_verdict(findings: list, crux, threshold: float) -> tuple[CheckState | None, str]:
+    """Field data decides where it exists; a lab run only where it does not.
+
+    "CLS under 0.1" is a claim about what people experienced, so a real-user p75
+    outranks a synthetic run even when the synthetic run is of the exact page and
+    the field data is origin-wide. Whichever answered, the detail says which --
+    two sites passing on different bases have not been measured the same way.
+    """
+    if crux is not None and crux.measured:
+        where = crux.basis.describe
+        trend = f" — {crux.trend.describe()}" if crux.trend else ""
+        if crux.cls_p75 <= threshold:
+            return CheckState.PASS, f"CLS {crux.cls_p75:g} ({where}){trend}"
+        return CheckState.FAIL, (
+            f"CLS {crux.cls_p75:g}, over the {threshold} threshold ({where}){trend}"
+        )
+
+    measured = [f for f in findings if f.usable and f.cls and f.cls.measured]
+    if not measured:
+        return None, ""
+    worst = max(measured, key=lambda f: f.cls.value)
+    scope = f"worst of {len(measured)} page(s), lab only — no field data for this site"
+    if worst.cls.value <= threshold:
+        return CheckState.PASS, f"CLS {worst.cls.value:g} — {scope}"
+    return CheckState.FAIL, (
+        f"CLS {worst.cls.value:g}, over the {threshold} threshold — {scope}. "
+        f"Worst page: {worst.url}"
+    )

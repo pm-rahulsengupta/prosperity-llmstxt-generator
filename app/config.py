@@ -70,6 +70,13 @@ class Settings(BaseSettings):
 
     # --- Firecrawl (last-resort fetch fallback, billed per page) -----------
     firecrawl_api_key: str = ""
+
+    # Hosted Lighthouse. Settles the CLS and tap-target checks that no static
+    # parse can, without a second browser in the container. Free; restrict the
+    # key to the PageSpeed Insights API. With none set, those two components
+    # stay "needs a person" and the report says so.
+    pagespeed_api_key: str = ""
+
     firecrawl_base_url: str = "https://api.firecrawl.dev/v2"
 
     # --- Google Search Console (the metrics source that repairs page ranking) --
@@ -100,6 +107,7 @@ class Settings(BaseSettings):
         "openai_api_key",
         "google_client_secret",
         "firecrawl_api_key",
+        "pagespeed_api_key",
         "dataforseo_password",
         mode="after",
     )
@@ -133,6 +141,10 @@ class Settings(BaseSettings):
     @property
     def firecrawl_enabled(self) -> bool:
         return bool(self.firecrawl_api_key)
+
+    @property
+    def pagespeed_enabled(self) -> bool:
+        return bool(self.pagespeed_api_key)
 
     @property
     def size_check_enabled(self) -> bool:

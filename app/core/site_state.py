@@ -58,6 +58,12 @@ class ComponentStatus:
         """Whether there is something for a person to do about it."""
         return self.state in (ComponentState.READY, ComponentState.TEMPLATE, ComponentState.MISSING)
 
+    # Whether a probe returned a verdict on this component, either way. Marks
+    # are offered only where nothing did: showing "Mark as done" beside a check
+    # that just failed invites a tick that `derive` will then ignore, which is a
+    # worse answer than not offering it.
+    probe_decided: bool = False
+
     @property
     def publishable(self) -> bool:
         """Only a real artefact. A template is never downloadable as final.
@@ -207,19 +213,34 @@ def derive(
             continue
 
         check = checks.get(component.key)
+        decided = check is not None and check.state in (CheckState.PASS, CheckState.FAIL)
+
         if check is not None and check.state is CheckState.PASS:
             status.statuses.append(
                 ComponentStatus(
-                    component, ComponentState.LIVE, check.detail, verify=component.verify
+                    component,
+                    ComponentState.LIVE,
+                    check.detail,
+                    verify=component.verify,
+                    probe_decided=True,
                 )
             )
             continue
 
         # A person's word, but only where nothing can check it for them, and
-        # only until something can. If a manual item ever becomes probe-detectable
-        # and the probe says no, the probe wins -- the check above runs first.
+        # only until something can.
+        #
+        # `decided` is the load-bearing half. The branch above already lets a
+        # PASS beat a mark, but until this was added a **FAIL** did not: someone
+        # could tick "tap targets are fine", a probe could later find they are
+        # not, and the tick would still win. That went unnoticed while no probe
+        # could decide any markable component -- adding PageSpeed made two of
+        # them decidable and turned a latent bug into a live one.
+        #
+        # So a mark applies only where nothing measured it. PASS and FAIL are
+        # both measurements; MANUAL and absent are not.
         marks = marks or {}
-        if component.key in marks and manually_markable(component):
+        if not decided and component.key in marks and manually_markable(component):
             status.statuses.append(
                 ComponentStatus(
                     component,
@@ -244,6 +265,7 @@ def derive(
                     detail or "generated and ready to publish",
                     artifact_name=component.artifact,
                     verify=component.verify,
+                    probe_decided=decided,
                 )
             )
             continue
@@ -256,6 +278,7 @@ def derive(
                     detail or "a starting point exists; the service does not yet",
                     template_body=templates[component.key],
                     verify=component.verify,
+                    probe_decided=decided,
                 )
             )
             continue
@@ -266,6 +289,7 @@ def derive(
                 ComponentState.MISSING,
                 detail or "not published, and nothing here can produce it",
                 verify=component.verify,
+                probe_decided=decided,
             )
         )
 

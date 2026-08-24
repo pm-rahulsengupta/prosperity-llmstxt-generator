@@ -105,6 +105,11 @@ from app.scrape.tech_probe import probe_tech
 
 logger = logging.getLogger(__name__)
 
+# PageSpeed is 10-30s per URL and rate limited per key. The readiness sampler
+# hands over three or four pages; this is the ceiling on how many of them get a
+# Lighthouse run, homepage first.
+PAGESPEED_SAMPLES = 3
+
 ROOT = Path(__file__).resolve().parents[1]
 settings = get_settings()
 
@@ -746,11 +751,34 @@ async def probe_site_live(session: AsyncSession, normalised: str):
         # `report.sampled` will say that is all it was.
         page_sample = []
 
+    # Hosted Lighthouse over the same pages the readiness audit sampled, so the
+    # two agree about which pages were judged. Ten to thirty seconds per URL,
+    # which is why this only ever runs here -- in the probe someone asked for --
+    # and never on a page render.
+    findings: list = []
+    crux = None
+    if settings.pagespeed_enabled:
+        from app.scrape.pagespeed import measure_many
+
+        judged = [normalised + "/", *page_sample][:PAGESPEED_SAMPLES]
+        findings = await measure_many(judged, settings.pagespeed_api_key)
+        for failed in [f for f in findings if not f.usable]:
+            logger.info("pagespeed could not measure %s: %s", failed.url, failed.error)
+
+        # Real-user data, which outranks the lab run above wherever it exists.
+        # The same key serves both APIs. Three cheap queries, and for a
+        # client-sized site it is usually the origin-wide one that answers.
+        from app.scrape.crux import fetch_crux
+
+        crux = await fetch_crux(normalised, settings.pagespeed_api_key, page_url=normalised + "/")
+
     readiness = await audit_readiness(
         normalised,
         settings.crawl_user_agent,
         SiteType.ECOMMERCE if tech.sells else SiteType.CONTENT,
         sample_urls=page_sample,
+        lighthouse=findings,
+        crux=crux,
     )
 
     # Declared endpoints are verified here rather than at render, because each is
@@ -1350,7 +1378,9 @@ def _component_context(request, user, domain, status, view) -> dict:
         "site_url": status.site_url,
         "site_type": status.site_type.value,
         "platform": view.tech.platform.value,
-        "markable": {s.key for s in status.statuses if manually_markable(s.component)},
+        "markable": {
+            s.key for s in status.statuses if manually_markable(s.component) and not s.probe_decided
+        },
         "checked_ago": view.checked_ago,
         "is_stale": view.is_stale,
         "label": "",
