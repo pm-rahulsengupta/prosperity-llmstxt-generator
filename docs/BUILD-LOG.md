@@ -16,6 +16,71 @@ not happened yet when the code was committed.
 
 ---
 
+## 2026-08-25
+
+### llms-full.txt: asked for, and no longer hidden
+
+`GenerateOptions.generate_full` defaulted to `True` and **no caller ever passed
+it**, so every run built a full-text file. `bundle` then only offered it when the
+scenario was `read_and_cite` — so six goals out of seven paid to generate a file
+they were never shown. Generated always, delivered rarely, asked for never.
+
+The run form now asks, the answer rides in `run.plan`, and the pipeline reads it
+back while the run is attached. **The default is now `False`**: an unset caller
+no longer commits the run to the expensive path.
+
+The bundle half is deliberately not symmetrical. If the file exists it is
+offered whatever the scenario, because at that point it has already been paid
+for and hiding it wastes the spend; where the goal does not call for one the
+artifact carries a note saying so. The scenario still decides what a goal
+*requires* — it no longer decides what the operator may see.
+
+One test changed rather than being added to.
+`test_llms_full_respects_its_character_budget` built its options without the
+flag and relied on the old default, so under the new default it stopped
+exercising the budget it was named for. It now asks for the file it measures.
+
+**Measured:** 872 tests, ruff clean.
+
+### The sidebar becomes a gunmetal panel
+
+Brought across from GEO Tracker at your request: the panel surface,
+`--sidebar-accent` (`#2e3a41`) as the active fill, group labels, and an icon per
+item. Not brought across: shadcn's components — this is Jinja with hand-written
+CSS — and collapse-to-icons, which needs client state we deliberately do not
+have.
+
+The nav was a light menu floating beside an already-dark top bar, so the chrome
+read as two unrelated pieces. Gunmetal with white text is an approved
+core-colour pairing at **14.05:1** and makes the dark chrome one shape.
+
+**It fixed a pill nobody could see.** `.gap` is a 12%-white veil with white
+text. Over the old near-white sidebar that was white on white, so every gap
+count — the number the sidebar exists to surface — was invisible unless its item
+happened to be active. Found by asking what each colour was sitting on, not by
+looking at the pill.
+
+Icons are inline SVG, not a sprite or a font: they inherit `currentColor`, so
+one set serves the dark panel and the light ground below the breakpoint, and
+markup already in the document cannot half-arrive the way a failed asset can.
+Hand-authored at 1.6 stroke, the weight that holds at 18px. All `aria-hidden` —
+the label beside each is already the accessible name.
+
+**Contrast computed, not eyeballed.** New `--pm-on-dark-muted` is `#8b9599`,
+**4.59:1** on gunmetal — AA for normal text, which a disabled item still is. It
+never lands on the active fill, where it would fail at **3.81:1**, because a
+disabled item is by definition not the current one.
+
+Three tests, because this breaks silently: an item with no icon renders the
+fallback dot and looks merely wrong, never broken. Verified the macro test
+catches a typo, and that all 20 shapes are distinct.
+
+**Measured:** 875 tests, ruff clean. 20 nav items, all with icons.
+
+**Deployed:** web + worker, 2026-08-25.
+
+---
+
 ## 2026-08-24
 
 Deployed `bb22a6b` — web and worker. Three commits: the rename and the rule
