@@ -19,12 +19,18 @@
         </div>
         <button class="primary" type="submit">Sign in</button>
     </form>
+    {# The "an admin creates them" note is only true where password accounts are
+       the only door. With Google configured, a Workspace account IS the way in and
+       needs nobody to create anything -- so the note misdescribes the product to
+       exactly the people it is shown to. Scope it to the world where it holds. #}
     {% if sso_enabled %}
     <p class="alt"><a class="button ghost" href="/login/google">Sign in with Google</a></p>
-    {% endif %}
+    <p class="muted alt">Any Prosperity Media Google account can sign in.</p>
+    {% else %}
     <p class="muted alt">
         No account? An admin creates them &mdash; there is no self-service signup once
         this instance has an owner.
     </p>
+    {% endif %}
 </div>
 {% endblock %}

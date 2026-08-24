@@ -84,3 +84,21 @@ def test_a_signed_in_page_still_renders_the_sidebar(env):
     user = User(email="someone@prosperitymedia.com.au", name="Someone")
     html = _render(env, "base.html", user=user)
     assert 'class="side"' in html
+
+
+def test_admin_creates_accounts_note_is_scoped_to_the_no_sso_world(env):
+    """That note is only true where password accounts are the only door.
+
+    With Google configured a Workspace account IS the way in and needs nobody to
+    create anything, so showing "an admin creates them" misdescribes the product
+    to exactly the people reading it.
+    """
+    env.globals["sso_enabled"] = False
+    off = _render(env, "login.html", user=None, error=None)
+    assert "An admin creates them" in off, "still true when password is the only door"
+
+    env.globals["sso_enabled"] = True
+    on = _render(env, "login.html", user=None, error=None)
+    assert "An admin creates them" not in on
+    assert "self-service signup" not in on
+    assert "Any Prosperity Media Google account can sign in." in on
