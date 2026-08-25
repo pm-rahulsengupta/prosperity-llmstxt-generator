@@ -79,6 +79,28 @@ catches a typo, and that all 20 shapes are distinct.
 
 **Deployed:** web + worker, 2026-08-25.
 
+### The rail now runs the full page height
+
+Reported from the deployed build: the panel stopped after the last nav item and
+left a band of page ground beneath it, so the dark chrome ended mid-screen on
+any short page.
+
+`body` becomes a flex column with `min-height: 100vh`; `.shell` aligns `stretch`
+rather than `flex-start`; and sticky moves off the rail onto a new
+`.side-inner`.
+
+That third change is why the first two work. **A single element cannot both
+stretch and stick** — the two want different heights, and `position: sticky` was
+silently winning. Switching `align-items` alone would have changed nothing
+visible, which is the sort of fix that gets called "not working" when it was
+never reaching the element it targeted.
+
+The rail is flush now rather than a floating rounded card, so the header and the
+rail read as one continuous L. `main` already carries 2rem of padding, so the
+shell needs no gap to hold the content off the dark edge.
+
+**Measured:** 875 tests, ruff clean.
+
 ---
 
 ## 2026-08-24
