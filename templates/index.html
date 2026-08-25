@@ -19,7 +19,10 @@
         </div>
         <label class="check">
             <input type="checkbox" name="generate_full" value="true">
-            Also build <code>llms-full.txt</code>
+            {# One element, not a bare text node beside a <code>. In a grid
+               container each becomes its own anonymous item, so the label broke
+               across two cells and the filename wrapped onto its own line. #}
+            <span>Also build <code>llms-full.txt</code></span>
             <span class="hint">
                 The whole corpus in one file, for agents that want to read rather
                 than navigate. It costs summarising time and about a megabyte, so
