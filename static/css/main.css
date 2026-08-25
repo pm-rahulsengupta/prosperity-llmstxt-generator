@@ -715,7 +715,21 @@ button.destructive {
 .side a.off:hover { background: transparent; color: var(--pm-on-dark-muted); cursor: help; }
 .side a.off:hover .ico { color: #6b7479; }
 
-.shell > main { flex: 1 1 auto; min-width: 0; }
+/* The global rule caps `main` at 1180px and centres it. That was right when a
+   page was a centred document; with a 224px rail beside it, on a 1920 screen it
+   left 258px of dead ground on each side -- measured, not estimated. Inside the
+   shell the cap is 1560px, so a wide monitor is actually used, while an
+   ultrawide still stops short of a full-bleed table nobody can scan.
+
+   Pages outside the shell -- sign-in, sign-up -- keep the narrow measure. */
+.shell > main { flex: 1 1 auto; min-width: 0; max-width: 1560px; }
+
+/* Prose keeps a readable measure even though its container no longer does.
+   Widening main without this trades a whitespace complaint for a worse one:
+   the descriptive paragraph under each panel heading would set ~185-character
+   lines. Scoped to a direct child of a panel, which is descriptive prose by
+   construction -- `.muted` alone would also catch table cells. */
+.panel > p { max-width: 75ch; }
 
 /* 960px, written in px like the other breakpoint. It was `60rem`, which is the
    same distance only while the root stays at 16px -- the mixed-unit trap the
