@@ -16,6 +16,129 @@ not happened yet when the code was committed.
 
 ---
 
+## 2026-08-26
+
+### Client share links, an export list, and PDF export
+
+A client can now be sent a private link to one section of their audit, or a PDF
+of it. This is the **first surface in the tool that returns client data without a
+session**, so most of the work is the reasons it is safe to.
+
+**The constraint that decided the architecture:** there is no ownership model.
+No `owner` or `user_id` column exists on any client-scoped table — `require_user`
+is the entire authorisation layer, and every signed-in staff member sees every
+client. A client is not staff, so the token has to *be* the authority. Neither
+the domain nor the section appears in the URL; both come off the row, which makes
+"the handler ignores what the request claims" a property of the shape rather than
+something a reader has to verify.
+
+**A verified leak decided the rendering.** `site_state.derive` writes
+`f"marked done by {marks[key]}"` into `ComponentStatus.detail`, where the value
+is `user.email`, and `partials/component.html` renders `detail` unconditionally.
+Reusing the staff partial for a client — even behind guards — would have put a
+Prosperity Media address in a client's PDF. So the boundary is a set of dataclass
+fields (`app/core/client_report.py`), not a set of `{% if %}`: a guard is one
+edit from being deleted and fails silently as valid HTML; a field that does not
+exist cannot leak.
+
+One predicate closes three leaks at once — `evidence` is carried only where
+`probe_decided`. That covers the operator email (a mark is never probe-decided),
+a MANUAL check whose `detail` is the *verify command* rather than evidence, and
+`derive`'s internal fallback strings.
+
+#### Decisions worth keeping
+
+- **DB-backed opaque token, not `itsdangerous`.** A signed token cannot be
+  revoked without a denylist table — so you pay for the table anyway and lose the
+  listing, `created_by`, view counts and the delete cascade.
+- **SHA-256, not argon2**, though argon2 is already here. Argon2 is salted, so it
+  cannot be looked up by index: one page view would become O(live links) × 50ms
+  of KDF. Its cost parameter defends low-entropy human secrets, and there is
+  nothing to brute-force in 256 bits. The hash defends against *disclosure* — a
+  dump, a replica, a `SELECT *` in Slack.
+- **`ShareScope` strips the Cookie header** rather than clearing the session. The
+  obvious `request.session.clear()` is a bug: Starlette emits a delete-cookie
+  when a session was non-empty in and empty out, so a staff member checking their
+  own link would be signed out.
+- **One 404 for every failure** — unknown, expired, revoked, deleted, never
+  probed. Not 410: "Gone" confirms it was real.
+- **`Disallow: /`, never `/share/`** — a disallow line publishes the surface it
+  names.
+- **The throttle buys no guessing resistance and says so.** It bounds render CPU.
+  Keyed on the token, never the IP: `forwarded_allow_ips="*"` makes
+  `X-Forwarded-For` client-controlled, so an IP limiter is evadable *and*
+  weaponisable to lock a client out.
+- **No IP, User-Agent or Referer recorded.** Personal information about someone
+  with no relationship to us, and wrong anyway — mail scanners fetch every URL in
+  an email, so the log would read "the client opened it" when it was a datacentre
+  in Virginia.
+
+#### Four artifacts were being generated and thrown away
+
+Reported by looking for `agents.md` and not finding it. `build_bundle` gated
+`agents.md`, `ai-catalog.json`, `robots.txt` and `_headers` on the operator's
+chosen *goal* — so each was generated, stored, and dropped from the bundle for
+six of the seven goals. The rule that fixes it had been written that morning on
+`llms-full.txt`, with the reasoning spelled out — *a file we produced and hid is
+worse than one we never made* — and applied to exactly one file. It now applies
+to all of them.
+
+One correction fell out of it: `_headers` advertised the catalog on
+`bool(ai_catalog) and "ai-catalog.json" in wanted`, so a run that built a catalog
+whose goal did not name it would have emitted headers announcing a file the
+bundle withheld — the exact contradiction CAT-001 and HDR-001 exist to catch.
+
+#### The export list, and guides
+
+Every generated file in one table with its size, where to serve it, a download
+link, and a tick. **The ticks are derived, not kept**: they read the same
+`SiteStatus` the family tabs read, so a ticked row is one where the probe fetched
+that URL and the site answered.
+
+A test caught a bug that would have made every row wrong: I matched the published
+set on `ComponentStatus.artifact_name`, and `derive` only sets that on a READY
+component — the LIVE branch never does, because a file already published is not
+one we are handing over. The set would have been permanently empty and every row
+would have read "not published yet".
+
+Step-by-step guides sit in a disclosure under each finding, assembled from the
+artifact's path, the client's own URL, and **`bundle.tasks` — generated on every
+run since it was written and rendered by no page at all**, the third piece of
+built-but-unreachable work this tool has turned up. It is where the platform
+reasoning lives: a Shopify client is told their store cannot serve response
+headers, a WordPress one to use `Header add Link` rather than a plugin.
+
+#### PDF
+
+`page.pdf()` on the Chromium already in the image. In the web process, because
+the worker is `concurrency=1` across both queues and there is nowhere to put the
+bytes. `page.goto()` over loopback rather than `set_content()`, which leaves an
+opaque origin so fonts fail CORS and the PDF renders in a fallback face **with no
+error anywhere**.
+
+Three defects the tests caught, two of which a fake render never could:
+`page.pdf()` takes no `timeout=` in Playwright 1.62; `sync_playwright` cannot
+start its driver inside pytest-asyncio's loop, so a module-level browser check
+skipped the only test that exercises Chromium; and fixing *that* by setting
+`WindowsProactorEventLoopPolicy` left it set — process-global, so thirteen
+unrelated tests failed and the suite went from 30 seconds to 3 minutes.
+
+**Measured:** real render — 9 pages, 207KB. Checked under print-media emulation
+rather than assumed: the gunmetal cover keeps its background,
+`print-color-adjust` resolves to `exact`, pills and export ticks keep their
+colour, guides open.
+
+Two pre-existing CSS defects found by sweeping my own additions: `button:hover`
+referenced an undeclared `--pm-gunmetal-lift`, so every gunmetal button lost its
+whole background on hover; and a global `th` rule uppercased row headers, so
+filenames read `LLMS.TXT` and family names `CRAWL RULES`.
+
+**Measured:** 1017 tests, ruff clean.
+
+**Deployed:** web, 2026-08-26. `SHARE_LINKS_ENABLED=true`.
+
+---
+
 ## 2026-08-25 (later)
 
 ### llms-full.txt now passes its own rules: 12/100 -> 96/100
