@@ -18,7 +18,7 @@ from lxml import html as lxml_html
 
 from app.core.client_report import SECTION_KEYS, build_client_report
 from app.core.components import ComponentState, Family
-from app.main import _asset_version
+from app.main import ROOT, _asset_version
 from tests.test_client_report import OPERATOR, FakeView, _reports, _status, _taint
 
 # Anything a client following it would hit a sign-in page for, or should never
@@ -188,3 +188,23 @@ def test_a_single_section_has_no_contents_list(env):
     doc = lxml_html.fromstring(render(env, "crawl"))
 
     assert not doc.xpath("//nav[@aria-label='Contents']")
+
+
+def test_a_filename_is_rendered_exactly_as_it_will_be_saved(env):
+    """A global `th` rule uppercases column headings, and a `<th scope="row">`
+    inherits it -- which rendered `llms.txt` as `LLMS.TXT`, and family names as
+    "CRAWL RULES". A client copying a filename off a PDF has to get the filename.
+
+    Asserted against the stylesheet, not the markup. The markup always carries
+    the correct text; the uppercasing happened in CSS, so a test that parses the
+    HTML would pass while the page was wrong -- which is what the first version
+    of this test did.
+    """
+    css = (ROOT / "static" / "css" / "main.css").read_text(encoding="utf-8")
+
+    block = css.split(".c-files tbody th,", 1)
+    assert len(block) == 2, "the row-header override is gone"
+    rule = block[1].split("}", 1)[0]
+
+    assert "text-transform: none" in rule
+    assert ".c-table tbody th" in block[1][: len(rule) + 40], "the overview table needs it too"

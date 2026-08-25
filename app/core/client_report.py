@@ -37,6 +37,7 @@ from app.core.components import (
 __all__ = [
     "SECTION_KEYS",
     "ClientCheck",
+    "ClientFile",
     "ClientFinding",
     "ClientGroup",
     "ClientItem",
@@ -117,6 +118,7 @@ SECTION_KEYS: tuple[str, ...] = (
     "overview",
     "checklist",
     "handover",
+    "files",
     *(family.value for family in Family),
     "report",
 )
@@ -126,12 +128,13 @@ SECTION_KEYS: tuple[str, ...] = (
 #: this covers every component once. Overview plus six families would list every
 #: item twice -- once under its family and once as work -- which reads as a bug
 #: in a twenty-page document.
-REPORT_SECTIONS: tuple[str, ...] = ("overview", "checklist", "handover")
+REPORT_SECTIONS: tuple[str, ...] = ("overview", "checklist", "handover", "files")
 
 _TITLES: dict[str, str] = {
     "overview": "Where the site stands",
     "checklist": "What you can do",
     "handover": "For your developer",
+    "files": "Files to publish",
     "report": "AI search readiness review",
 }
 
@@ -203,6 +206,26 @@ class ClientGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class ClientFile:
+    """One generated file, and whether it is on the site yet.
+
+    The tick is **derived from the probe, not from anyone's memory**. Every other
+    export checklist in this trade is a list somebody has to keep in their head
+    or in a spreadsheet; this one already knows, because the same check that
+    decides a component is LIVE is what fetched the URL. A row that says
+    "published" is a row where we asked the site and it answered.
+    """
+
+    name: str
+    serve_at: str
+    size: str
+    published: bool
+    state_label: str
+    tone: str
+    note: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ClientStat:
     label: str
     value: str
@@ -218,6 +241,7 @@ class ClientSection:
     stats: tuple[ClientStat, ...] = ()
     rows: tuple[tuple[str, str, str], ...] = ()
     groups: tuple[ClientGroup, ...] = ()
+    files: tuple[ClientFile, ...] = ()
     empty_note: str = ""
 
 
@@ -406,6 +430,72 @@ def _family(view, status, family: Family, reports) -> ClientSection:
     )
 
 
+def _size(body: str) -> str:
+    """Rounded, and never "0 KB" for a file that exists.
+
+    A file the client is about to publish is worth sizing so they can tell a
+    two-line stub from a megabyte of full text before they upload it.
+    """
+    chars = len(body)
+    if chars < 1024:
+        return f"{chars} bytes"
+    if chars < 1024 * 1024:
+        return f"{chars / 1024:.0f} KB"
+    return f"{chars / (1024 * 1024):.1f} MB"
+
+
+def _files(view, status) -> ClientSection:
+    """Every file we generated, in one list, with its published state.
+
+    Built from `view.bundle.artifacts` rather than from the component registry,
+    because the bundle is what actually exists: a component may be applicable and
+    have produced nothing, and a list of files that includes files there are no
+    files for is worse than no list.
+
+    The published state comes from the component whose `artifact` matches, which
+    is the same `SiteStatus` every other section reads -- so this list cannot
+    claim something is live that a family tab says is missing.
+    """
+    # `component.artifact`, not `status.artifact_name`. `derive` sets
+    # `artifact_name` only on a READY component -- the LIVE branch never does,
+    # because a file already published is not one we are handing over. Matching on
+    # `artifact_name` would therefore have made the published set permanently
+    # empty and every row in this list read "not published yet", which is exactly
+    # the confident-and-wrong output this tool exists to avoid.
+    live_artifacts = {
+        s.component.artifact
+        for s in status.statuses
+        if s.component.artifact and s.state is ComponentState.LIVE
+    }
+    files = tuple(
+        ClientFile(
+            name=artifact.name,
+            serve_at=artifact.path or f"/{artifact.name}",
+            size=_size(artifact.body),
+            published=artifact.name in live_artifacts,
+            state_label="Published" if artifact.name in live_artifacts else "Not published yet",
+            tone="ok" if artifact.name in live_artifacts else "wait",
+            note=artifact.note,
+        )
+        for artifact in view.bundle.artifacts
+    )
+    done = sum(1 for f in files if f.published)
+    return ClientSection(
+        key="files",
+        kind="files",
+        title=_TITLES["files"],
+        blurb="Everything we generated for this site, and where each one belongs.",
+        intro=(
+            f"{done} of {len(files)} already live. Each row says where to put the file; "
+            "the tick is not a promise, it is the result of asking the site."
+            if files
+            else ""
+        ),
+        files=files,
+        empty_note="Nothing has been generated for this site yet.",
+    )
+
+
 def _section(view, status, key: str, reports) -> ClientSection:
     if key == "overview":
         return _overview(view, status)
@@ -413,6 +503,8 @@ def _section(view, status, key: str, reports) -> ClientSection:
         return _checklist(view, status, reports)
     if key == "handover":
         return _handover(view, status, reports)
+    if key == "files":
+        return _files(view, status)
     return _family(view, status, Family(key), reports)
 
 

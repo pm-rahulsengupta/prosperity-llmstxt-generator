@@ -1122,3 +1122,65 @@ pre.doc.template {
     .share-form { grid-template-columns: 1fr; }
     .share-form button { grid-column: 1; }
 }
+
+/* -- the export list --------------------------------------------------------
+   Every generated file in one table, with a tick nobody has to keep: the box is
+   filled from the probe that decides a component is live. Drawn rather than an
+   <input>, because the client page carries no forms and this has to print. */
+
+.c-files { width: 100%; border-collapse: collapse; }
+.c-files th, .c-files td {
+    text-align: left;
+    padding: 0.55rem 0.5rem 0.55rem 0;
+    border-bottom: 1px solid var(--pm-rule);
+    vertical-align: baseline;
+}
+.c-files thead th {
+    font-size: var(--pm-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--pm-ink-muted);
+    font-weight: 400;
+}
+/* A row header is content, not a column label. The global `th` rule uppercases
+   and shrinks every `th` for column headings, and a `<th scope="row">` inherits
+   it -- which rendered filenames as "LLMS.TXT" and family names as "CRAWL
+   RULES". A filename in particular has to read exactly as it will be saved. */
+.c-files tbody th,
+.c-table tbody th {
+    font-size: var(--pm-base);
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--pm-ink);
+    border-bottom: 1px solid var(--pm-rule);
+}
+.c-files .c-tick { width: 1.75rem; padding-right: 0; }
+.c-file-note td { border-bottom: 1px solid var(--pm-rule); padding-top: 0; font-size: var(--pm-sm); }
+.c-file-note td:first-child { border-bottom: none; }
+
+.c-box {
+    display: inline-block;
+    width: 1.05rem;
+    height: 1.05rem;
+    line-height: 1;
+    text-align: center;
+    border: 1.5px solid var(--pm-rule-strong);
+    border-radius: 3px;
+    font-size: var(--pm-sm);
+}
+.c-box.ticked {
+    background: var(--pm-emerald);
+    border-color: var(--pm-emerald);
+    color: var(--pm-gunmetal);
+}
+/* A row still to do is the one worth finding on a printed page. */
+.c-files tr.is-todo th[scope="row"] code { font-weight: 600; }
+
+@media print {
+    .c-files { break-inside: auto; }
+    .c-box, .c-box.ticked {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}

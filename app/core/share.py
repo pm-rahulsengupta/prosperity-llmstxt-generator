@@ -74,6 +74,7 @@ class ShareSection(StrEnum):
     OVERVIEW = "overview"
     CHECKLIST = "checklist"
     HANDOVER = "handover"
+    FILES = "files"
     CRAWL = "crawl"
     CONTENT = "content"
     AGENTS = "agents"

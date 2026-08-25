@@ -1,0 +1,40 @@
+{# The export list.
+
+   A checklist whose ticks nobody has to keep: `published` comes from the same
+   probe that decides a component is live, so a ticked row is a row where we
+   asked the site and it answered. The box is drawn rather than an <input>,
+   because this page carries no forms and the PDF has to print it. #}
+{% if section.files %}
+<table class="c-files">
+    <thead>
+        <tr>
+            <th scope="col"><span class="visually-hidden">Published</span></th>
+            <th scope="col">File</th>
+            <th scope="col">Serve it at</th>
+            <th scope="col">Size</th>
+            {% if downloads %}<th scope="col"><span class="visually-hidden">Download</span></th>{% endif %}
+        </tr>
+    </thead>
+    <tbody>
+    {% for file in section.files %}
+        <tr class="{{ 'is-live' if file.published else 'is-todo' }}">
+            <td class="c-tick">
+                <span class="c-box {{ 'ticked' if file.published else '' }}"
+                      role="img" aria-label="{{ file.state_label }}">{% if file.published %}&check;{% endif %}</span>
+            </td>
+            <th scope="row"><code>{{ file.name }}</code></th>
+            <td><code>{{ file.serve_at }}</code></td>
+            <td class="muted">{{ file.size }}</td>
+            {% if downloads %}
+            <td><a class="c-get" href="{{ downloads }}/{{ file.name|urlencode }}">Download</a></td>
+            {% endif %}
+        </tr>
+        {% if file.note %}
+        <tr class="c-file-note"><td></td><td colspan="4" class="muted">{{ file.note }}</td></tr>
+        {% endif %}
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="c-empty">{{ section.empty_note }}</p>
+{% endif %}

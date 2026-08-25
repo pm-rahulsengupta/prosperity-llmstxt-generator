@@ -67,6 +67,33 @@ class FakeReadiness:
     score = 53
 
 
+class FakeBundle:
+    """A real `Bundle` carries `Artifact` objects, so the fixture does too.
+
+    Using the actual dataclass rather than a stand-in means the files section is
+    tested against the shape it will meet -- including `path`, which is what
+    decides where a client is told to put the file.
+    """
+
+    def __init__(self):
+        from app.core.bundle import Artifact
+
+        self.artifacts = [
+            Artifact("llms.txt", "/llms.txt", "# Example\n" * 40, "text/markdown"),
+            Artifact("robots.txt", "/robots.txt", "User-agent: *\n", "text/plain"),
+            Artifact(
+                "agents.md",
+                "/agents.md",
+                "# Agents\n" * 200,
+                "text/markdown",
+                note="Merge this with anything already there.",
+            ),
+        ]
+
+    def get(self, name):
+        return next((a for a in self.artifacts if a.name == name), None)
+
+
 class FakeView:
     """Only the attributes `build_client_report` actually reads."""
 
@@ -74,6 +101,7 @@ class FakeView:
         self.domain = domain
         self.site_url = f"https://{domain}"
         self.readiness = FakeReadiness()
+        self.bundle = FakeBundle()
         self.checked_ago = "2 days"
         self.is_stale = True
 
@@ -493,3 +521,83 @@ def test_an_item_not_in_place_does_say_what_happens_next():
     )
 
     assert item.what_to_do
+
+
+# -- the export list -----------------------------------------------------------
+
+
+def test_the_export_list_names_every_generated_file():
+    """Built from the bundle, not the component registry.
+
+    A component can be applicable and have produced nothing, and a list of files
+    that includes files there are no files for is worse than no list at all.
+    """
+    section = build_client_report(FakeView(), _status(), "files", reports={}).sections[0]
+
+    assert [f.name for f in section.files] == ["llms.txt", "robots.txt", "agents.md"]
+    assert all(f.serve_at.startswith("/") for f in section.files)
+
+
+def test_the_tick_comes_from_the_probe_and_not_from_memory():
+    """The point of the list: nobody has to keep the ticks.
+
+    A ticked row is one where the same check that decides a component is LIVE
+    fetched the URL and it answered.
+    """
+    status = _status()
+    for s in status.statuses:
+        if s.component.artifact == "llms.txt":
+            s.state = ComponentState.LIVE
+        elif s.component.artifact:
+            s.state = ComponentState.READY
+
+    files = {
+        f.name: f
+        for f in build_client_report(FakeView(), status, "files", reports={}).sections[0].files
+    }
+
+    assert files["llms.txt"].published is True
+    assert files["robots.txt"].published is False
+    assert files["robots.txt"].state_label == "Not published yet"
+
+
+def test_the_export_list_cannot_disagree_with_the_family_tabs():
+    """Both read the same `SiteStatus`, so a file cannot be live here and missing there."""
+    status = _status()
+    report = build_client_report(FakeView(), status, "files", reports={}).sections[0]
+
+    live_names = {
+        s.component.artifact
+        for s in status.statuses
+        if s.component.artifact and s.state is ComponentState.LIVE
+    }
+
+    assert {f.name for f in report.files if f.published} == live_names & {
+        f.name for f in report.files
+    }
+
+
+def test_a_file_is_sized_so_a_client_can_tell_a_stub_from_a_corpus():
+    files = {
+        f.name: f
+        for f in build_client_report(FakeView(), _status(), "files", reports={}).sections[0].files
+    }
+
+    assert files["robots.txt"].size.endswith("bytes")
+    assert files["agents.md"].size.endswith("KB")
+
+
+def test_the_export_list_is_part_of_the_combined_report():
+    """A client sent one link should get the files without being sent a second."""
+    assert "files" in REPORT_SECTIONS
+    assert "files" in [s.key for s in _built().sections]
+
+
+def test_an_export_list_with_nothing_in_it_says_so():
+    view = FakeView()
+    view.bundle.artifacts = []
+
+    section = build_client_report(view, _status(), "files", reports={}).sections[0]
+
+    assert section.files == ()
+    assert section.empty_note
