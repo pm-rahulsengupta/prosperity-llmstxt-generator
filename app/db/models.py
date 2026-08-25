@@ -95,6 +95,11 @@ class Run(Base):
     # The crawl plan, as reviewed and possibly edited by a human. Stored whole so
     # the exact plan a run used is recoverable months later.
     plan: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Its own column, not a key in `plan`. It lived there first, and three code
+    # paths do `run.plan = plan.to_dict()` against a `CrawlPlan` that has no such
+    # field -- so approving the crawl plan silently dropped it and the run built
+    # no llms-full.txt. A run option is not part of the crawl plan.
+    generate_full: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     plan_source: Mapped[str] = mapped_column(
         String(16), default="heuristic"
     )  # llm | heuristic | manual

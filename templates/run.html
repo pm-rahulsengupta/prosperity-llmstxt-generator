@@ -28,7 +28,13 @@
 {% if not status.is_terminal %}
 <div class="panel" id="progress" aria-live="polite" aria-atomic="false"
      hx-get="/runs/{{ run.id }}/progress"
-     hx-trigger="load, every 3s"
+     {# Slow right down while a human is the thing being waited on. Nothing
+        moves during `awaiting_review` until someone approves the plan, so 3s
+        polling is a request every three seconds for as long as the tab is open
+        -- roughly 28,000 of them overnight, all returning the same panel. It is
+        not dropped altogether because a teammate may approve in another tab,
+        and this page should notice eventually. #}
+     hx-trigger="load, every {{ '30s' if run.status == 'awaiting_review' else '3s' }}"
      hx-swap="innerHTML">
     {% include "partials/progress.html" with context %}
 </div>

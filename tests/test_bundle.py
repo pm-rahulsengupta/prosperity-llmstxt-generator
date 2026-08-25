@@ -298,4 +298,35 @@ def test_the_pipeline_reads_the_switch_from_the_approved_plan():
     source = inspect.getsource(tasks.generate_task)
 
     assert "generate_full=wants_full" in source
-    assert 'run.plan or {}).get("generate_full"' in source, "read while the run is attached"
+    assert "run.generate_full" in source, "read from the column, while the run is attached"
+
+
+def test_the_full_text_switch_survives_the_crawl_plan_round_trip():
+    """The bug that shipped: ticking the box produced a run with no llms-full.txt.
+
+    It was stored as a key in `run.plan`, and three code paths do
+    `run.plan = plan.to_dict()` against a `CrawlPlan` that has no such field. So
+    `from_dict` dropped it, `to_dict` never wrote it back, and approving the plan
+    -- which every crawl does -- silently cleared the operator's choice.
+
+    Asserted against `CrawlPlan` rather than a live run because that round-trip
+    is the whole mechanism: if the flag is ever moved back into the plan dict,
+    this fails.
+    """
+    from app.llm.prompts.plan import CrawlPlan
+
+    survived = CrawlPlan.from_dict({**CrawlPlan().to_dict(), "generate_full": True}).to_dict()
+
+    assert "generate_full" not in survived, (
+        "the crawl plan still drops this key, so it must live on the run instead"
+    )
+
+
+def test_the_run_owns_the_full_text_switch():
+    """A column, not a blob key. Nothing else rewrites a column."""
+    from app.db.models import Run
+
+    column = Run.__table__.columns["generate_full"]
+
+    assert column.nullable is False
+    assert column.default.arg is False, "a run that did not ask must not build one"

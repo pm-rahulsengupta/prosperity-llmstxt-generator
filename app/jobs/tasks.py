@@ -309,7 +309,7 @@ async def generate_task(run_id: str) -> None:
         plan = CrawlPlan.from_dict(run.plan or {})
         # Read here, with the run attached, rather than at the assemble stage
         # where it would be a detached instance three session scopes later.
-        wants_full = bool((run.plan or {}).get("generate_full", False))
+        wants_full = bool(run.generate_full)
         cap = run.max_pages or settings.crawl_default_max_pages
         site_brief = await repo.load_brief(session, domain)
         await repo.set_status(session, run, RunStatus.CRAWLING)

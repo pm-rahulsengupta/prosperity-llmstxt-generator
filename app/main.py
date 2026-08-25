@@ -459,7 +459,7 @@ async def create_run(
     # Stored on the plan rather than in a column: it is a decision about this
     # run, it travels with the plan the operator approves, and it needs no
     # migration. `generate_task` reads it back the same way.
-    run.plan = {**(run.plan or {}), "generate_full": bool(generate_full)}
+    run.generate_full = bool(generate_full)
     run_id = str(run.id)
 
     existing = await repo.load_site_config(session, run.domain)
