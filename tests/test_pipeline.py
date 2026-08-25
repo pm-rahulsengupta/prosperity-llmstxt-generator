@@ -140,8 +140,12 @@ def test_rebuild_also_removes_excluded_pages_from_llms_full(sf_csv: str) -> None
 
 def test_llms_full_respects_its_character_budget(sf_csv: str) -> None:
     entries = parse_screaming_frog_csv(sf_csv)
-    for entry in entries:
-        entry.markdown = "x" * 5_000
+    # Distinct per page, not `"x" * 5_000`. Byte-identical bodies are boilerplate
+    # by any measure, so the generator now hoists them into the shared section and
+    # every page block comes out empty -- which is correct behaviour, and leaves
+    # this test with nothing to truncate. Real crawled pages differ.
+    for number, entry in enumerate(entries):
+        entry.markdown = f"Page {number}. " + (f"unique body {number} " * 400)
 
     result, _ = generate(
         SITE,

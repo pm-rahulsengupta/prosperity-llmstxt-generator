@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from app.core.full_text import hoist_repeated, normalise_body, strip_emphasis
 from app.core.models import GenerationResult, PageEntry, Section
 from app.core.ranking import (
     PATTERN_CATALOG,
@@ -30,10 +31,22 @@ from app.core.ranking import (
     template_order,
     url_to_section,
 )
+from app.core.rules.full_rules import (
+    CHARS_PER_TOKEN,
+    DEFAULT_MAX_TOKENS,
+    REPEAT_THRESHOLD,
+)
 from app.core.text import domain_of
 
 # Default ceiling for llms-full.txt. Roughly 1M characters ~ 250k tokens.
-DEFAULT_FULL_MAX_CHARS = 1_000_000
+# Derived from the budget FULL-009 enforces rather than written out, because the
+# two were 1,000,000 and 800,000 -- so the generator's own ceiling permitted a
+# file that failed the generator's own rule, and did: 249,977 tokens against a
+# 200,000 budget on the first site checked.
+DEFAULT_FULL_MAX_CHARS = DEFAULT_MAX_TOKENS * CHARS_PER_TOKEN
+# Headroom for the trailing note, which is appended after the budget is spent.
+# Without it, stating that pages were omitted is what pushes the file over.
+TRUNCATION_NOTE_RESERVE = 300
 
 # A section holding fewer pages than this is not a section, it is a link with a
 # heading on top.
@@ -203,25 +216,69 @@ def render_llms_full(
     if not with_content:
         return ""
 
-    lines = [f"# {site_name}\n"]
-    used = len(lines[0])
-    omitted = 0
+    ordered = sort_by_importance(with_content)
+    # Normalise before measuring. Demoting headings and stripping whitespace
+    # changes the length, so budgeting the raw markdown would spend the budget on
+    # characters that never reach the file.
+    bodies = [normalise_body(page.markdown) for page in ordered]
+    shared, bodies = hoist_repeated(bodies)
 
-    for page in sort_by_importance(with_content):
-        block = f"\n---\n\n## {page.display_title}\n\nSource: {page.url}\n\n{page.markdown}\n"
-        if used + len(block) > max_chars:
+    parts = [f"# {site_name}\n"]
+    if shared:
+        parts.append(_shared_section(shared))
+    used = sum(len(part) for part in parts)
+    budget = max_chars - TRUNCATION_NOTE_RESERVE
+    omitted = 0
+    hollow = 0
+
+    for page, body in zip(ordered, bodies, strict=True):
+        if not body.strip():
+            # Everything this page had was boilerplate now hoisted above. A
+            # boundary and a Source: line with nothing under them is a page
+            # block that costs tokens and answers nothing.
+            hollow += 1
+            continue
+        block = (
+            f"\n---\n\n## {strip_emphasis(page.display_title)}\n\nSource: {page.url}\n\n{body}\n"
+        )
+        if used + len(block) > budget:
             omitted += 1
             continue
-        lines.append(block)
+        parts.append(block)
         used += len(block)
 
+    notes = []
     if omitted:
-        lines.append(
-            f"\n---\n\n*{omitted} lower-priority page(s) omitted to keep this file under "
-            f"{max_chars:,} characters.*\n"
+        notes.append(
+            f"{omitted} lower-priority page(s) omitted to keep this file under "
+            f"{max_chars:,} characters."
         )
+    if hollow:
+        notes.append(
+            f"{hollow} page(s) left out: their whole content is the shared material above."
+        )
+    if notes:
+        parts.append("\n---\n\n*" + " ".join(notes) + "*\n")
 
-    return "".join(lines)
+    return "".join(parts)
+
+
+def _shared_section(blocks: list[str]) -> str:
+    """Boilerplate that appeared on more pages than it was worth repeating.
+
+    H3, not H2. In this document H2 means "a page starts here, and a Source: URL
+    follows", and FULL-002 checks that H2s, Source: lines and page blocks come to
+    the same number. A shared section has no source -- it came from everywhere --
+    so giving it an H2 would break the count that makes page boundaries findable.
+    """
+    body = "\n\n".join(blocks)
+    return (
+        "\n### Repeated across this site\n\n"
+        "*The following appeared on more than "
+        f"{REPEAT_THRESHOLD} pages. It is included once here rather than in every "
+        "page block below.*\n\n"
+        f"{body}\n"
+    )
 
 
 def render_combined(llmstxt: str, llms_full: str) -> str:
