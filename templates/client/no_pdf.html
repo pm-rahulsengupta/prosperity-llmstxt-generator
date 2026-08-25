@@ -1,0 +1,29 @@
+{# Every PDF failure lands here: no browser, a render timeout, another export
+   holding the slot, or the feature switched off.
+
+   The advice is only honest because the print stylesheet came first. The page
+   the reader just came from is laid out for paper, so their own browser makes
+   the same document -- which is why this is a 503 with a way forward rather
+   than a 500 with a traceback. #}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>PDF unavailable</title>
+    <link rel="stylesheet" href="/static/css/main.css?v={{ asset_version('css/main.css') }}">
+</head>
+<body class="client-doc">
+<div class="c-doc">
+    <div class="c-gone">
+        <h1>We could not build the PDF</h1>
+        <p>{{ message }}</p>
+        <p>
+            Go back and use your browser&rsquo;s <strong>Print &rarr; Save as PDF</strong>.
+            The page is laid out for paper, so you will get the same document.
+        </p>
+    </div>
+</div>
+</body>
+</html>

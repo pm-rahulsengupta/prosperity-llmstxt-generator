@@ -63,7 +63,7 @@ from app.core.bundle import (
     build_bundle,
     verify_declared,
 )
-from app.core.client_report import SECTION_KEYS, build_client_report
+from app.core.client_report import SECTION_KEYS, build_client_report, section_title
 from app.core.components import (
     FAMILY_BLURBS,
     FAMILY_LABELS,
@@ -142,6 +142,19 @@ async def lifespan(_: FastAPI):
         logger.warning("No OPENAI_API_KEY: all four LLM stages will use the heuristic path.")
     if not settings.firecrawl_enabled:
         logger.info("No FIRECRAWL_API_KEY: the fetch ladder ends at StealthyFetcher.")
+    if settings.pdf_enabled:
+        # Asked once, at boot, so a missing browser is a log line rather than a
+        # 500 on a client's first download. The base image ships browsers for
+        # Playwright 1.60 and the pin is 1.62; `scrapling install` should have
+        # reconciled that at build time, and this is what checks.
+        from app.pdf import probe_chromium
+
+        await probe_chromium()
+    else:
+        import app.pdf as pdf_module
+
+        pdf_module.PDF_READY = False
+        logger.info("PDF_ENABLED is off: the client page still prints.")
 
     from app.jobs.queue import app as queue_app
 
@@ -1685,7 +1698,15 @@ async def share_page(
     return templates.TemplateResponse(
         request,
         "client/report.html",
-        {"report": report, "downloads": f"/share/{token}/download"},
+        {
+            "report": report,
+            "downloads": f"/share/{token}/download",
+            "pdf": f"/share/{token}/pdf" if get_settings().pdf_enabled else "",
+            # Set by the PDF renderer when it fetches this page. Chromium's print
+            # path will not reliably force a `<details>` open from CSS, so the
+            # attribute is set here instead.
+            "expand": request.query_params.get("print") == "1",
+        },
     )
 
 
@@ -1856,7 +1877,142 @@ async def client_preview(
         client_name=(config.label if config and config.label else domain),
     )
     return templates.TemplateResponse(
-        request, "client/report.html", {"report": report, "downloads": ""}
+        request,
+        "client/report.html",
+        {
+            "report": report,
+            "downloads": "",
+            "pdf": f"/sites/{domain}/client/{section}.pdf" if get_settings().pdf_enabled else "",
+            "expand": False,
+        },
+    )
+
+
+def _pdf_name(domain: str, section: str, when) -> str:
+    """ASCII only, so no RFC 5987 encoding is needed in the header."""
+    safe = "".join(c if c.isalnum() or c in "-." else "-" for c in f"{domain}-{section}")
+    return f"{safe}-{when:%Y-%m-%d}.pdf"
+
+
+def _pdf_unavailable(request: Request, message: str) -> Response:
+    """Never a 500, and never a traceback.
+
+    Every failure here degrades to the same advice, which is only honest because
+    the print stylesheet came first: the page a client is looking at is laid out
+    for paper, so their browser can produce the same document.
+    """
+    return templates.TemplateResponse(
+        request,
+        "client/no_pdf.html",
+        {"message": message},
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        headers={"Retry-After": "30"},
+    )
+
+
+async def _serve_pdf(request: Request, path: str, *, domain: str, section: str, client_name: str):
+    """Render `path` and return the bytes.
+
+    `path` is always a `/share/...` URL, including for the staff button, so the
+    PDF is by construction a render of the page the client sees. There is no
+    second code path that could drift from it -- the same reasoning `_assemble`
+    gives for being one function shared by the page and the download.
+    """
+    from app import pdf as pdf_module
+
+    if not get_settings().pdf_enabled or pdf_module.PDF_READY is False:
+        return _pdf_unavailable(request, "PDF export is switched off on this instance.")
+
+    when = date.today()
+    try:
+        body = await pdf_module.render_pdf(
+            path,
+            doc_title=f"{section_title(section)} - {client_name}",
+            footer_left=f"Prepared by Prosperity Media for {client_name}",
+        )
+    except pdf_module.PdfBusy:
+        return _pdf_unavailable(request, "Another export is running. Try again in a moment.")
+    except (pdf_module.PdfUnavailable, pdf_module.PdfFailed) as exc:
+        logger.warning("pdf render failed for %s/%s: %s", domain, section, exc)
+        return _pdf_unavailable(request, "We could not build the PDF just now.")
+
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_pdf_name(domain, section, when)}"',
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@app.get("/share/{token}/pdf", include_in_schema=False)
+async def share_pdf(
+    request: Request,
+    token: str = PathParam(..., min_length=share.TOKEN_CHARS, max_length=share.TOKEN_CHARS),
+    session: AsyncSession = Depends(get_session),
+):
+    """The client's own download button."""
+    if not _SHARE_TOKEN.fullmatch(token):
+        return _share_gone(request)
+
+    refusal, resolved = await _share_render(request, session, token)
+    if refusal is not None:
+        return refusal
+
+    link, report = resolved
+    return await _serve_pdf(
+        request,
+        f"/share/{token}?print=1",
+        domain=link.domain,
+        section=link.section,
+        client_name=report.client_name,
+    )
+
+
+@app.get("/sites/{domain}/client/{section}.pdf")
+async def client_preview_pdf(
+    request: Request,
+    domain: str,
+    section: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Staff export, without sending anyone a link.
+
+    Mints itself a short-lived token so the render still goes through `/share/`.
+    Two minutes is enough for one render and useless to anyone who finds it in a
+    log afterwards.
+    """
+    if section not in SECTION_KEYS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown section.")
+    if not get_settings().share_links_enabled:
+        return _pdf_unavailable(
+            request, "PDF export needs share links turned on: the render fetches the client page."
+        )
+
+    site_status, view = await _site_status(session, domain)
+    if site_status is None or view is None:
+        return _unchecked(request, user, domain, "Client view")
+
+    config = await repo.load_site_config(session, domain)
+    name = config.label if config and config.label else domain
+    _link, token = await repo.create_share_link(
+        session,
+        domain=domain,
+        section=section,
+        expires_at=datetime.now(UTC) + timedelta(minutes=2),
+        created_by=user.email,
+        label="internal PDF export",
+    )
+    await session.commit()
+
+    return await _serve_pdf(
+        request,
+        f"/share/{token}?print=1",
+        domain=domain,
+        section=section,
+        client_name=name,
     )
 
 

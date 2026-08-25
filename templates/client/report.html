@@ -2,6 +2,7 @@
 {# `expand` opens every guide, for the PDF where a collapsed
    disclosure prints as a heading with nothing under it. #}
 {% set expand = expand | default(false) %}
+{% set pdf = pdf | default('') %}
 {% block content %}
 <article class="c-doc">
     <header class="c-cover">
@@ -34,6 +35,12 @@
     {% for section in report.sections %}
         {% include "client/partials/section.html" %}
     {% endfor %}
+
+    {% if pdf %}
+    <p class="c-download">
+        <a class="button" href="{{ pdf }}">Download this as a PDF</a>
+    </p>
+    {% endif %}
 
     <footer class="c-foot">
         <p>Prepared by Prosperity Media for {{ report.client_name }} &middot; {{ report.site_url }}</p>

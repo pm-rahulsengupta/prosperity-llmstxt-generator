@@ -159,7 +159,10 @@ async def _render(path: str, doc_title: str, footer_left: str) -> bytes:
                 display_header_footer=True,
                 header_template=_header(doc_title),
                 footer_template=_footer(footer_left),
-                timeout=30_000,
+                # No `timeout=` here: `Page.pdf()` does not take one in Playwright
+                # 1.62, and passing it raises a TypeError at the moment of
+                # generating the file -- which a fake `_render` could never catch.
+                # `RENDER_TIMEOUT` already bounds the whole operation.
             )
         finally:
             # Launched and closed per request on purpose. A long-lived browser in

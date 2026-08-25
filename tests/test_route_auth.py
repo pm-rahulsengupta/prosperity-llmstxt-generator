@@ -26,10 +26,11 @@ PUBLIC: dict[str, str] = {
     "/logout": "clears a session",
     "/": "redirects; renders nothing client-specific",
     "/robots.txt": "static, names nothing",
-    # The two that return client data without a session. The token is the
+    # The three that return client data without a session. The token is the
     # authorisation, and neither the domain nor the section comes from the URL.
     "/share/{token}": "share link; the token is the authorisation",
     "/share/{token}/download/{artifact}": "share link; scoped to the token's domain",
+    "/share/{token}/pdf": "share link; the same page, printed",
 }
 
 GATES = {"require_user", "require_admin", "require_admin_or_404"}

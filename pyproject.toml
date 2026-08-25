@@ -31,6 +31,10 @@ dependencies = [
     # recommendation and argon2-cffi picks sane parameters without being told.
     "argon2-cffi>=23.1.0",
     "httpx>=0.28.1",
+    # Transitive through scrapling[fetchers], but `app/pdf.py` imports it
+    # directly for `page.pdf()` -- so it is named here, or a scrapling release
+    # that drops or repins it silently removes PDF export.
+    "playwright>=1.62",
 ]
 
 [project.optional-dependencies]

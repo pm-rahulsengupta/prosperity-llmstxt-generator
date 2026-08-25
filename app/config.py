@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     # it catches a UI bug that mints a link on every page load.
     share_links_per_domain: int = Field(default=20, ge=1, le=200)
 
+    # PDF export. On by default because Chromium is already in the image, but a
+    # real switch: it is the only thing in the web process that launches a
+    # browser, so if that container is ever memory-tight this is what to turn off.
+    # Doing so loses one click, not the document -- the client page is laid out
+    # for print, so Print -> Save as PDF produces the same thing.
+    pdf_enabled: bool = True
+
     firecrawl_base_url: str = "https://api.firecrawl.dev/v2"
 
     # --- Google Search Console (the metrics source that repairs page ranking) --
