@@ -297,7 +297,20 @@ def _render_context(**extra) -> dict:
         "links": [],
         "now": __import__("datetime").datetime.now(__import__("datetime").UTC),
         "exists": True,
-        "going": None,
+        # A real one: the Danger zone calls `going.summary()`, so `None` renders
+        # only while no test happens to be an admin.
+        "going": __import__("app.db.repo", fromlist=["ClientDeletion"]).ClientDeletion(
+            domain="x.example",
+            runs=0,
+            pages=0,
+            marks=0,
+            metric_rows=0,
+            snapshots=0,
+            edits=0,
+            spend_rows=0,
+            share_links=0,
+            config=0,
+        ),
         **extra,
     }
     return context
@@ -929,3 +942,28 @@ def test_the_render_fixture_supplies_every_key_the_real_context_builds():
     supplied = set(_render_context())
 
     assert not (returned - supplied), f"the fixture is missing: {sorted(returned - supplied)}"
+
+
+def test_shared_links_are_managed_by_any_signed_in_user_not_only_an_admin():
+    """Revoking is the safe direction.
+
+    The panel first landed inside the Danger zone's `{% if user.is_admin %}`
+    block, because the string it was inserted before happened to sit there. That
+    hid it from everyone who is not an admin -- while `POST /sites/{d}/share`
+    and the revoke route both take `require_user` and would have accepted them.
+    A control the route allows and the page hides is how a leaked link stays live
+    over a weekend.
+    """
+    from types import SimpleNamespace
+
+    ordinary = SimpleNamespace(email="staff@x.com", name="Staff", is_admin=False)
+    html = _render("client_settings.html", user=ordinary, share_enabled=True, links=[])
+
+    assert "Shared links" in html
+    assert "Danger zone" not in html, "the admin block above it must still be admin-only"
+
+
+def test_the_shared_links_panel_is_absent_when_the_feature_is_off():
+    html = _render("client_settings.html", share_enabled=False, links=[])
+
+    assert "Shared links" not in html
