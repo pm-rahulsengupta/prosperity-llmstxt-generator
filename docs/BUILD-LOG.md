@@ -99,6 +99,24 @@ The rail is flush now rather than a floating rounded card, so the header and the
 rail read as one continuous L. `main` already carries 2rem of padding, so the
 shell needs no gap to hold the content off the dark edge.
 
+**Measured:** 875 tests, ruff clean. Rail 0→224px, full body height, verified
+in the browser at 1920×1080.
+
+### And the width
+
+The rail fix left the other half of the same complaint. `main` caps at 1180px
+and centres — right when a page was a centred document, wrong beside a 224px
+rail. **Measured at 1920: 258px of dead ground on each side.**
+
+Inside the shell the cap is now 1560px. Pages outside the shell — sign-in,
+sign-up — keep the narrow measure.
+
+Widening alone would have traded one whitespace complaint for a worse one: the
+paragraph under each panel heading already runs ~140 characters at 1180px and
+would reach ~185 at 1560. `.panel > p` takes a 75ch measure — scoped to a direct
+child of a panel because that is descriptive prose by construction, where
+capping `.muted` would also have caught table cells doing a different job.
+
 **Measured:** 875 tests, ruff clean.
 
 ---
