@@ -23,7 +23,16 @@ from tests.test_client_report import OPERATOR, FakeView, _reports, _status, _tai
 
 # Anything a client following it would hit a sign-in page for, or should never
 # learn exists.
-STAFF_PREFIXES = ("/sites/", "/runs/", "/agents", "/admin", "/logout", "/login", "/clients", "/imports")
+STAFF_PREFIXES = (
+    "/sites/",
+    "/runs/",
+    "/agents",
+    "/admin",
+    "/logout",
+    "/login",
+    "/clients",
+    "/imports",
+)
 
 
 @pytest.fixture(scope="module")

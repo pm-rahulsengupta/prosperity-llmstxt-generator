@@ -14,6 +14,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import mimetypes
+import re
+import time
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -24,6 +26,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import Path as PathParam
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +47,7 @@ from app.auth import (
     user_from_claims,
 )
 from app.config import get_settings
+from app.core import share
 from app.core.agents_doc import (
     Capability,
     build_agents_doc,
@@ -59,6 +63,7 @@ from app.core.bundle import (
     build_bundle,
     verify_declared,
 )
+from app.core.client_report import SECTION_KEYS, build_client_report
 from app.core.components import (
     FAMILY_BLURBS,
     FAMILY_LABELS,
@@ -97,6 +102,7 @@ from app.core.snapshot import (
     tech_to_dict,
 )
 from app.core.templates_lib import build_templates
+from app.core.throttle import TokenBucket
 from app.db import repo
 from app.db.base import get_session, session_scope
 from app.db.models import ChatMessage, DocumentRevision, RunStatus
@@ -143,6 +149,87 @@ async def lifespan(_: FastAPI):
         yield
 
 
+#: Everything a share response says about itself. Attached by `ShareScope` to
+#: every `/share/*` response including the 404s, so a template or a route cannot
+#: forget one.
+SHARE_HEADERS: dict[str, str] = {
+    # A header, not only the `<meta>` in the template: a meta tag cannot ride on
+    # the artifact downloads, which are text/markdown, and a header cannot be
+    # forgotten by a template.
+    "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet",
+    # The most important header here. **The URL is the credential**, and this page
+    # links outward -- to the client's own site, to their contact URLs. Under any
+    # weaker policy, including strict-origin-when-cross-origin, following one of
+    # those links hands the whole share URL to a third party.
+    "Referrer-Policy": "no-referrer",
+    # Railway's edge, corporate proxies and mail-security caches must not retain a
+    # client's audit under a URL that can later be revoked.
+    "Cache-Control": "no-store, private, max-age=0, must-revalidate",
+    "Pragma": "no-cache",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    # `default-src 'none'` with no `script-src` at all: the client templates carry
+    # no <script>, so scripts are refused outright rather than allowlisted.
+    # `form-action 'none'` is the structural backstop for the template split -- if
+    # a staff form ever reached a client page it would be an inert button rather
+    # than a leak.
+    "Content-Security-Policy": (
+        "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "font-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
+    ),
+}
+
+
+class ShareScope:
+    """Makes `/share/*` a different surface from the rest of the app.
+
+    **Strips the request's Cookie header** so `SessionMiddleware` builds an empty
+    session and a staff member testing a link sees exactly what their client sees,
+    rather than a page quietly rendered with their own identity in scope.
+
+    The obvious implementation -- `request.session.clear()` in the handler -- is a
+    bug, and it is the first thing anyone will write. Starlette's
+    `SessionMiddleware` emits a *delete-cookie* `Set-Cookie` when a session was
+    non-empty on the way in and empty on the way out, so clicking your own share
+    link would sign you out of the app. Stripping the header upstream means the
+    middleware never sees a session to clear, and sends no `Set-Cookie` at all.
+
+    **Registration order is load-bearing.** Starlette prepends each
+    `add_middleware`, so the last registered runs outermost. This must therefore
+    be added *after* `SessionMiddleware` to sit outside it. Added before, it would
+    run inside, the cookie would already have been parsed, and the whole class
+    would be decoration. `tests/test_share_isolation.py` pins the behaviour rather
+    than the ordering, so it fails if the two are ever swapped.
+    """
+
+    PREFIX = "/share/"
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith(self.PREFIX):
+            await self.app(scope, receive, send)
+            return
+
+        scope = dict(scope)
+        scope["headers"] = [(k, v) for k, v in scope["headers"] if k.lower() != b"cookie"]
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                message = dict(message)
+                existing = {k.lower() for k, _v in message["headers"]}
+                message["headers"] = list(message["headers"]) + [
+                    (k.encode("latin-1"), v.encode("latin-1"))
+                    for k, v in SHARE_HEADERS.items()
+                    if k.lower().encode("latin-1") not in existing
+                ]
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
 app = FastAPI(
     title="Prosperity llms.txt Generator",
     docs_url=None,
@@ -156,6 +243,9 @@ app.add_middleware(
     https_only=settings.app_url.startswith("https://"),
     same_site="lax",
 )
+# After SessionMiddleware, so it runs *outside* it and the cookie is gone before
+# the session is ever parsed. Starlette prepends, so last registered is outermost.
+app.add_middleware(ShareScope)
 # Python's mimetypes table has no woff2 on a stock Windows install, so StaticFiles
 # serves it as application/octet-stream -- which makes the browser discard the
 # `<link rel=preload as=font>` hint and fetch the file a second time.
@@ -1263,6 +1353,11 @@ async def _settings_context(session: AsyncSession, user: User, domain: str, erro
         "exists": config is not None,
         "going": await repo.preview_client_deletion(session, domain),
         "error": error,
+        "share_enabled": get_settings().share_links_enabled,
+        # Never anything derived from a token: the row's id is what the revoke
+        # form posts, and the label is the operator's own note.
+        "links": await repo.list_share_links(session, domain),
+        "now": datetime.now(UTC),
     }
 
 
@@ -1452,6 +1547,316 @@ def _import_error(request: Request, user: User, message: str):
         "import.html",
         {"user": user, "error": message, "report": None},
         status_code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+# -- client share links -------------------------------------------------------
+#
+# The only routes in this file that return client data without a session. The
+# token *is* the authorisation: there is no ownership model on any table here, so
+# `require_user` cannot be what protects a client's audit from a client. Neither
+# the domain nor the section appears in the URL -- both come off the row -- which
+# makes "the handler ignores what the request claims" a property of the shape
+# rather than something a reader has to check.
+
+#: Bounds render cost, not guessing. See `app/core/throttle.py`: at 256 bits a
+#: throttle buys no guessing resistance whatsoever, and this is here because every
+#: share view runs the whole assemble-and-audit path uncached.
+_SHARE_TOKEN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+_share_throttle = TokenBucket(rate_per_minute=60, burst=20)
+
+
+def _share_panel(
+    request: Request,
+    domain: str,
+    *,
+    minted: str = "",
+    error: str = "",
+    this_section: str = "",
+) -> Response:
+    """The mint form, and the one and only showing of a new link.
+
+    `minted` is the plaintext URL. It is rendered here and never stored, so this
+    response is the single moment it exists -- which is why the template says so
+    rather than leaving the operator to discover it by coming back later.
+    """
+    return templates.TemplateResponse(
+        request,
+        "partials/share_panel.html",
+        {
+            "domain": domain,
+            "minted": minted,
+            "error": error,
+            "sections": [s.value for s in share.ShareSection],
+            "this_section": this_section,
+            "default_days": get_settings().share_link_default_days,
+            "max_days": get_settings().share_link_max_days,
+        },
+    )
+
+
+def _share_gone(request: Request) -> Response:
+    """One response for every way a link can fail.
+
+    Unknown, expired, revoked, client deleted, domain never probed -- all return
+    the same 404 with the same body. It must not reveal whether the token ever
+    existed, which domain it named, or that a `/sites/...` surface exists.
+
+    Not 410 for an expired link: 410 means "this was here", which is a disclosure
+    in itself. `require_admin_or_404` already takes the same line for the same
+    reason.
+    """
+    return templates.TemplateResponse(
+        request, "client/gone.html", {}, status_code=status.HTTP_404_NOT_FOUND
+    )
+
+
+async def _share_render(request, session, token, *, want_pdf=False):
+    """Resolve a token and build the document it authorises.
+
+    No `user` parameter and no `current_user` call anywhere in this path -- see
+    `ShareScope`, which has already removed the cookie.
+    """
+    settings = get_settings()
+    if not settings.share_links_enabled:
+        return _share_gone(request), None
+
+    if not _share_throttle.allow(share.token_hash(token), now=time.monotonic()):
+        return (
+            Response(status_code=status.HTTP_429_TOO_MANY_REQUESTS, headers={"Retry-After": "60"}),
+            None,
+        )
+
+    link = await repo.resolve_share_link(session, token)
+    now = datetime.now(UTC)
+    if link is None:
+        # No link id to log, and nothing worth logging: an unknown token is
+        # usually a truncated paste. Never log the token itself -- a token in a
+        # log line is a live credential in a log line, and Railway keeps logs.
+        logger.warning("share token rejected (unknown)")
+        return _share_gone(request), None
+
+    state = link.state(now)
+    if state != "live":
+        logger.warning("share link %s rejected (%s)", link.id, state)
+        return _share_gone(request), None
+
+    site_status, view = await _site_status(session, link.domain)
+    if site_status is None or view is None:
+        logger.warning("share link %s has no snapshot for %s", link.id, link.domain)
+        return _share_gone(request), None
+
+    config = await repo.load_site_config(session, link.domain)
+    report = build_client_report(
+        view,
+        site_status,
+        link.section,
+        client_name=(config.label if config and config.label else link.domain),
+    )
+
+    await repo.record_share_view(session, link, now=now)
+    await session.commit()
+    logger.info(
+        "share link %s viewed (domain=%s section=%s views=%d)",
+        link.id,
+        link.domain,
+        link.section,
+        link.view_count,
+    )
+    return None, (link, report)
+
+
+@app.get("/share/{token}", response_class=HTMLResponse, include_in_schema=False)
+async def share_page(
+    request: Request,
+    token: str = PathParam(..., min_length=share.TOKEN_CHARS, max_length=share.TOKEN_CHARS),
+    session: AsyncSession = Depends(get_session),
+):
+    """A client's view of one section. No session, by construction."""
+    if not _SHARE_TOKEN.fullmatch(token):
+        return _share_gone(request)
+
+    refusal, resolved = await _share_render(request, session, token)
+    if refusal is not None:
+        return refusal
+
+    _link, report = resolved
+    return templates.TemplateResponse(
+        request,
+        "client/report.html",
+        {"report": report, "downloads": f"/share/{token}/download"},
+    )
+
+
+@app.get("/share/{token}/download/{artifact}", include_in_schema=False)
+async def share_download(
+    request: Request,
+    artifact: str,
+    token: str = PathParam(..., min_length=share.TOKEN_CHARS, max_length=share.TOKEN_CHARS),
+    session: AsyncSession = Depends(get_session),
+):
+    """One generated file, scoped to the token's domain.
+
+    **No fallthrough default.** `/agents/download` ends in `else: render_agents_md`,
+    so an unknown `kind` there returns agents.md; here an artifact the bundle does
+    not name is a 404. A share route that guesses is a share route that can be
+    asked for something nobody decided to share.
+    """
+    if not _SHARE_TOKEN.fullmatch(token):
+        return _share_gone(request)
+
+    refusal, resolved = await _share_render(request, session, token)
+    if refusal is not None:
+        return refusal
+
+    link, _report = resolved
+    _state, view = await _site_status(session, link.domain)
+    found = view.bundle.get(artifact) if view is not None else None
+    if found is None:
+        return _share_gone(request)
+
+    return PlainTextResponse(
+        found.body,
+        headers={"Content-Disposition": f'attachment; filename="{found.name}"'},
+        media_type=f"{found.media_type}; charset=utf-8",
+    )
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt() -> PlainTextResponse:
+    """Disallow everything, and never name `/share/`.
+
+    Two things worth stating, because both invite a well-meant "fix":
+
+    * A `Disallow: /share/` line would *publish the existence and shape of the
+      surface it names*, to anyone who reads robots.txt. `Disallow: /` names
+      nothing.
+    * robots.txt is not the control here. A disallowed URL can still be indexed by
+      reference, and a compliant crawler that obeys this line never fetches the
+      page and so never sees its `noindex` header. That tension resolves in favour
+      of both, because share URLs are never linked from anywhere public -- no
+      referrer, no sitemap, no inbound link -- so indexing-by-reference needs
+      somebody to publish the link, at which point it is compromised anyway.
+      `X-Robots-Tag` is what covers the crawler that ignores this file, which,
+      given what this tool audits, is an ironic but real population.
+    """
+    return PlainTextResponse(
+        "User-agent: *\nDisallow: /\n", headers={"Cache-Control": "public, max-age=3600"}
+    )
+
+
+# -- minting and revoking, which are staff actions ----------------------------
+
+
+@app.post("/sites/{domain}/share")
+async def create_share(
+    request: Request,
+    domain: str,
+    section: str = Form(...),
+    days: int = Form(0),
+    label: str = Form(""),
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Mint a link and show it once.
+
+    `require_user`, not `require_admin`: every signed-in staff member already sees
+    every client, so requiring an admin would add friction without adding a
+    boundary.
+    """
+    settings = get_settings()
+    now = datetime.now(UTC)
+
+    if not settings.share_links_enabled:
+        return _share_panel(request, domain, error="Share links are turned off for this instance.")
+    if section not in share.ShareSection.__members__.values():
+        return _share_panel(request, domain, error="Unknown section.")
+
+    wanted = days or settings.share_link_default_days
+    if wanted > settings.share_link_max_days:
+        # Refused, never silently clamped: a link the operator believes lasts a
+        # year and which dies in ninety days is the silent-cap failure the
+        # conventions forbid.
+        return _share_panel(
+            request,
+            domain,
+            error=f"The longest a link may last is {settings.share_link_max_days} days.",
+        )
+
+    if (
+        await repo.live_share_link_count(session, domain, now=now)
+        >= settings.share_links_per_domain
+    ):
+        return _share_panel(
+            request,
+            domain,
+            error=(
+                f"{settings.share_links_per_domain} links are already live for this client. "
+                "Revoke one before making another."
+            ),
+        )
+
+    _link, token = await repo.create_share_link(
+        session,
+        domain=domain,
+        section=section,
+        expires_at=now + timedelta(days=wanted),
+        created_by=user.email,
+        label=label,
+    )
+    await session.commit()
+    return _share_panel(request, domain, minted=share.share_url(settings.app_url, token))
+
+
+@app.post("/sites/{domain}/share/{link_id}/revoke")
+async def revoke_share(
+    request: Request,
+    domain: str,
+    link_id: UUID,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Not admin-only. Revoking is the safe direction, and needing an admin is how
+    a link stays live over a weekend."""
+    link = await repo.revoke_share_link(session, link_id, by=user.email, now=datetime.now(UTC))
+    if link is not None and link.domain != domain:
+        # The id is a UUID and the domain is in the path; they must agree, or the
+        # revoke button on one client's page could act on another's row.
+        await session.rollback()
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such link.")
+    await session.commit()
+    return RedirectResponse(f"/sites/{domain}/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@app.get("/sites/{domain}/client/{section}", response_class=HTMLResponse)
+async def client_preview(
+    request: Request,
+    domain: str,
+    section: str,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What the client will see, rendered for staff.
+
+    The same builder and the same template, so a preview cannot flatter the real
+    thing. No `downloads` route is passed: a preview has no token, and there is no
+    other URL a signed-out client could use.
+    """
+    if section not in SECTION_KEYS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown section.")
+    site_status, view = await _site_status(session, domain)
+    if site_status is None or view is None:
+        return _unchecked(request, user, domain, "Client view")
+    config = await repo.load_site_config(session, domain)
+    report = build_client_report(
+        view,
+        site_status,
+        section,
+        client_name=(config.label if config and config.label else domain),
+    )
+    return templates.TemplateResponse(
+        request, "client/report.html", {"report": report, "downloads": ""}
     )
 
 
@@ -1909,6 +2314,16 @@ def _component_context(request, user, domain, status, view) -> dict:
         # partial renders as "no checks exist" rather than as a pass.
         "reports": reports_for(view),
         "judged": JUDGED_BY,
+        # The share control, on every page that has something worth sharing.
+        # Added here rather than to four route bodies for the reason `build_nav`
+        # is a global: the one route that forgot would render a page whose Share
+        # button silently did nothing.
+        "share_enabled": get_settings().share_links_enabled,
+        "sections": [s.value for s in share.ShareSection],
+        "default_days": get_settings().share_link_default_days,
+        "max_days": get_settings().share_link_max_days,
+        "minted": "",
+        "error": "",
     }
 
 
@@ -1958,6 +2373,7 @@ async def family_tab(
             **_component_context(request, user, domain, site_status, view),
             "family_label": FAMILY_LABELS[wanted],
             "family_blurb": FAMILY_BLURBS[wanted],
+            "family_key": wanted.value,
             "statuses": statuses,
             # Refining is offered where the artifact is prose an operator would
             # want to reword. Configuration and machine data are not.

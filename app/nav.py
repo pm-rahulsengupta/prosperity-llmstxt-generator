@@ -102,7 +102,9 @@ def build_nav(
                 # Exact, not prefix: `/clients` is a prefix of `/clients/new`,
                 # which lit both and left the sidebar saying it did not know
                 # where the operator was.
-                NavItem("All clients", "/clients", active=path.rstrip("/") == "/clients", icon="clients"),
+                NavItem(
+                    "All clients", "/clients", active=path.rstrip("/") == "/clients", icon="clients"
+                ),
                 NavItem(
                     "Add a client",
                     "/clients/new",
@@ -227,8 +229,15 @@ def build_nav(
                 label="Admin",
                 items=[
                     NavItem("Costs", "/admin", active=path == "/admin", icon="costs"),
-                    NavItem("All runs", "/admin/runs", active=_active(path, "/admin/runs"), icon="all-runs"),
-                    NavItem("Accounts", "/accounts", active=_active(path, "/accounts"), icon="accounts"),
+                    NavItem(
+                        "All runs",
+                        "/admin/runs",
+                        active=_active(path, "/admin/runs"),
+                        icon="all-runs",
+                    ),
+                    NavItem(
+                        "Accounts", "/accounts", active=_active(path, "/accounts"), icon="accounts"
+                    ),
                 ],
             )
         )

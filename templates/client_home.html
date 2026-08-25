@@ -33,6 +33,9 @@
     </div>
 
     {% include "partials/checked.html" %}
+    {% with share_section = 'report' %}
+        {% include "partials/share_button.html" %}
+    {% endwith %}
     <p class="hint">{{ readiness.summary() }}</p>
 </div>
 

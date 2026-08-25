@@ -1,0 +1,39 @@
+{# Mint a client link, and show it once.
+
+   The plaintext token exists only in the response that creates it -- it is
+   stored as a SHA-256 digest, so there is no way to show it a second time. The
+   panel says so out loud rather than letting an operator discover it by coming
+   back tomorrow. #}
+<div class="share-panel" id="share-panel">
+    {% if minted %}
+    <p class="notice ok">
+        <strong>Copy this now.</strong> It is the only time this link will be shown.
+    </p>
+    <p><input class="share-url" type="text" value="{{ minted }}" readonly
+              aria-label="Share link" onfocus="this.select()"></p>
+    <p class="hint">
+        Anyone with this URL can read that section until it expires. Revoke it from
+        Settings if it goes further than you meant.
+    </p>
+    {% endif %}
+
+    {% if error %}<p class="notice bad">{{ error }}</p>{% endif %}
+
+    <form method="post" action="/sites/{{ domain }}/share" class="share-form">
+        <label for="share-section">Section</label>
+        <select id="share-section" name="section">
+            {% for value in sections %}
+            <option value="{{ value }}"{% if value == (this_section or 'report') %} selected{% endif %}>{{ value.replace('_', ' ') }}</option>
+            {% endfor %}
+        </select>
+
+        <label for="share-days">Days</label>
+        <input id="share-days" type="number" name="days" min="1" max="{{ max_days }}"
+               value="{{ default_days }}">
+
+        <label for="share-label">Note</label>
+        <input id="share-label" type="text" name="label" placeholder="sent to jane@client">
+
+        <button class="primary" type="submit">Create link</button>
+    </form>
+</div>

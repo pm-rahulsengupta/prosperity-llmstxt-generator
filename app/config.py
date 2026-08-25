@@ -84,6 +84,22 @@ class Settings(BaseSettings):
     # the silent-cap failure the conventions forbid.
     max_interactive_calls_per_day: int = Field(default=120, ge=1, le=5_000)
 
+    # --- Client share links ---------------------------------------------------
+    #
+    # Off by default, and a kill switch as much as a feature flag: if a link is
+    # ever forwarded more widely than intended, turning this off and redeploying
+    # kills every outstanding link at once, which is faster and surer than
+    # revoking forty rows one at a time.
+    share_links_enabled: bool = False
+    share_link_default_days: int = Field(default=30, ge=1, le=365)
+    # A request for longer than this is refused with a message rather than
+    # silently clamped -- the same reasoning the interactive-call ceiling above
+    # gives for telling the caller.
+    share_link_max_days: int = Field(default=90, ge=1, le=365)
+    # A live-link ceiling per client. Not a throttle: it bounds the surface, and
+    # it catches a UI bug that mints a link on every page load.
+    share_links_per_domain: int = Field(default=20, ge=1, le=200)
+
     firecrawl_base_url: str = "https://api.firecrawl.dev/v2"
 
     # --- Google Search Console (the metrics source that repairs page ranking) --
@@ -212,8 +228,27 @@ class Settings(BaseSettings):
 
         The source app shipped with FLASK_SECRET_KEY unset, so production session
         cookies were signed with the literal string "dev-only-change-me".
+
+        Most clauses only apply to an https deployment, on the reasoning that
+        local development is not the thing being protected. The share-link clause
+        is the exception and says why at its own site.
         """
         problems: list[str] = []
+
+        # Outside the https block below, unlike every other clause here, and
+        # deliberately. Those rules ask "is this a real deployment"; this one
+        # says the share token is the entire credential and must not travel in
+        # cleartext -- so an http deployment is the dangerous case, not the
+        # exempt one. Localhost is exempted so a developer is not blocked and
+        # does not delete the clause the first time it stops them.
+        if self.share_links_enabled and not (
+            self.app_url.startswith("https://") or self.app_url.startswith("http://localhost")
+        ):
+            problems.append(
+                "SHARE_LINKS_ENABLED requires an https APP_URL (or localhost): a share "
+                "token is the whole credential and must not travel in cleartext"
+            )
+
         if self.app_url.startswith("https://"):
             if self.session_secret == "dev-only-change-me":
                 problems.append("SESSION_SECRET is still the development default")

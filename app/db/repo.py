@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.metrics import DateRange, PageMetrics
 from app.core.models import GenerationResult, PageEntry
 from app.core.onboarding import SiteBrief, matches_any
+from app.core.share import matches, new_token, token_hash
 from app.db.models import (
     ArtifactEdit,
     ComponentMark,
@@ -29,6 +30,7 @@ from app.db.models import (
     RunEvent,
     RunStatus,
     SectionRow,
+    ShareLink,
     SiteConfig,
     SiteMetric,
     SiteSnapshot,
@@ -302,6 +304,7 @@ class ClientDeletion:
     snapshots: int
     edits: int
     spend_rows: int
+    share_links: int
     config: int
 
     @property
@@ -314,6 +317,7 @@ class ClientDeletion:
             + self.snapshots
             + self.edits
             + self.spend_rows
+            + self.share_links
             + self.config
         )
 
@@ -326,6 +330,7 @@ class ClientDeletion:
             (self.metric_rows, "search-metric row"),
             (self.edits, "saved refinement"),
             (self.spend_rows, "recorded LLM call"),
+            (self.share_links, "client share link"),
         ):
             if count:
                 parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
@@ -364,6 +369,7 @@ async def _client_row_counts(session: AsyncSession, domain: str) -> ClientDeleti
         snapshots=await count(SiteSnapshot, SiteSnapshot.domain),
         edits=await count(ArtifactEdit, ArtifactEdit.domain),
         spend_rows=await count(LlmSpend, LlmSpend.domain),
+        share_links=await count(ShareLink, ShareLink.domain),
         config=await count(SiteConfig, SiteConfig.domain),
     )
 
@@ -393,9 +399,110 @@ async def delete_client(session: AsyncSession, domain: str) -> ClientDeletion:
     await session.execute(delete(SiteSnapshot).where(SiteSnapshot.domain == domain))
     await session.execute(delete(ArtifactEdit).where(ArtifactEdit.domain == domain))
     await session.execute(delete(LlmSpend).where(LlmSpend.domain == domain))
+    await session.execute(delete(ShareLink).where(ShareLink.domain == domain))
     await session.execute(delete(SiteConfig).where(SiteConfig.domain == domain))
     await session.flush()
     return counts
+
+
+# -- client share links -----------------------------------------------------
+
+
+async def create_share_link(
+    session: AsyncSession,
+    *,
+    domain: str,
+    section: str,
+    expires_at: datetime,
+    created_by: str,
+    label: str = "",
+) -> tuple[ShareLink, str]:
+    """Mint a link. Returns the row and the plaintext token.
+
+    **The only place the plaintext exists.** It is returned once, for the response
+    that shows it, and never stored -- see `app.core.share` for why. Any later
+    feature that appears to re-display a token means somebody stored it.
+    """
+    token = new_token()
+    link = ShareLink(
+        token_hash=token_hash(token),
+        domain=domain,
+        section=section,
+        label=label.strip()[:255],
+        created_by=created_by,
+        expires_at=expires_at,
+    )
+    session.add(link)
+    await session.flush()
+    return link, token
+
+
+async def resolve_share_link(session: AsyncSession, token: str) -> ShareLink | None:
+    """The row for a token, whatever state it is in.
+
+    Deliberately does **not** filter on expiry or revocation. The handler needs to
+    tell unknown from expired from revoked so the log can say which, while
+    returning one identical response to the client either way. Folding the
+    predicate into the `WHERE` clause would throw that distinction away.
+    """
+    result = await session.execute(
+        select(ShareLink).where(ShareLink.token_hash == token_hash(token))
+    )
+    link = result.scalar_one_or_none()
+    if link is None or not matches(link.token_hash, token):
+        return None
+    return link
+
+
+async def record_share_view(session: AsyncSession, link: ShareLink, *, now: datetime) -> None:
+    """Enough to answer "did they open it, and when did they last look".
+
+    No IP address, no User-Agent, no Referer. Three reasons, and the second is the
+    one that decides it: an IP is personal information about someone we have no
+    relationship with and no way to notify; it would routinely be *wrong*, because
+    mail-security scanners fetch every URL in an email before a human sees it, so
+    the log would read "the client opened it" when it was a datacentre in
+    Virginia; and it buys nothing operationally, because a leaked link is remedied
+    by revoking it, not by knowing who fetched it.
+    """
+    link.view_count += 1
+    link.last_viewed_at = now
+    if link.first_viewed_at is None:
+        link.first_viewed_at = now
+
+
+async def list_share_links(session: AsyncSession, domain: str) -> list[ShareLink]:
+    result = await session.execute(
+        select(ShareLink).where(ShareLink.domain == domain).order_by(ShareLink.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def live_share_link_count(session: AsyncSession, domain: str, *, now: datetime) -> int:
+    """Bounds the surface, and catches a UI bug that mints a link per page load."""
+    result = await session.execute(
+        select(func.count())
+        .select_from(ShareLink)
+        .where(
+            ShareLink.domain == domain,
+            ShareLink.revoked_at.is_(None),
+            ShareLink.expires_at > now,
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def revoke_share_link(
+    session: AsyncSession, link_id: uuid.UUID, *, by: str, now: datetime
+) -> ShareLink | None:
+    """Revoking twice is not an error -- the first revocation stands."""
+    link = await session.get(ShareLink, link_id)
+    if link is None:
+        return None
+    if link.revoked_at is None:
+        link.revoked_at = now
+        link.revoked_by = by
+    return link
 
 
 # -- the probe cache --------------------------------------------------------

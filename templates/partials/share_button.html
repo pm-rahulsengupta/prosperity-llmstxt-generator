@@ -1,0 +1,13 @@
+{# The Share control, on a staff page.
+
+   A disclosure rather than a permanent form: minting a client link is an
+   occasional act, and a form sitting open on every page invites an accidental
+   one. `<details>` needs no JavaScript, so it works with the script blocked. #}
+{% if share_enabled %}
+<details class="share-open">
+    <summary>Share this with the client</summary>
+    {% with this_section = share_section %}
+        {% include "partials/share_panel.html" %}
+    {% endwith %}
+</details>
+{% endif %}

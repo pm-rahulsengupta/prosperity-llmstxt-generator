@@ -1083,3 +1083,42 @@ pre.doc.template {
     a[href^="/"]::after, a[href^="#"]::after { content: ""; }
     .c-get { display: none; }   /* a Download button on paper is furniture */
 }
+
+/* -- sharing with a client --------------------------------------------------
+   A disclosure rather than a permanent form. Minting a client link is an
+   occasional act, and a form sitting open on every page invites an accidental
+   one. `<details>` needs no JavaScript, so it still opens if a script fails. */
+
+.share-open { margin: 0.75rem 0 0; }
+.share-open > summary {
+    display: inline-block;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--pm-rule-strong);
+    border-radius: var(--pm-radius-sm);
+    font-size: var(--pm-sm);
+    cursor: pointer;
+}
+.share-open > summary:hover { background: var(--pm-sunken); }
+.share-open[open] > summary { margin-bottom: 0.75rem; }
+
+.share-panel { max-width: 40rem; }
+.share-form {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+}
+.share-form button { grid-column: 2; justify-self: start; }
+
+/* Readonly, monospace, and selected on focus: this is the one and only time the
+   URL is shown, so copying it has to be a single gesture. */
+.share-url {
+    width: 100%;
+    font-family: var(--pm-mono);
+    font-size: var(--pm-sm);
+}
+
+@media (max-width: 720px) {
+    .share-form { grid-template-columns: 1fr; }
+    .share-form button { grid-column: 1; }
+}

@@ -15,6 +15,9 @@
     <div class="bar"><span style="width: {{ (100 * done / total)|round|int }}%"></span></div>
     {% endif %}
     {% include "partials/checked.html" %}
+    {% with share_section = 'checklist' %}
+        {% include "partials/share_button.html" %}
+    {% endwith %}
 </div>
 
 {% if statuses %}

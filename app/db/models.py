@@ -143,6 +143,67 @@ class Run(Base):
     __table_args__ = (Index("ix_runs_domain_created", "domain", "created_at"),)
 
 
+class ShareLink(Base):
+    """A link a client can open. The token *is* the authorisation.
+
+    There is no ownership model anywhere in this schema -- no `owner` or
+    `user_id` column on any client-scoped table -- so `require_user` is the whole
+    authorisation layer for staff. A client is not staff and has no session, so
+    the row below has to carry the authority itself: which domain, which section,
+    until when.
+
+    That is why neither the domain nor the section appears in the share URL. If
+    they did, "the handler must ignore what the request says" would be a property
+    a reader has to verify rather than one the shape guarantees, and a client with
+    one link could walk to another client's audit by editing the address bar.
+
+    `token_hash` holds a SHA-256 digest, never the token. See `app.core.share`
+    for why the digest is unsalted and why argon2 would be actively wrong here.
+    """
+
+    __tablename__ = "share_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    section: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: The operator's own note -- "sent to jane@client" -- so the management list
+    #: is readable. Never anything derived from the token.
+    label: Mapped[str] = mapped_column(String(255), default="")
+    created_by: Mapped[str] = mapped_column(String(320), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: Not nullable. There is no "never expires" option: a link with no expiry is
+    #: the one that surfaces in a forwarded email in three years.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str] = mapped_column(String(320), default="")
+
+    #: Enough to answer "did they open it, and when did they last look". A
+    #: per-view event table would answer "how many times on Tuesday", which
+    #: nobody asks, and would accumulate personal data about someone who never
+    #: agreed to anything. No IP, no User-Agent, no Referer -- see the route.
+    first_viewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_viewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    view_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (Index("ix_share_links_domain_created", "domain", "created_at"),)
+
+    def state(self, now: datetime) -> str:
+        """`live`, `revoked` or `expired`.
+
+        Decided here rather than in the query on purpose: the handler needs to
+        tell the three apart for the log while returning one identical response
+        to the client. Folding it into a `WHERE` throws that away.
+        """
+        if self.revoked_at is not None:
+            return "revoked"
+        if self.expires_at <= now:
+            return "expired"
+        return "live"
+
+
 class SectionRow(Base):
     """A section of the generated file, as it stands after any human edits."""
 

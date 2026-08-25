@@ -230,14 +230,31 @@ def _render(template: str, **extra):
     would test a template that does not exist. Strict undefined turns a context
     key a route forgets into a failure here instead of a 500 in production.
     """
-    from types import SimpleNamespace
-
     from jinja2 import StrictUndefined
+
+    from app.main import templates as app_templates
+
+    context = _render_context(**extra)
+    env = app_templates.env
+    previous, env.undefined = env.undefined, StrictUndefined
+    try:
+        return env.get_template(template).render(**context)
+    finally:
+        env.undefined = previous
+
+
+def _render_context(**extra) -> dict:
+    """The context `_render` hands a template.
+
+    Split out so `test_the_render_fixture_supplies_every_key_the_real_context
+    _builds` can compare it against what `_component_context` actually returns,
+    rather than the two drifting until nine templates fail at once.
+    """
+    from types import SimpleNamespace
 
     from app.core.components import SiteType
     from app.core.site_state import derive
     from app.core.templates_lib import build_templates
-    from app.main import templates as app_templates
 
     status = derive(
         "https://x.example",
@@ -266,15 +283,24 @@ def _render(template: str, **extra):
         "reports": {},
         "refinable": False,
         "judged": __import__("app.core.evidence", fromlist=["JUDGED_BY"]).JUDGED_BY,
+        "share_enabled": True,
+        "sections": ["report", "checklist", "handover"],
+        "default_days": 30,
+        "max_days": 90,
+        "minted": "",
+        "error": "",
+        "share_section": "report",
+        "family_key": "crawl",
+        # Overridden by the tests that assert on the sidebar's gap pills.
+        "nav_gaps": {},
+        # From `_settings_context`, which the settings page uses instead.
+        "links": [],
+        "now": __import__("datetime").datetime.now(__import__("datetime").UTC),
+        "exists": True,
+        "going": None,
         **extra,
     }
-
-    env = app_templates.env
-    previous, env.undefined = env.undefined, StrictUndefined
-    try:
-        return env.get_template(template).render(**context)
-    finally:
-        env.undefined = previous
+    return context
 
 
 @pytest.mark.parametrize("template", ["family.html", "checklist.html", "handover.html"])
@@ -569,6 +595,7 @@ def test_the_settings_page_states_what_a_delete_would_remove():
             snapshots=1,
             edits=1,
             spend_rows=0,
+            share_links=0,
             config=1,
         ),
     )
@@ -589,6 +616,7 @@ def test_the_danger_zone_is_hidden_from_a_non_admin():
         snapshots=0,
         edits=0,
         spend_rows=0,
+        share_links=0,
         config=1,
     )
     html = _render(
@@ -648,6 +676,7 @@ def test_every_page_renders_under_strict_undefined(template):
             snapshots=0,
             edits=0,
             spend_rows=0,
+            share_links=0,
             config=1,
         ),
         **(_overview_context() if template == "client_home.html" else {}),
@@ -853,11 +882,50 @@ def test_the_icon_macro_draws_every_name_the_nav_asks_for():
     """
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-    env = Environment(loader=FileSystemLoader("templates"), undefined=StrictUndefined, autoescape=True)
+    env = Environment(
+        loader=FileSystemLoader("templates"), undefined=StrictUndefined, autoescape=True
+    )
     macro = env.get_template("partials/icons.html").module.icon
     fallback = str(macro("no-such-icon"))
 
-    names = {item.icon for group in build_nav("/clients", "example.com", is_admin=True) for item in group.items}
+    names = {
+        item.icon
+        for group in build_nav("/clients", "example.com", is_admin=True)
+        for item in group.items
+    }
     unknown = sorted(name for name in names if str(macro(name)) == fallback)
 
     assert unknown == [], f"icons.html has no shape for: {unknown}"
+
+
+def test_the_render_fixture_supplies_every_key_the_real_context_builds():
+    """`_render` hand-rolls what the context builders return, so it drifts.
+
+    It drifted the moment share links added six keys: nine templates failed under
+    StrictUndefined at once, and the cause was the fixture rather than any of
+    them. This reads the real function's dict literal so the next drift fails
+    here, in one place, naming the missing key.
+    """
+    import ast
+    import inspect
+
+    from app import main
+
+    # No dedent: `_component_context` is module-level, so `getsource` already
+    # starts at column 0. `cleandoc` strips the body's own indentation and turns
+    # valid source into an IndentationError.
+    tree = ast.parse(
+        inspect.getsource(main._component_context) + inspect.getsource(main._settings_context)
+    )
+    returned = {
+        key.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)
+        for key in node.value.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    assert returned, "could not read the context dict; has the function changed shape?"
+
+    supplied = set(_render_context())
+
+    assert not (returned - supplied), f"the fixture is missing: {sorted(returned - supplied)}"

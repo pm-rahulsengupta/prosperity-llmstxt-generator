@@ -1,0 +1,24 @@
+{# One page for every way a link can fail: unknown, expired, revoked, the client
+   deleted, the domain never checked. Byte-identical in all five cases.
+
+   It must not reveal whether the token ever existed, which client it named, or
+   that a staff surface exists at all. That is also why this is a 404 and not a
+   410 -- "Gone" would confirm the link was once real. #}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Link unavailable</title>
+    <link rel="stylesheet" href="/static/css/main.css?v={{ asset_version('css/main.css') }}">
+</head>
+<body class="client-doc">
+<div class="c-doc">
+    <div class="c-gone">
+        <h1>This link is no longer available</h1>
+        <p>If you were expecting an audit, contact the person who sent it to you.</p>
+    </div>
+</div>
+</body>
+</html>

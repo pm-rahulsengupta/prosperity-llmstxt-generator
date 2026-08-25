@@ -17,6 +17,9 @@
         {% endif %}
     </p>
     {% include "partials/checked.html" %}
+    {% with share_section = 'handover' %}
+        {% include "partials/share_button.html" %}
+    {% endwith %}
 </div>
 
 {% for effort, statuses in grouped.items() %}

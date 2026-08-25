@@ -14,6 +14,7 @@ anywhere.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -97,6 +98,18 @@ async def seed(session, domain: str, *, runs: int = 1, marks: int = 2, metrics: 
         source="upload",
     )
     await repo.save_snapshot(session, domain, probe={"x": 1}, readiness={"score": 42}, tech={})
+    # A share link, because the delete has to reach this table too. The docstring
+    # above says "something in every table" and that is only true if it keeps
+    # being made true -- a table seeded with nothing makes
+    # `test_the_preview_counts_what_the_delete_removes` pass against a column
+    # that is always zero, which is the shape of a vacuous test.
+    await repo.create_share_link(
+        session,
+        domain=domain,
+        section="report",
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        created_by="t@x.com",
+    )
     await session.commit()
 
 
@@ -165,6 +178,7 @@ async def test_the_preview_counts_what_the_delete_removes(session):
     assert preview == removed
     assert preview.runs == 2
     assert preview.pages == 8, "four pages per run, reached through the run"
+    assert preview.share_links == 1, "seeded, or this column proves nothing"
     assert preview.marks == 2
     assert preview.metric_rows == 3
     assert preview.snapshots == 1
@@ -355,3 +369,30 @@ async def test_deleting_a_client_takes_its_spend_history(session):
     await session.commit()
 
     assert await repo.spend_today(session, "doomed.example") == 0
+
+
+async def test_a_share_link_does_not_outlive_its_client(session):
+    """Deleting a client must kill its links, and it must fail closed.
+
+    A token that survived would point at a domain with no data -- or worse, at a
+    domain somebody later re-adds, handing a former client's contact a live view
+    of the new one. Asserted through the resolver rather than the count, because
+    the count is what a forgotten `delete()` would leave looking correct.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    await seed(session, "gone.example")
+    _link, token = await repo.create_share_link(
+        session,
+        domain="gone.example",
+        section="handover",
+        expires_at=datetime.now(UTC) + timedelta(days=30),
+        created_by="t@x.com",
+    )
+    await session.commit()
+    assert await repo.resolve_share_link(session, token) is not None
+
+    await repo.delete_client(session, "gone.example")
+    await session.commit()
+
+    assert await repo.resolve_share_link(session, token) is None

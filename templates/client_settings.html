@@ -47,6 +47,59 @@
 </div>
 
 {% if user and user.is_admin %}
+{% if share_enabled %}
+<div class="panel">
+    <h2>Shared links</h2>
+    <p class="muted">
+        Links you have sent to this client. The URL itself is shown only once, when
+        it is created &mdash; it is stored as a one-way hash, so there is no way to
+        show it again. If one is lost, revoke it and make another.
+    </p>
+    {% if links %}
+    <table>
+        <thead>
+            <tr>
+                <th scope="col">Section</th><th scope="col">Note</th>
+                <th scope="col">State</th><th scope="col">Opened</th>
+                <th scope="col">Created by</th><th scope="col"><span class="visually-hidden">Revoke</span></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for link in links %}
+            {% set state = link.state(now) %}
+            <tr>
+                <td>{{ link.section }}</td>
+                <td class="muted">{{ link.label or "—" }}</td>
+                <td>
+                    <span class="pill {% if state == 'live' %}ok{% else %}bad{% endif %}">{{ state }}</span>
+                    {% if state == 'live' %}<span class="hint">until {{ link.expires_at.date() }}</span>{% endif %}
+                </td>
+                <td>
+                    {%- if link.view_count -%}
+                        {{ link.view_count }} time{{ '' if link.view_count == 1 else 's' }},
+                        last {{ link.last_viewed_at.date() }}
+                    {%- else -%}
+                        <span class="muted">not yet</span>
+                    {%- endif -%}
+                </td>
+                <td class="muted">{{ link.created_by }}</td>
+                <td>
+                    {% if state == 'live' %}
+                    <form method="post" action="/sites/{{ domain }}/share/{{ link.id }}/revoke" class="inline-form">
+                        <button type="submit">Revoke</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No links have been created for this client.</p>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="panel danger-zone">
     <h2>Danger zone</h2>
     {% if error %}<p class="notice error">{{ error }}</p>{% endif %}

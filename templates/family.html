@@ -9,6 +9,9 @@
     </div>
     <p class="muted">{{ family_blurb }}</p>
     {% include "partials/checked.html" %}
+    {% with share_section = family_key %}
+        {% include "partials/share_button.html" %}
+    {% endwith %}
 </div>
 
 {% if statuses %}
