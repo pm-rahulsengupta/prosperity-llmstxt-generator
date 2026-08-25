@@ -188,6 +188,9 @@ class ClientItem:
     work_label: str = ""
     who: str = ""
     how_to_check: str = ""
+    #: What to actually do, in order. Rendered behind a disclosure so the list
+    #: stays scannable and the detail is there for whoever does the work.
+    steps: tuple[str, ...] = ()
     check: ClientCheck | None = None
 
 
@@ -223,6 +226,7 @@ class ClientFile:
     state_label: str
     tone: str
     note: str = ""
+    steps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,9 +315,84 @@ def _check_of(report) -> ClientCheck | None:
     )
 
 
-def _item(status, *, report=None, with_verify: bool = False) -> ClientItem:
+def _publish_steps(name: str, serve_at: str, site_url: str, note: str, task) -> tuple[str, ...]:
+    """How to put one generated file on a site.
+
+    Assembled rather than written per component. Twenty-one hand-written guides
+    would be twenty-one things to keep true; these are built from the artifact's
+    own path, the site's own URL, and the `DeploymentTask` the bundle already
+    produces -- including its platform hint, which is why a Shopify client is told
+    something different from a WordPress one.
+
+    `bundle.tasks` was generated for every run and rendered by no page. This is
+    where it finally reaches a reader.
+    """
+    steps = [
+        f"Download {name} from this document.",
+        f"Upload it to your site so it answers at {site_url.rstrip('/')}{serve_at}.",
+    ]
+    if note:
+        steps.append(note)
+    hint = getattr(task, "platform_hint", "") if task is not None else ""
+    if hint and hint != note:
+        steps.append(hint)
+    blocked = getattr(task, "blocked_by", "") if task is not None else ""
+    if blocked:
+        steps.append(f"This cannot go live until it is resolved: {blocked}.")
+    steps.append(f"Open {site_url.rstrip('/')}{serve_at} in a browser to confirm it is there.")
+    return tuple(steps)
+
+
+def _work_steps(status, task) -> tuple[str, ...]:
+    """How to do a change that produces no file.
+
+    Link headers, content negotiation and WebMCP cannot be handed over as a
+    download -- they are changes to how the site answers. `_deployment_tasks`
+    already reasons about the platform for each; this renders that reasoning.
+    """
+    steps: list[str] = []
+    what = getattr(task, "what", "") if task is not None else ""
+    if what:
+        steps.append(what)
+    hint = getattr(task, "platform_hint", "") if task is not None else ""
+    if hint and hint != what:
+        steps.append(hint)
+    blocked = getattr(task, "blocked_by", "") if task is not None else ""
+    if blocked:
+        steps.append(f"Blocked until this is resolved: {blocked}.")
+    if status.component.expect:
+        steps.append(f"What good looks like: {status.component.expect}")
+    return tuple(steps)
+
+
+def _item(
+    status,
+    *,
+    report=None,
+    with_verify: bool = False,
+    tasks: Mapping[str, object] | None = None,
+    notes: Mapping[str, str] | None = None,
+    site_url: str = "",
+) -> ClientItem:
     standing = _STANDING_OF.get(status.state, Standing.OUTSTANDING)
     component = status.component
+    tasks = tasks or {}
+    artifact = status.artifact_name or ""
+    task = tasks.get(artifact) or tasks.get(component.title)
+    if standing is Standing.DONE:
+        # Nothing to instruct. A guide under an item that is already working is
+        # a paragraph inviting someone to change something that works.
+        steps: tuple[str, ...] = ()
+    elif artifact:
+        steps = _publish_steps(
+            artifact,
+            component.path or f"/{artifact}",
+            site_url,
+            (notes or {}).get(artifact, ""),
+            task,
+        )
+    else:
+        steps = _work_steps(status, task)
     return ClientItem(
         title=component.title,
         standing=standing,
@@ -335,6 +414,7 @@ def _item(status, *, report=None, with_verify: bool = False) -> ClientItem:
         # "DevTools > Elements > Accessibility tab" in a marketing director's PDF
         # reads as a document meant for somebody else.
         how_to_check=(status.verify or "") if with_verify else "",
+        steps=steps,
         check=_check_of(report),
     )
 
@@ -379,8 +459,8 @@ def _overview(view, status) -> ClientSection:
     )
 
 
-def _checklist(view, status, reports) -> ClientSection:
-    items = [_item(s, report=reports.get(s.key)) for s in _visible(status.for_client())]
+def _checklist(view, status, reports, ctx) -> ClientSection:
+    items = [_item(s, report=reports.get(s.key), **ctx) for s in _visible(status.for_client())]
     done = sum(1 for i in items if i.standing is Standing.DONE)
     return ClientSection(
         key="checklist",
@@ -393,13 +473,14 @@ def _checklist(view, status, reports) -> ClientSection:
     )
 
 
-def _handover(view, status, reports) -> ClientSection:
+def _handover(view, status, reports, ctx) -> ClientSection:
     groups = tuple(
         ClientGroup(
             title=EFFORT_LABELS[effort],
             note=EFFORT_OWNERS[effort],
             items=tuple(
-                _item(s, report=reports.get(s.key), with_verify=True) for s in _visible(statuses)
+                _item(s, report=reports.get(s.key), with_verify=True, **ctx)
+                for s in _visible(statuses)
             ),
         )
         for effort, statuses in status.by_effort().items()
@@ -416,8 +497,8 @@ def _handover(view, status, reports) -> ClientSection:
     )
 
 
-def _family(view, status, family: Family, reports) -> ClientSection:
-    items = [_item(s, report=reports.get(s.key)) for s in _visible(status.family(family))]
+def _family(view, status, family: Family, reports, ctx) -> ClientSection:
+    items = [_item(s, report=reports.get(s.key), **ctx) for s in _visible(status.family(family))]
     return ClientSection(
         key=family.value,
         kind="list",
@@ -444,7 +525,7 @@ def _size(body: str) -> str:
     return f"{chars / (1024 * 1024):.1f} MB"
 
 
-def _files(view, status) -> ClientSection:
+def _files(view, status, tasks) -> ClientSection:
     """Every file we generated, in one list, with its published state.
 
     Built from `view.bundle.artifacts` rather than from the component registry,
@@ -476,6 +557,17 @@ def _files(view, status) -> ClientSection:
             state_label="Published" if artifact.name in live_artifacts else "Not published yet",
             tone="ok" if artifact.name in live_artifacts else "wait",
             note=artifact.note,
+            steps=(
+                ()
+                if artifact.name in live_artifacts
+                else _publish_steps(
+                    artifact.name,
+                    artifact.path or f"/{artifact.name}",
+                    view.site_url,
+                    artifact.note,
+                    tasks.get(artifact.name),
+                )
+            ),
         )
         for artifact in view.bundle.artifacts
     )
@@ -496,16 +588,16 @@ def _files(view, status) -> ClientSection:
     )
 
 
-def _section(view, status, key: str, reports) -> ClientSection:
+def _section(view, status, key: str, reports, ctx) -> ClientSection:
     if key == "overview":
         return _overview(view, status)
     if key == "checklist":
-        return _checklist(view, status, reports)
+        return _checklist(view, status, reports, ctx)
     if key == "handover":
-        return _handover(view, status, reports)
+        return _handover(view, status, reports, ctx)
     if key == "files":
-        return _files(view, status)
-    return _family(view, status, Family(key), reports)
+        return _files(view, status, ctx["tasks"])
+    return _family(view, status, Family(key), reports, ctx)
 
 
 def build_client_report(
@@ -531,8 +623,17 @@ def build_client_report(
 
         reports = reports_for(view)
 
+    # `bundle.tasks` is generated on every run and, until now, rendered by no
+    # page at all. It is where the platform-specific instructions live -- a
+    # Shopify client and a WordPress one are told different things about Link
+    # headers -- so the steps below are assembled from it rather than written out
+    # per component and left to drift.
+    tasks = {task.component: task for task in view.bundle.tasks}
+    notes = {artifact.name: artifact.note for artifact in view.bundle.artifacts}
+    ctx = {"tasks": tasks, "notes": notes, "site_url": view.site_url}
+
     keys = REPORT_SECTIONS if section == "report" else (section,)
-    sections = tuple(_section(view, status, key, reports) for key in keys)
+    sections = tuple(_section(view, status, key, reports, ctx) for key in keys)
 
     return ClientReport(
         domain=view.domain,

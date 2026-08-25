@@ -29,7 +29,19 @@
             <td><a class="c-get" href="{{ downloads }}/{{ file.name|urlencode }}">Download</a></td>
             {% endif %}
         </tr>
-        {% if file.note %}
+        {% if file.steps %}
+        <tr class="c-file-note">
+            <td></td>
+            <td colspan="4">
+                <details class="c-guide"{% if expand %} open{% endif %}>
+                    <summary>How to publish {{ file.name }}</summary>
+                    <ol>
+                        {% for step in file.steps %}<li>{{ step }}</li>{% endfor %}
+                    </ol>
+                </details>
+            </td>
+        </tr>
+        {% elif file.note %}
         <tr class="c-file-note"><td></td><td colspan="4" class="muted">{{ file.note }}</td></tr>
         {% endif %}
     {% endfor %}

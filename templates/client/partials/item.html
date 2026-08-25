@@ -32,6 +32,15 @@
     <p class="c-verify">Check it worked: <code>{{ item.how_to_check }}</code></p>
     {% endif %}
 
+    {% if item.steps %}
+    <details class="c-guide"{% if expand %} open{% endif %}>
+        <summary>How to do this</summary>
+        <ol>
+            {% for step in item.steps %}<li>{{ step }}</li>{% endfor %}
+        </ol>
+    </details>
+    {% endif %}
+
     {% if item.check %}
     <div class="c-check">
         <p class="c-check-head">

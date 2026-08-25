@@ -62,13 +62,26 @@ def test_every_scenario_names_components_that_exist():
             assert component.artifact, f"{scenario} names {key}, which produces no file"
 
 
-def test_a_shop_gets_the_catalog_and_a_firm_does_not():
+def test_the_scenario_decides_what_is_required_not_what_is_offered():
+    """A firm is still offered a catalog we built; it is told it does not need one.
+
+    This used to withhold it, and withholding was the defect: the file was
+    generated, stored, unreviewed and invisible. Four artifacts were affected --
+    `agents.md` was the one noticed, by looking for it and not finding it.
+    """
     shop = bundle_for("shop_on_store")
     firm = bundle_for("contact_agency")
 
-    assert shop.get("ai-catalog.json") is not None
-    assert firm.get("ai-catalog.json") is None
-    assert "ai-catalog.json" in firm.not_needed
+    assert shop.get("ai-catalog.json").note == "", "the goal calls for it, so it needs no caveat"
+    assert "does not require it" in firm.get("ai-catalog.json").note
+
+
+def test_everything_the_run_produced_is_offered():
+    """The rule, over every artifact rather than over one of them."""
+    firm = bundle_for("contact_agency")
+    offered = {a.name for a in firm.artifacts}
+
+    assert {"robots.txt", "llms.txt", "llms-full.txt", "agents.md", "_headers"} <= offered
 
 
 def test_a_publisher_gets_the_full_text_file():
@@ -98,11 +111,27 @@ def test_the_scenario_still_decides_what_a_goal_calls_for():
     assert "llms-full.txt" not in scenario_files("contact_agency")
 
 
-def test_files_outside_the_scenario_are_named_rather_than_missing():
-    firm = bundle_for("contact_agency")
+def test_a_file_we_could_not_build_is_named_rather_than_missing():
+    """`not_needed` now means "not required and not produced".
+
+    Once every produced artifact is offered, the only way onto this list is for
+    the run to have built nothing -- which is the case worth naming, because the
+    alternative is a client wondering where a file went.
+    """
+    from app.core.bundle import build_bundle
+    from app.core.onboarding import brief_from_answers
+
+    firm = build_bundle(
+        "https://x.example",
+        brief_from_answers({"primary_action": "contact_agency"}),
+        llms_txt="# llms",
+        llms_full="",
+        agents_md="",
+        ai_catalog="",
+    )
     produced = {a.name for a in firm.artifacts}
 
-    assert firm.not_needed
+    assert "ai-catalog.json" in firm.not_needed
     assert all(name not in produced for name in firm.not_needed)
 
 

@@ -68,15 +68,19 @@ class FakeReadiness:
 
 
 class FakeBundle:
-    """A real `Bundle` carries `Artifact` objects, so the fixture does too.
+    """A real `Bundle` carries `Artifact` and `DeploymentTask` objects, so the
+    fixture does too.
 
-    Using the actual dataclass rather than a stand-in means the files section is
-    tested against the shape it will meet -- including `path`, which is what
-    decides where a client is told to put the file.
+    Using the actual dataclasses rather than stand-ins means the files section and
+    the step guides are tested against the shape they will meet -- including
+    `path`, which decides where a client is told to put the file, and
+    `platform_hint`, which is why a Shopify client reads something different from
+    a WordPress one.
     """
 
     def __init__(self):
-        from app.core.bundle import Artifact
+        from app.core.bundle import Artifact, DeploymentTask
+        from app.core.components import Effort
 
         self.artifacts = [
             Artifact("llms.txt", "/llms.txt", "# Example\n" * 40, "text/markdown"),
@@ -87,6 +91,20 @@ class FakeBundle:
                 "# Agents\n" * 200,
                 "text/markdown",
                 note="Merge this with anything already there.",
+            ),
+        ]
+        self.tasks = [
+            DeploymentTask(
+                component="agents.md",
+                effort=Effort.DROP_IN,
+                what="Serve this at /agents.md as text/markdown.",
+                platform_hint="Merge this with anything already there.",
+            ),
+            DeploymentTask(
+                component="Link HTTP header with agent-aware rels",
+                effort=Effort.SERVER_CONFIG,
+                what="Advertises the agent surfaces without an agent having to guess paths.",
+                platform_hint="Shopify does not expose response headers. Use a reverse proxy.",
             ),
         ]
 
@@ -601,3 +619,91 @@ def test_an_export_list_with_nothing_in_it_says_so():
 
     assert section.files == ()
     assert section.empty_note
+
+
+# -- step-by-step guidance -----------------------------------------------------
+
+
+def test_a_file_that_needs_publishing_says_how_step_by_step():
+    """Assembled from the artifact's own path and the site's own URL.
+
+    Twenty-one hand-written guides would be twenty-one things to keep true.
+    """
+    section = build_client_report(FakeView(), _status(), "files", reports={}).sections[0]
+    steps = {f.name: f.steps for f in section.files}
+
+    assert steps["agents.md"], "a file not yet published needs instructions"
+    joined = " ".join(steps["agents.md"])
+    assert "Download agents.md" in joined
+    assert "https://example.com/agents.md" in joined, "the client's own URL, not a placeholder"
+    assert "Merge this with anything already there." in joined, "the artifact's note"
+
+
+def test_the_platform_hint_reaches_the_reader():
+    """`bundle.tasks` was generated on every run and rendered by no page.
+
+    It is where the platform reasoning lives -- a Shopify client is told
+    something a WordPress client is not -- so it has to reach a reader or the
+    reasoning was for nothing.
+    """
+    status = _status()
+    header = next(
+        s for s in status.statuses if s.component.title == "Link HTTP header with agent-aware rels"
+    )
+    header.state = ComponentState.MISSING
+
+    report = build_client_report(FakeView(), status, "handover", reports={})
+    steps = [
+        step
+        for section in report.sections
+        for group in section.groups
+        for item in group.items
+        if item.title == header.component.title
+        for step in item.steps
+    ]
+
+    assert any("reverse proxy" in step for step in steps), steps
+
+
+def test_an_item_already_working_gets_no_instructions():
+    """A guide under something that works is a paragraph inviting someone to
+    change it."""
+    status = SiteStatus(site_url="https://example.com", site_type=SITE_TYPE)
+    component = next(c for c in COMPONENTS if c.family is Family.CRAWL)
+    status.statuses = [
+        ComponentStatus(component, ComponentState.LIVE, "200, text/plain", probe_decided=True)
+    ]
+
+    item = (
+        build_client_report(FakeView(), status, "crawl", reports={}).sections[0].groups[0].items[0]
+    )
+
+    assert item.steps == ()
+
+
+def test_a_published_file_gets_no_instructions_either():
+    status = _status()
+    for s in status.statuses:
+        if s.component.artifact == "robots.txt":
+            s.state = ComponentState.LIVE
+
+    files = {
+        f.name: f
+        for f in build_client_report(FakeView(), status, "files", reports={}).sections[0].files
+    }
+
+    assert files["robots.txt"].steps == ()
+    assert files["agents.md"].steps
+
+
+def test_steps_are_still_only_strings():
+    """The type-closure rule holds for the new field too."""
+    steps = [
+        step
+        for section in _built().sections
+        for group in section.groups
+        for item in group.items
+        for step in item.steps
+    ]
+
+    assert all(isinstance(step, str) for step in steps)

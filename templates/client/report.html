@@ -1,4 +1,7 @@
 {% extends "client/base.html" %}
+{# `expand` opens every guide, for the PDF where a collapsed
+   disclosure prints as a heading with nothing under it. #}
+{% set expand = expand | default(false) %}
 {% block content %}
 <article class="c-doc">
     <header class="c-cover">

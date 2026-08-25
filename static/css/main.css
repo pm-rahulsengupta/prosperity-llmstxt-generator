@@ -1184,3 +1184,32 @@ pre.doc.template {
         print-color-adjust: exact;
     }
 }
+
+/* The step-by-step guide under a finding. Collapsed on screen so a twenty-page
+   report stays scannable; opened for the PDF by the `expand` flag rather than by
+   a stylesheet trick, because Chromium's print path does not reliably honour any
+   attempt to force a `<details>` open, and a heading printed with nothing under
+   it is worse than no heading. */
+.c-guide { margin-top: 0.6rem; }
+.c-guide > summary {
+    display: inline-block;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink-soft);
+    cursor: pointer;
+    padding: 0.15rem 0;
+}
+.c-guide > summary:hover { color: var(--pm-ink); }
+.c-guide ol {
+    margin: 0.5rem 0 0;
+    padding-left: 1.3rem;
+    font-size: var(--pm-sm);
+}
+.c-guide li { margin-bottom: 0.3rem; }
+
+@media print {
+    /* Best effort for a client pressing Ctrl+P rather than downloading the PDF.
+       The `open` attribute is what actually guarantees it; this covers the case
+       where the flag was not set. */
+    .c-guide > summary { list-style: none; font-weight: 500; color: var(--pm-ink); }
+    .c-guide[open], .c-guide { break-inside: avoid; page-break-inside: avoid; }
+}

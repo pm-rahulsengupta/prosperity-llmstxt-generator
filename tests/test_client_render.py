@@ -44,11 +44,20 @@ def env() -> Environment:
     return environment
 
 
-def render(env: Environment, section: str = "report", *, status=None, downloads: str = "") -> str:
+def render(
+    env: Environment,
+    section: str = "report",
+    *,
+    status=None,
+    downloads: str = "",
+    expand: bool = False,
+) -> str:
     report = build_client_report(
         FakeView(), status or _status(), section, client_name="Example Ltd", reports=_reports()
     )
-    return env.get_template("client/report.html").render(report=report, downloads=downloads)
+    return env.get_template("client/report.html").render(
+        report=report, downloads=downloads, expand=expand
+    )
 
 
 def test_every_section_renders(env):
@@ -208,3 +217,41 @@ def test_a_filename_is_rendered_exactly_as_it_will_be_saved(env):
 
     assert "text-transform: none" in rule
     assert ".c-table tbody th" in block[1][: len(rule) + 40], "the overview table needs it too"
+
+
+# -- the step-by-step guides ---------------------------------------------------
+
+
+def test_a_guide_is_collapsed_on_screen_and_open_for_print(env):
+    """Collapsed keeps a twenty-page report scannable.
+
+    Open for the PDF, because CSS cannot force a `<details>` open reliably in
+    Chromium's print path -- so the flag is set at render time rather than left
+    to a stylesheet trick that might silently print a heading with nothing under
+    it.
+    """
+    on_screen = lxml_html.fromstring(render(env, "checklist"))
+    for_print = lxml_html.fromstring(render(env, "checklist", expand=True))
+
+    guides = on_screen.xpath("//details[contains(@class, 'c-guide')]")
+    assert guides, "no guides rendered"
+    assert not any(g.get("open") is not None for g in guides)
+    assert all(
+        g.get("open") is not None for g in for_print.xpath("//details[contains(@class,'c-guide')]")
+    )
+
+
+def test_a_guide_is_numbered_because_the_order_matters(env):
+    doc = lxml_html.fromstring(render(env, "files"))
+
+    assert doc.xpath("//details[contains(@class,'c-guide')]/ol/li")
+
+
+def test_a_disclosure_is_not_a_control(env):
+    """`<details>` needs no JavaScript, which is what lets the share response
+    send a CSP with no script-src while the guides still open."""
+    doc = lxml_html.fromstring(render(env, "report"))
+
+    assert doc.xpath("//details")
+    assert not doc.xpath("//script")
+    assert not doc.xpath("//button | //input")

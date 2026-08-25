@@ -300,6 +300,23 @@ def render_headers(site_url: str, has_llms: bool, has_catalog: bool, openapi_url
 # the platform is unknown the generic wording is used, because a wrong hint costs
 # more than an unspecific one -- a developer following instructions for the wrong
 # CDN loses an afternoon before finding out.
+#: What an artifact says when the goal did not ask for it.
+#:
+#: The rule this enforces was written for `llms-full.txt` and applied only there,
+#: which left `agents.md`, `ai-catalog.json`, `robots.txt` and `_headers`
+#: generated and then dropped for six of the seven goals. The reasoning was
+#: always general: a file we produced and hid is worse than one we never made --
+#: it is unreviewed, unjudged, and still sitting in the database.
+#:
+#: The scenario table still decides what a goal *calls for*. It no longer decides
+#: what an operator or their client is allowed to see.
+def _optional_note(name: str, wanted: set[str], base: str = "") -> str:
+    if name in wanted:
+        return base
+    extra = "Generated, though this goal does not require it."
+    return f"{extra} {base}".strip()
+
+
 def _deployment_tasks(bundle: Bundle, brief: SiteBrief, platform: str) -> list[DeploymentTask]:
     """The work that produces no downloadable file, projected from the registry.
 
@@ -381,27 +398,27 @@ def build_bundle(
 
     openapi = next((d.url for d in bundle.verified_endpoints if d.kind == "openapi"), "")
 
-    if "robots.txt" in wanted:
+    bundle.artifacts.append(
+        Artifact(
+            "robots.txt",
+            "/robots.txt",
+            render_robots(brief, sitemap_url),
+            "text/plain",
+            note=_optional_note(
+                "robots.txt", wanted, "Merge with the existing file; do not replace it."
+            ),
+        )
+    )
+    if llms_txt:
         bundle.artifacts.append(
             Artifact(
-                "robots.txt",
-                "/robots.txt",
-                render_robots(brief, sitemap_url),
-                "text/plain",
-                note="Merge with the existing file; do not replace it.",
+                "llms.txt",
+                "/llms.txt",
+                llms_txt,
+                "text/markdown",
+                note=_optional_note("llms.txt", wanted),
             )
         )
-    if "llms.txt" in wanted and llms_txt:
-        bundle.artifacts.append(Artifact("llms.txt", "/llms.txt", llms_txt, "text/markdown"))
-    # Offered whenever one exists, not only where the scenario names it. The
-    # pipeline generates llms-full for every run -- `GenerateOptions.generate_full`
-    # defaults to True and nothing was setting it -- so gating delivery on the
-    # scenario meant paying to build the file for all seven goals and surfacing it
-    # for one. A file we produced and hid is worse than one we never made: it is
-    # unreviewed, unjudged, and still sitting in the database.
-    #
-    # The scenario table still decides what a goal *calls for*; it no longer
-    # decides what an operator is allowed to see.
     if llms_full:
         bundle.artifacts.append(
             Artifact(
@@ -409,40 +426,55 @@ def build_bundle(
                 "/llms-full.txt",
                 llms_full,
                 "text/markdown",
-                note=(
-                    ""
-                    if "llms-full.txt" in wanted
-                    else "Generated, though this goal does not require it. Publish only "
-                    "if you want agents to read the whole corpus."
+                note=_optional_note(
+                    "llms-full.txt",
+                    wanted,
+                    "Publish only if you want agents to read the whole corpus.",
                 ),
             )
         )
-    if "agents.md" in wanted and agents_md:
-        bundle.artifacts.append(Artifact("agents.md", "/agents.md", agents_md, "text/markdown"))
-    if "ai-catalog.json" in wanted and ai_catalog:
+    if agents_md:
+        bundle.artifacts.append(
+            Artifact(
+                "agents.md",
+                "/agents.md",
+                agents_md,
+                "text/markdown",
+                note=_optional_note("agents.md", wanted),
+            )
+        )
+    if ai_catalog:
         bundle.artifacts.append(
             Artifact(
                 "ai-catalog.json",
                 "/.well-known/ai-catalog.json",
                 ai_catalog,
                 "application/ai-catalog+json",
+                note=_optional_note("ai-catalog.json", wanted),
             )
         )
-    if "_headers" in wanted:
-        bundle.artifacts.append(
-            Artifact(
+    bundle.artifacts.append(
+        Artifact(
+            "_headers",
+            "_headers",
+            render_headers(
+                site_url,
+                has_llms=bool(llms_txt),
+                # Advertise the catalog only where one was actually produced.
+                # This is the single-point check the delivery rules describe:
+                # nothing may be announced in a header that the bundle did not
+                # emit, and that is a fact about `ai_catalog`, not about the goal.
+                has_catalog=bool(ai_catalog),
+                openapi_url=openapi,
+            ),
+            "text/plain",
+            note=_optional_note(
                 "_headers",
-                "_headers",
-                render_headers(
-                    site_url,
-                    has_llms=bool(llms_txt),
-                    has_catalog=bool(ai_catalog) and "ai-catalog.json" in wanted,
-                    openapi_url=openapi,
-                ),
-                "text/plain",
-                note="Cloudflare Pages. On other hosts, set the same Link headers at the edge.",
-            )
+                wanted,
+                "Cloudflare Pages. On other hosts, set the same Link headers at the edge.",
+            ),
         )
+    )
 
     bundle.tasks = _deployment_tasks(bundle, brief, platform)
 
