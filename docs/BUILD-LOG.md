@@ -74,6 +74,58 @@ the next person tidies them back into constants.
 
 **Deployed:** web + worker, 2026-08-25.
 
+### The switch never reached the worker
+
+Found by running a real crawl end to end rather than by any test. Ticking "Also
+build llms-full.txt" produced a run whose artifact came back **`missing`**.
+
+`create_run` wrote the flag as a key inside `run.plan`. Three separate code paths
+then do `run.plan = plan.to_dict()`, and `CrawlPlan` has no such field — so
+`from_dict` dropped it and `to_dict` never wrote it back. **Approving the crawl
+plan, which every crawl does, cleared the operator's choice on the way past.**
+
+It is a column now (`c8f2a91b4d17`). A run option is not part of the crawl plan,
+and nothing rewrites a column. The migration recovers the intent of any run whose
+flag is still sitting in the blob, so the deploy does not repeat the bug one last
+time on its way out.
+
+Two tests aimed at the mechanism, not the symptom. One asserts `CrawlPlan` still
+drops the key, so moving the flag back into the plan dict fails immediately. The
+other asserts the column is non-null and defaults to false.
+
+This is the same class of defect as the readiness and chat-spend bugs: state put
+somewhere another code path owns. The test that existed asserted the pipeline
+*read* the flag — it could not see that nothing still *wrote* it.
+
+### End-to-end, on the deployed build
+
+Two real capped crawls of prosperitymedia.com.au through the UI and the app's own
+endpoints:
+
+| | before | after |
+|---|---|---|
+| llms-full.txt | **12/100**, 7 failures | **96/100**, 1 |
+| llms.txt | 100/100 | 100/100 |
+
+The remaining failure is FULL-008: two pages under 3,000 characters, the
+homepage among them at 2,160. **That is a fact about the site's content, not a
+generator defect** — the only ways to clear it are to drop the homepage from the
+file or to invent content. Neither is on. It did not fire at all on the full
+74-page run; it appears here because the run was capped at 10 pages.
+
+### Also
+
+The run page polled `/progress` every 3s while `awaiting_review`. Nothing moves
+during that status — the run is waiting on a person — so a review tab left open
+overnight made roughly 28,000 requests returning the same panel. Now 30s in that
+state, 3s elsewhere. Not dropped, because a teammate may approve in another tab.
+
+The "Also build" checkbox label sat in two grid cells: a bare text node and a
+`<code>` element are two anonymous grid items, so the filename wrapped onto its
+own line. One span holds them together.
+
+**Measured:** 906 tests, ruff clean.
+
 ---
 
 ## 2026-08-25
