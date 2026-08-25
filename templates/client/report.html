@@ -12,7 +12,7 @@
         <p class="c-for">{{ report.client_name }}</p>
         <p class="c-meta">
             Prepared {{ report.prepared_label }}
-            {%- if report.checked_ago %} &middot; site checked {{ report.checked_ago }} ago{% endif %}
+            {%- if report.checked_ago %} &middot; site checked {{ report.checked_ago }}{% endif %}
         </p>
         {% if report.is_stale %}
         {# Said plainly rather than hidden. A client reading a month-old audit

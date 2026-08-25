@@ -120,7 +120,7 @@ class FakeView:
         self.site_url = f"https://{domain}"
         self.readiness = FakeReadiness()
         self.bundle = FakeBundle()
-        self.checked_ago = "2 days"
+        self.checked_ago = "2 days ago"
         self.is_stale = True
 
 
@@ -501,7 +501,7 @@ def test_the_age_of_the_data_travels_with_it():
     """A client reading a month-old audit should be able to tell."""
     report = build_client_report(FakeView(), _status(), "overview", reports={})
 
-    assert report.checked_ago == "2 days"
+    assert report.checked_ago == "2 days ago"
     assert report.is_stale is True
 
 

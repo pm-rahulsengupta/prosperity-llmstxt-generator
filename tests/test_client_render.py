@@ -255,3 +255,12 @@ def test_a_disclosure_is_not_a_control(env):
     assert doc.xpath("//details")
     assert not doc.xpath("//script")
     assert not doc.xpath("//button | //input")
+
+
+def test_the_checked_date_does_not_say_ago_twice(env):
+    """`SiteView.checked_ago` already ends in "ago" -- the staff pages read
+    "Checked 2 days ago" with no suffix, and the cover was adding a second."""
+    html = render(env)
+
+    assert "ago ago" not in html
+    assert "site checked 2 days ago" in html
