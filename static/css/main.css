@@ -132,6 +132,13 @@
 
 body {
     margin: 0;
+    /* The page owns the viewport so the sidebar rail can reach the bottom of it.
+       Without this the shell is only as tall as its content, and a short page --
+       the clients list, an empty state -- left the gunmetal panel stopping
+       mid-screen with a band of page ground beneath it. */
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
     font-family: var(--pm-sans);
     /* Body is 400, not the brand's Light 300. At 13–15px on Windows, Poppins
        Light produces hairline stems that break down — Light is kept for display
@@ -624,16 +631,23 @@ button.destructive {
    than a drawer: a drawer needs JavaScript to open, and a nav that cannot be
    opened when a script fails is worse than one that simply wraps. */
 
-.shell { display: flex; align-items: flex-start; gap: 1.5rem; }
+/* `stretch`, not `flex-start`. flex-start sized the rail to its own content;
+   stretch makes it match the taller of itself and the content column, which is
+   what lets it run the full height of the page. The nav inside it is what
+   sticks now -- see `.side-inner`. */
+.shell { flex: 1 1 auto; display: flex; align-items: stretch; }
 
 .side {
-    flex: 0 0 13.5rem;
-    position: sticky;
-    top: 1.5rem;
-    padding: 0.9rem 0.5rem;
+    flex: 0 0 14rem;
+    padding: 1rem 0.7rem 2rem;
     background: var(--pm-gunmetal);
-    border-radius: var(--pm-radius);
 }
+
+/* Sticky moved off the rail and onto its contents. A sticky element cannot also
+   stretch -- the two want different heights -- so the rail stretches and the nav
+   inside it is what follows the scroll. `main` carries its own 2rem padding, so
+   the rail sits flush against the content with no gap in the shell. */
+.side-inner { position: sticky; top: 1rem; }
 
 .side-group + .side-group {
     margin-top: 0.9rem;
@@ -708,7 +722,9 @@ button.destructive {
    type-scale note above warns about, reintroduced here. */
 @media (max-width: 960px) {
     .shell { display: block; }
-    .side { position: static; margin-bottom: 1rem; padding: 0.9rem 0.75rem; }
+    .side { padding: 0.9rem 1rem; }
+    /* Nothing to stick to once the rail is a strip above the content. */
+    .side-inner { position: static; }
     .side-group { display: inline-block; margin-right: 1.5rem; vertical-align: top; }
     /* The rule that separates stacked groups becomes a line down the middle of
        a wrapped row, so it goes with the stacking. */

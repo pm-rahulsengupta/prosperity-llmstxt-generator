@@ -6,6 +6,10 @@
    beats one nobody can find. #}
 {% from "partials/icons.html" import icon %}
 <nav class="side" aria-label="Sections">
+    {# The rail stretches to the full page height; this is what sticks inside it.
+       One element cannot do both -- stretching and sticking want different
+       heights -- so they are separated. #}
+    <div class="side-inner">
     {% for group in nav_groups %}
     <div class="side-group">
         <p class="side-label">{{ group.label }}</p>
@@ -37,4 +41,5 @@
         </ul>
     </div>
     {% endfor %}
+    </div>
 </nav>
