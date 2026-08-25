@@ -1,0 +1,57 @@
+{# One finding and its fix.
+
+   Everything here comes off a `ClientItem`, which carries no rule ids, no
+   operator names, no download URLs and no verify commands outside the handover.
+   The stripping happened in `app/core/client_report.py`; there is nothing to
+   guard for here, which is the point of building it that way. #}
+<div class="c-item {{ item.standing.value }}">
+    <div class="c-item-head">
+        <h4>{{ item.title }}</h4>
+        <span class="pill {{ item.tone }}">{{ item.standing_label }}</span>
+    </div>
+
+    {% if item.why %}<p class="c-why">{{ item.why }}</p>{% endif %}
+    {% if item.evidence %}<p class="c-evidence">What we found: {{ item.evidence }}</p>{% endif %}
+    {% if item.what_to_do %}<p class="c-do">{{ item.what_to_do }}</p>{% endif %}
+
+    {% if item.file_name %}
+    <p class="c-file">
+        File: <code>{{ item.file_name }}</code>
+        {%- if item.serve_at %} &middot; serve it at <code>{{ item.serve_at }}</code>{% endif %}
+        {%- if downloads %}
+        <a class="c-get" href="{{ downloads }}/{{ item.file_name|urlencode }}">Download</a>
+        {%- endif %}
+    </p>
+    {% endif %}
+
+    {% if item.work_label %}
+    <p class="c-work">{{ item.work_label }} &mdash; {{ item.who }}</p>
+    {% endif %}
+
+    {% if item.how_to_check %}
+    <p class="c-verify">Check it worked: <code>{{ item.how_to_check }}</code></p>
+    {% endif %}
+
+    {% if item.check %}
+    <div class="c-check">
+        <p class="c-check-head">
+            Our file was checked: <span class="pill {{ item.check.tone }}">{{ item.check.band }}</span>
+        </p>
+        {% if item.check.findings %}
+        <ul class="c-findings">
+            {% for finding in item.check.findings %}
+            <li>
+                {{ finding.message }}
+                {% if finding.examples %}
+                <span class="c-eg">For example: {{ finding.examples[0] }}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+            {% if item.check.withheld %}
+            <li class="c-more">and {{ item.check.withheld }} more of the same kind</li>
+            {% endif %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>

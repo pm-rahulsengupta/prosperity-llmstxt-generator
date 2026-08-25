@@ -1,0 +1,18 @@
+{# A section of items, optionally grouped. A flat section is one group with no
+   title, so this renders both the families and the effort-grouped handover
+   without a second code path. #}
+{% if section.groups %}
+    {% for group in section.groups %}
+    <div class="c-group">
+        {% if group.title %}
+        <h3>{{ group.title }}</h3>
+        {% if group.note %}<p class="c-who">{{ group.note }}</p>{% endif %}
+        {% endif %}
+        {% for item in group.items %}
+            {% include "client/partials/item.html" %}
+        {% endfor %}
+    </div>
+    {% endfor %}
+{% else %}
+<p class="c-empty">{{ section.empty_note }}</p>
+{% endif %}

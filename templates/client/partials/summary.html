@@ -1,0 +1,27 @@
+{# The overview: where the site stands, before any detail. #}
+{% if section.stats %}
+<div class="c-stats">
+    {% for stat in section.stats %}
+    <div class="c-stat">
+        <span class="c-stat-value">{{ stat.value }}</span>
+        <span class="c-stat-label">{{ stat.label }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if section.rows %}
+<table class="c-table">
+    <thead><tr><th scope="col">Area</th><th scope="col">Standing</th></tr></thead>
+    <tbody>
+    {% for label, state, tone in section.rows %}
+        <tr>
+            <th scope="row">{{ label }}</th>
+            <td><span class="pill {{ tone }}">{{ state }}</span></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="c-empty">{{ section.empty_note }}</p>
+{% endif %}

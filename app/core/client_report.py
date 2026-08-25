@@ -88,8 +88,11 @@ _STANDING_OF: dict[ComponentState, Standing] = {
 
 #: A client is told what to do next, in their own terms. `derive`'s own strings
 #: ("generated and ready to publish") are internal bookkeeping written for us.
+#: Nothing for DONE: the pill already says "In place", and repeating "nothing to
+#: do" under every one of them is a column of noise a reader learns to skip --
+#: which is a bad habit to teach in a document whose other rows matter.
 _WHAT_TO_DO: dict[Standing, str] = {
-    Standing.DONE: "Nothing to do. This is already working.",
+    Standing.DONE: "",
     Standing.PREPARED: "We have prepared this for you. It needs publishing.",
     Standing.OUTSTANDING: "This needs building. It is not something we can generate for you.",
 }
@@ -225,6 +228,9 @@ class ClientReport:
     client_name: str
     title: str
     prepared_on: date
+    # Formatted here rather than in the template. `%-d` is glibc-only and breaks
+    # on Windows, and the alternatives are all string surgery in Jinja.
+    prepared_label: str = ""
     checked_ago: str = ""
     is_stale: bool = False
     sections: tuple[ClientSection, ...] = ()
@@ -441,7 +447,8 @@ def build_client_report(
         site_url=view.site_url,
         client_name=client_name or view.domain,
         title=section_title(section),
-        prepared_on=prepared_on or date.today(),
+        prepared_on=(stamped := prepared_on or date.today()),
+        prepared_label=f"{stamped.day} {stamped:%B %Y}",
         checked_ago=view.checked_ago,
         is_stale=view.is_stale,
         sections=sections,

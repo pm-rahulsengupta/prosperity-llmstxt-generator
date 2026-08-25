@@ -90,6 +90,12 @@
     /* The sidebar's raised surface, taken from GEO Tracker's --sidebar-accent.
        White on it is 11.68:1, so an active item stays comfortably readable. */
     --pm-on-dark-fill: #2e3a41;
+    /* Button hover. `button:hover` referenced this and it was never declared, so
+       the declaration was invalid at computed-value time -- which resolves to
+       `unset`, i.e. transparent -- and a gunmetal button lost its whole
+       background on hover. Same lift as the sidebar's active fill, so a hovered
+       button and a current nav item read as the same gesture. */
+    --pm-gunmetal-lift: #2e3a41;
     /* Dimmer than -soft, for group labels and items that need a client first.
        4.59:1 on gunmetal -- AA for normal text, which a disabled item still is.
        It never lands on --pm-on-dark-fill, where it would fail: a disabled item
@@ -884,3 +890,196 @@ pre.doc.template {
 }
 .check input { margin: 0; }
 .check .hint { grid-column: 2; margin: 0.15rem 0 0; }
+
+/* ── The client document ──────────────────────────────────────────────────
+   What a client sees at a share link, and what Chromium prints to PDF. One
+   set of rules for both: `page.pdf()` *is* the print path, so a page that
+   prints correctly in a browser is the PDF, and the browser tier stays
+   optional rather than load-bearing.
+
+   Laid out as a document, not an app: no rail, no sticky chrome, a single
+   measure down the middle. */
+
+.client-doc {
+    background: var(--pm-bg);
+    /* This page has no sidebar to be a flex column for. */
+    display: block;
+}
+
+.c-doc {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+}
+
+/* The cover. Gunmetal with white text is an approved core pairing at 14.05:1,
+   and it is the one place the brand asserts itself before the findings start. */
+.c-cover {
+    background: var(--pm-gunmetal);
+    color: var(--pm-white);
+    border-radius: var(--pm-radius);
+    padding: 2.5rem 2rem;
+    margin-bottom: 2rem;
+}
+.c-cover h1 { margin: 0.6rem 0 0.3rem; color: var(--pm-white); }
+.c-mark { display: block; margin-bottom: 1.5rem; height: auto; }
+.c-eyebrow {
+    margin: 0;
+    font-size: var(--pm-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--pm-emerald);
+}
+.c-for { margin: 0; font-size: var(--pm-lg); color: var(--pm-white); }
+.c-meta { margin: 1rem 0 0; font-size: var(--pm-sm); color: var(--pm-on-dark-soft); }
+.c-stale {
+    margin: 1rem 0 0;
+    padding: 0.6rem 0.8rem;
+    border-radius: var(--pm-radius-sm);
+    background: var(--pm-on-dark-veil);
+    font-size: var(--pm-sm);
+    color: var(--pm-white);
+}
+
+.c-contents { margin-bottom: 2.5rem; }
+.c-contents h2 { font-size: var(--pm-base); }
+.c-contents ol { margin: 0; padding-left: 1.2rem; }
+
+.c-section { margin-bottom: 3rem; }
+.c-section > h2 { margin-bottom: 0.3rem; }
+.c-blurb { margin: 0 0 0.4rem; color: var(--pm-ink-soft); }
+.c-intro { margin: 0 0 1.5rem; font-size: var(--pm-sm); color: var(--pm-ink-muted); }
+
+.c-stats { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1.5rem; }
+.c-stat { display: flex; flex-direction: column; }
+.c-stat-value { font-size: var(--pm-xl); font-weight: 500; line-height: 1.1; }
+.c-stat-label {
+    font-size: var(--pm-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--pm-ink-muted);
+}
+
+.c-table { width: 100%; border-collapse: collapse; }
+.c-table th, .c-table td { text-align: left; padding: 0.5rem 0; border-bottom: 1px solid var(--pm-rule); }
+.c-table thead th {
+    font-size: var(--pm-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--pm-ink-muted);
+    font-weight: 400;
+}
+
+.c-group { margin-bottom: 2rem; }
+.c-group > h3 { margin-bottom: 0.2rem; }
+.c-who { margin: 0 0 1rem; font-size: var(--pm-sm); color: var(--pm-ink-muted); }
+
+/* One finding. The left rail carries the standing, so the state is legible
+   before any of the words are read. */
+.c-item {
+    padding: 1rem 0 1rem 1rem;
+    border-left: 3px solid var(--pm-rule);
+    margin-bottom: 1.25rem;
+}
+.c-item.done { border-left-color: var(--pm-emerald); }
+.c-item.prepared { border-left-color: var(--pm-lime); }
+.c-item.outstanding { border-left-color: var(--pm-red); }
+.c-item-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+.c-item-head h4 { margin: 0; }
+.c-why { margin: 0.4rem 0 0; color: var(--pm-ink-soft); }
+.c-evidence, .c-do, .c-file, .c-work, .c-verify { margin: 0.4rem 0 0; font-size: var(--pm-sm); }
+.c-work, .c-verify { color: var(--pm-ink-muted); }
+.c-get { margin-left: 0.4rem; }
+
+.c-check { margin-top: 0.8rem; }
+.c-check-head { margin: 0; font-size: var(--pm-sm); }
+.c-findings { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: var(--pm-sm); }
+.c-findings li { margin-bottom: 0.35rem; }
+.c-eg { display: block; color: var(--pm-ink-muted); font-size: var(--pm-xs); }
+.c-more { color: var(--pm-ink-muted); font-style: italic; }
+
+.c-empty { color: var(--pm-ink-muted); }
+
+.c-foot {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--pm-rule);
+    font-size: var(--pm-xs);
+    color: var(--pm-ink-muted);
+}
+
+/* ── Print, and page.pdf(), which is the same code path ───────────────────
+   Backgrounds need TWO switches and they are different things.
+   `print-color-adjust: exact` tells the browser not to run its economy
+   adjustment on the element; Playwright's `print_background=True` decides
+   whether backgrounds are painted at all. Set either alone and the cover
+   prints white with invisible emerald pills, which reads as a CSS bug. */
+
+@page {
+    size: A4;
+    /* Mirrors PDF_MARGINS in app/pdf.py. The two cannot be derived from one
+       another -- a browser will not read our Python, and page.pdf() ignores the
+       margin half of @page -- so this is the one duplicated number in the
+       feature, and it is commented on both sides. */
+    margin: 18mm 16mm;
+}
+
+@media print {
+    :root { --pm-bg: #fff; }
+    html, body {
+        background: #fff;
+        display: block;
+        min-height: auto;
+        font-size: 10.5pt;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* Belt and braces. The client templates render none of this; the rules are
+       here so a staff page printed straight from the browser is usable too. */
+    header.top, .side, .skip, form, button, .button, #refine,
+    .chat-log, .chat-ops, .mark, .bar-divider { display: none !important; }
+    .shell { display: block; }
+    .shell > main, main { max-width: none; margin: 0; padding: 0; }
+
+    .c-doc { max-width: none; margin: 0; padding: 0; }
+    .panel { border: 0; box-shadow: none; background: none; padding: 0; }
+
+    /* Page breaks. `break-inside` for engines that speak the modern property,
+       `page-break-inside` because Chromium's print path still honours the legacy
+       one on some element types, and two lines is a cheap way not to find out. */
+    .c-item { break-inside: avoid; page-break-inside: avoid; }
+    .c-section { break-before: page; page-break-before: always; }
+    .c-section:first-of-type { break-before: auto; page-break-before: auto; }
+    .c-cover { break-after: page; page-break-after: always; }
+    h1, h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
+    p, li { orphans: 3; widows: 3; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    pre, code { white-space: pre-wrap; word-break: break-word; }
+
+    .c-cover {
+        border-radius: 0;
+        padding: 20mm 14mm;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .c-mark { width: 120px; }
+    .pill, .c-item {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    /* Nothing in a printed document is clickable, and the hover wash reads as a
+       highlighter smear. The client's own URLs are the exception worth spelling
+       out, because they are the subject. */
+    a { text-decoration: none; color: inherit; background: none; }
+    .c-foot a::after, .c-item a[href^="http"]::after {
+        content: " (" attr(href) ")";
+        font-size: 9pt;
+        color: var(--pm-ink-soft);
+        word-break: break-all;
+    }
+    a[href^="/"]::after, a[href^="#"]::after { content: ""; }
+    .c-get { display: none; }   /* a Download button on paper is furniture */
+}

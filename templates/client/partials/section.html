@@ -1,0 +1,10 @@
+{# One section. Dispatches on `kind`, which the builder validates, so the
+   combined report and a single-section link cannot render the same section
+   differently -- the same reason `_assemble` is one function shared by the page
+   and the download. #}
+<section class="c-section" id="s-{{ section.key }}">
+    <h2>{{ section.title }}</h2>
+    {% if section.blurb %}<p class="c-blurb">{{ section.blurb }}</p>{% endif %}
+    {% if section.intro %}<p class="c-intro">{{ section.intro }}</p>{% endif %}
+    {% include "client/partials/" ~ section.kind ~ ".html" %}
+</section>

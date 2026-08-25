@@ -1,0 +1,39 @@
+{% extends "client/base.html" %}
+{% block content %}
+<article class="c-doc">
+    <header class="c-cover">
+        <img class="c-mark" src="/static/img/pm-logo-white.svg" alt="Prosperity Media" width="140" height="62">
+        <p class="c-eyebrow">AI search readiness</p>
+        <h1>{{ report.title }}</h1>
+        <p class="c-for">{{ report.client_name }}</p>
+        <p class="c-meta">
+            Prepared {{ report.prepared_label }}
+            {%- if report.checked_ago %} &middot; site checked {{ report.checked_ago }} ago{% endif %}
+        </p>
+        {% if report.is_stale %}
+        {# Said plainly rather than hidden. A client reading a month-old audit
+           should be able to tell that is what they are reading. #}
+        <p class="c-stale">These findings are more than a day old. Ask us to re-check before acting on anything time-sensitive.</p>
+        {% endif %}
+    </header>
+
+    {% if report.sections|length > 1 %}
+    <nav class="c-contents" aria-label="Contents">
+        <h2>What is in this document</h2>
+        <ol>
+        {% for section in report.sections %}
+            <li><a href="#s-{{ section.key }}">{{ section.title }}</a></li>
+        {% endfor %}
+        </ol>
+    </nav>
+    {% endif %}
+
+    {% for section in report.sections %}
+        {% include "client/partials/section.html" %}
+    {% endfor %}
+
+    <footer class="c-foot">
+        <p>Prepared by Prosperity Media for {{ report.client_name }} &middot; {{ report.site_url }}</p>
+    </footer>
+</article>
+{% endblock %}

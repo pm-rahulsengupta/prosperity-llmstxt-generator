@@ -457,3 +457,39 @@ def test_the_age_of_the_data_travels_with_it():
 
     assert report.checked_ago == "2 days"
     assert report.is_stale is True
+
+
+def test_an_item_already_in_place_says_nothing_further():
+    """The pill already says "In place".
+
+    Repeating "nothing to do" under every one of them is a column of noise a
+    reader learns to skip, which is a bad habit to teach in a document whose
+    other rows matter.
+    """
+    status = SiteStatus(site_url="https://example.com", site_type=SITE_TYPE)
+    component = next(c for c in COMPONENTS if c.family is Family.CRAWL)
+    status.statuses = [
+        ComponentStatus(component, ComponentState.LIVE, "200, text/plain", probe_decided=True)
+    ]
+
+    item = (
+        build_client_report(FakeView(), status, "crawl", reports={}).sections[0].groups[0].items[0]
+    )
+
+    assert item.standing is Standing.DONE
+    assert item.what_to_do == ""
+
+
+def test_an_item_not_in_place_does_say_what_happens_next():
+    """Or the test above would be satisfied by a model that never advises anyone."""
+    status = SiteStatus(site_url="https://example.com", site_type=SITE_TYPE)
+    component = next(c for c in COMPONENTS if c.family is Family.CRAWL)
+    status.statuses = [
+        ComponentStatus(component, ComponentState.MISSING, "404", probe_decided=True)
+    ]
+
+    item = (
+        build_client_report(FakeView(), status, "crawl", reports={}).sections[0].groups[0].items[0]
+    )
+
+    assert item.what_to_do

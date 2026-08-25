@@ -1,0 +1,31 @@
+{# The client-facing document. Extends nothing, deliberately.
+
+   `base.html` carries the gunmetal top bar with sign-out and the admin link, the
+   `build_nav` sidebar call, the htmx script tag and the "no LLM key" pill. Every
+   one of those is staff-only, and `{% block chrome %}` blanks only the header --
+   the signed-out-sidebar bug documented in that file is the proof that
+   overriding blocks there leaves things behind. Starting clean means there is
+   nothing to remember to remove.
+
+   No <script> at all. The page is static: no polling, no partial swaps, nothing
+   to hydrate. That is also what lets the share response send a Content-Security
+   -Policy with no script-src rather than an allowlist. #}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    {# Belt to the X-Robots-Tag header's braces. The header is what a crawler
+       obeys on a file it cannot parse; this is what a person checking
+       view-source looks for. #}
+    <meta name="robots" content="noindex, nofollow">
+    <title>{{ report.title }} &middot; {{ report.client_name }}</title>
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <!-- crossorigin is required even same-origin: font fetches are CORS-mode. -->
+    <link rel="preload" href="/static/fonts/poppins-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="/static/css/main.css?v={{ asset_version('css/main.css') }}">
+</head>
+<body class="client-doc">
+{% block content %}{% endblock %}
+</body>
+</html>
