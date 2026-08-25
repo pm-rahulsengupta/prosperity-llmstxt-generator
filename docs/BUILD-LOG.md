@@ -16,6 +16,66 @@ not happened yet when the code was committed.
 
 ---
 
+## 2026-08-25 (later)
+
+### llms-full.txt now passes its own rules: 12/100 -> 96/100
+
+Wiring the FULL-* rules to the artifact revealed the generator producing a file
+that failed seven of its own nine checks. `render_llms_full` concatenated each
+page's markdown **unchanged**, and a page's markdown was written to stand alone:
+its own H1, H2 for its own sections, and whatever the site puts on every page.
+
+**Measured before, on prosperitymedia.com.au:** 12/100. 83 H1s. 608 H2s against
+74 `Source:` lines and 74 page blocks. 616 body headings at H1 or H2. One block
+repeated 46 times, ~3,240 wasted tokens. 834 emphasis-wrapped headings. 249,977
+tokens against a 200,000 budget.
+
+New `app/core/full_text.py` normalises each page before concatenation. It
+imports its thresholds from `full_rules` rather than restating them, so the
+generator and the check cannot drift apart.
+
+- Headings demote by a **shift**, not to a fixed level, so a page running
+  H1/H2/H3 becomes H3/H4/H5 and relative hierarchy survives. Never promoted.
+- Emphasis wrapping stripped; a heading that merely *starts* with an asterisk
+  (`*args`) is escaped instead, because stripping would silently edit text.
+- Boilerplate **hoisted, not deleted** — once, into a shared section. That
+  section is H3: H2 means "page boundary with a Source:", and FULL-002 counts.
+- Whitespace collapsed, except two blank lines survive inside a fence where a
+  gap between functions is formatting. FULL-006 only objects at three.
+- `DEFAULT_FULL_MAX_CHARS` **derived** from FULL-009's budget. It was 1,000,000
+  against the rule's 800,000, so the generator's ceiling permitted a file that
+  failed the generator's rule — and did, by almost exactly that margin.
+
+**Three defects only real content surfaced**, which the fixture would never have
+produced:
+
+1. A body line reading `Source: https://...` — a post citing a study — is this
+   format's page-boundary marker and inflates the count FULL-002 checks. The
+   colon is escaped: renders identically, stops counting.
+2. An empty heading (`<h3>` wrapping only an image) emitted `#### ` with a
+   trailing space. That one line was the whole of FULL-006 on an otherwise clean
+   file.
+3. Code must never be hoisted or split — blocks are reassembled after hoisting,
+   so a naive blank-line split could drop half a fence and leave it unclosed.
+
+**Measured after, against live pages fetched through the same extractor the
+crawler uses:** 29/100 → 96/100 on that sample. H1s 5 → 1. H2/Source/page
+25/7/7 → 7/7/7. The remaining failure is FULL-008 — five thin pages — and that
+is the sample, not the generator: `/blog/` and `/case-studies/` return 265
+characters each. FULL-008 already passed on the real 74-page crawl. **No content
+is dropped to satisfy any rule.**
+
+Two existing fixtures had to change, both wrong the same way: page bodies that
+were byte-identical across pages, which the hoist correctly reads as boilerplate,
+leaving every page block empty. Real crawled pages differ. Both now say so, or
+the next person tidies them back into constants.
+
+**Measured:** 904 tests, ruff clean.
+
+**Deployed:** web + worker, 2026-08-25.
+
+---
+
 ## 2026-08-25
 
 ### llms-full.txt: asked for, and no longer hidden
