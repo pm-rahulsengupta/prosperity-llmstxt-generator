@@ -60,6 +60,23 @@
 
 <div class="panel danger-zone">
     <h2>Confirm</h2>
+    {% if unfinished_run_id %}
+    {# The same rule `run.html` states for deleting a single run, which deleting
+       the whole client was bypassing: the run rows would go while a worker still
+       held the id and wrote more of them back.
+
+       Offered with the way to satisfy it rather than as a dead end. #}
+    <p class="notice error">
+        A crawl for this client is still working &mdash;
+        <a href="/runs/{{ unfinished_run_id }}">{{ unfinished_run_state|lower }}</a>.
+        Stop it first: a worker mid-stage holds its run id and would write rows
+        back after the delete.
+    </p>
+    <form method="post" action="/runs/{{ unfinished_run_id }}/cancel">
+        <input type="hidden" name="back" value="/sites/{{ domain }}/delete">
+        <button type="submit">Stop the crawl</button>
+    </form>
+    {% else %}
     <form method="post" action="/sites/{{ domain }}/delete">
         <div class="field">
             {# The domain rather than a generic word, so an operator with several
@@ -73,5 +90,6 @@
             <a class="button" href="/clients">Cancel</a>
         </div>
     </form>
+    {% endif %}
 </div>
 {% endblock %}

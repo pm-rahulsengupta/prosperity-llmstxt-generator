@@ -1505,6 +1505,28 @@ async def save_client_settings(
     return RedirectResponse(f"/sites/{domain}/settings", status_code=status.HTTP_303_SEE_OTHER)
 
 
+async def _delete_context(session: AsyncSession, user: User, domain: str, error: str | None):
+    """What a delete would take, and whether it is safe to take it yet.
+
+    `unfinished_run_id` is the guard. `run.html` already refuses to delete a
+    *run* that is still working -- "a worker mid-stage still holds its id and
+    would write rows back after the delete" -- but deleting the *client* removed
+    every one of its runs with no such check, which is the same hazard with a
+    larger blast radius. Found with two clients sat unfinished on the live
+    instance, one of them the client this was about to be used on.
+    """
+    unfinished = await repo.unfinished_runs(session)
+    run = unfinished.get(domain)
+    return {
+        "user": user,
+        "domain": domain,
+        "going": await repo.preview_client_deletion(session, domain),
+        "unfinished_run_id": str(run.id) if run is not None else "",
+        "unfinished_run_state": run_look(run.status).headline if run is not None else "",
+        "error": error,
+    }
+
+
 @app.get("/sites/{domain}/delete", response_class=HTMLResponse)
 async def confirm_delete_client(
     request: Request,
@@ -1519,14 +1541,7 @@ async def confirm_delete_client(
     cannot disagree, and a browser back-button lands somewhere harmless.
     """
     return templates.TemplateResponse(
-        request,
-        "client_delete.html",
-        {
-            "user": user,
-            "domain": domain,
-            "going": await repo.preview_client_deletion(session, domain),
-            "error": None,
-        },
+        request, "client_delete.html", await _delete_context(session, user, domain, None)
     )
 
 
@@ -1543,17 +1558,29 @@ async def delete_client_route(
     The confirmation is the domain itself, so an operator with several clients
     open cannot destroy the wrong one by muscle memory.
     """
+
+    def refuse(reason: str):
+        return _delete_context(session, user, domain, reason)
+
+    # Checked on the POST as well as on the page. A confirmation page an operator
+    # left open for ten minutes says nothing about what is running now.
+    if (await repo.unfinished_runs(session)).get(domain) is not None:
+        return templates.TemplateResponse(
+            request,
+            "client_delete.html",
+            await refuse(
+                "A crawl for this client is still working. Stop it first -- a worker "
+                "mid-stage holds its run id and would write rows back after the delete."
+            ),
+            status_code=status.HTTP_409_CONFLICT,
+        )
+
     form = await request.form()
     if str(form.get("confirm") or "").strip().lower() != domain.lower():
         return templates.TemplateResponse(
             request,
             "client_delete.html",
-            {
-                "user": user,
-                "domain": domain,
-                "going": await repo.preview_client_deletion(session, domain),
-                "error": f"Type {domain} to confirm. Nothing was deleted.",
-            },
+            await refuse(f"Type {domain} to confirm. Nothing was deleted."),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 

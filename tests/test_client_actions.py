@@ -200,3 +200,68 @@ def test_the_preview_and_the_delete_count_the_same_rows():
 
     for function in (repo.preview_client_deletion, repo.delete_client):
         assert "_client_row_counts" in inspect.getsource(function)
+
+
+# -- a client with a crawl still running ---------------------------------------
+
+
+def test_the_delete_page_refuses_while_a_crawl_is_running():
+    """`run.html` already states this rule for a single run.
+
+    Deleting the *client* removed every one of its runs with no such check --
+    the same hazard with a larger blast radius. Found with two clients sat
+    unfinished on the live instance, one of them the client it was about to be
+    used on.
+    """
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tests"))
+    from tests.test_nav import _render
+
+    html = _render(
+        "client_delete.html",
+        domain="x.example",
+        error=None,
+        unfinished_run_id="abc-123",
+        unfinished_run_state="Crawling",
+    )
+
+    assert 'action="/sites/x.example/delete"' not in html, "the delete form is still reachable"
+    assert 'action="/runs/abc-123/cancel"' in html, "refused with no way to satisfy the rule"
+    assert "worker mid-stage" in html
+
+
+def test_the_delete_form_returns_once_nothing_is_running():
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tests"))
+    from tests.test_nav import _render
+
+    html = _render(
+        "client_delete.html",
+        domain="x.example",
+        error=None,
+        unfinished_run_id="",
+        unfinished_run_state="",
+    )
+
+    assert 'action="/sites/x.example/delete"' in html
+    assert "Type <code>x.example</code> to confirm" in html
+
+
+def test_the_post_checks_too_rather_than_trusting_the_page():
+    """A confirmation page left open for ten minutes says nothing about now."""
+    import inspect
+
+    from app.main import delete_client_route
+
+    source = inspect.getsource(delete_client_route)
+    guard = source.split("form = await request.form()", 1)[0]
+
+    assert "unfinished_runs" in guard, "the POST would delete a client mid-crawl"
+    assert "HTTP_409_CONFLICT" in guard
+
+
+def test_stopping_from_the_delete_page_returns_to_it():
+    """So the delete an operator came to do is one click away once it is safe."""
+    assert 'name="back" value="/sites/{{ domain }}/delete"' in markup("client_delete.html")
