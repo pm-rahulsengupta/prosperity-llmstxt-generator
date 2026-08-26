@@ -6,10 +6,14 @@
 <div class="panel">
     <div class="spread">
         <h1>{{ run.domain }}</h1>
-        <span class="pill {% if run.status == 'complete' %}ok{% elif run.status == 'failed' %}bad{% elif run.status == 'awaiting_review' %}wait{% else %}run{% endif %}">
-            {{ run.status.replace('_', ' ') }}
-        </span>
+        {# One mapping, in `app/core/presentation.py`. This derived its own colour
+           and printed the enum with underscores swapped for spaces, so a run
+           read "awaiting review" -- which names the state of the machine rather
+           than telling the operator they are what it waits for. #}
+        {% set look = run_look(run.status) %}
+        <span class="{{ look.css }}">{{ look.headline }}</span>
     </div>
+    {% if look.holding %}<p class="muted">{{ look.holding }}</p>{% endif %}
     <div class="stat-grid spaced">
         <div class="stat"><div class="k">Sitemap URLs</div><div class="v">{{ run.sitemap_html or 0 }}</div></div>
         <div class="stat"><div class="k">Google indexes</div><div class="v">{{ run.indexed_estimate if run.indexed_estimate is not none else '—' }}</div></div>

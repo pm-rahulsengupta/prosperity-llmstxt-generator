@@ -56,8 +56,8 @@
         <tr>
             <td><a href="/runs/{{ run.id }}">{{ run.domain }}</a></td>
             <td>
-                {% set s = run.status %}
-                <span class="pill {% if s == 'complete' %}ok{% elif s == 'failed' %}bad{% elif s == 'awaiting_review' %}wait{% else %}run{% endif %}">{{ s.replace('_', ' ') }}</span>
+                {% set look = run_look(run.status) %}
+                <span class="{{ look.css }}">{{ look.headline }}</span>
             </td>
             <td class="num">{{ run.sitemap_html or '—' }}</td>
             <td class="num">{{ run.indexed_estimate or '—' }}</td>

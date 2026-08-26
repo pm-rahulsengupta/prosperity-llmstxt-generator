@@ -110,7 +110,8 @@
         <tr>
             <td><a href="/runs/{{ run.id }}">{{ run.domain }}</a></td>
             <td>
-                <span class="pill {% if run.status == 'complete' %}ok{% elif run.status == 'failed' %}bad{% elif run.status == 'awaiting_review' %}wait{% else %}run{% endif %}">{{ run.status.replace('_', ' ') }}</span>
+                {% set look = run_look(run.status) %}
+                <span class="{{ look.css }}">{{ look.headline }}</span>
             </td>
             <td class="num">{{ '{:,}'.format(cost.total_tokens) }}</td>
             <td class="num">{{ cost.serp_calls }}</td>

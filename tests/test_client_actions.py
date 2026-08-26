@@ -283,3 +283,37 @@ def test_the_profile_reads_every_in_flight_run_not_only_the_ones_it_lists():
 
     assert "repo.unfinished_runs(session)" in source
     assert "for r in runs if not" not in source, "back to scanning the rendered page"
+
+
+def test_no_template_derives_a_run_pill_inline():
+    """The companion to `test_no_template_derives_a_pill_class_inline`.
+
+    That one matched `pill {% if <x>.state`, so it never saw `run.status` -- and
+    `run.html` and `index.html` each kept their own four-branch colour rule and
+    printed the enum's own spelling. Two mappings for one thing is how they drift;
+    they had already drifted from the client list, which showed "Stopped" where
+    the run page showed "cancelled".
+    """
+    import re
+
+    offenders = [
+        path.name
+        for path in (ROOT / "templates").rglob("*.html")
+        if re.search(r"pill \{%\s*if\s+\w+(\.status|\s*==\s*'complete')", path.read_text("utf-8"))
+    ]
+
+    assert offenders == [], f"run colour derived inline in: {offenders}"
+
+
+def test_the_run_page_and_the_client_list_agree_on_the_words():
+    """They did not: "cancelled" on one page, "Stopped" on the other, one run."""
+    for name in (
+        "run.html",
+        "index.html",
+        "clients.html",
+        "client_settings.html",
+        "client_home.html",
+        "admin/costs.html",
+        "admin/runs.html",
+    ):
+        assert "run_look(" in markup(name), f"{name} does not use the shared mapping"
