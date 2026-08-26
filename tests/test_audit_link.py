@@ -208,3 +208,88 @@ def test_a_finding_is_immutable():
 
     with pytest.raises(AttributeError):
         finding.text = "changed"
+
+
+# -- how it renders ----------------------------------------------------------------
+
+
+def _squash(html: str) -> str:
+    """Collapse whitespace before matching.
+
+    The panel's prose wraps at 80 columns, so a phrase that reads as one line in
+    the file arrives with a newline and eight spaces in the middle of it. A test
+    that fails on the line width rather than on the wording is a test that
+    punishes editing the template.
+    """
+    import re
+
+    return re.sub(r"\s+", " ", html)
+
+
+def _render_panel(**extra):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+    from tests.test_nav import _render
+
+    return _render("client_settings.html", exists=True, error=None, **extra)
+
+
+def test_a_client_with_no_audit_says_so_rather_than_showing_a_zero():
+    """Never audited is not a score of nothing, and must not read as one."""
+    html = _render_panel(audit=None, audited_ago="", checker_url="")
+
+    assert "No audit has been received" in html
+    assert "0/100" not in html
+
+
+def test_the_panel_says_who_measured_it():
+    """The attribution rule, in the one place it is visible to a client.
+
+    Nothing on this panel was measured here. A stale third-party claim rendered
+    as our own live check is the worst thing this integration could introduce.
+    """
+    html = _render_panel(
+        audit=link_audit(EXPORT), audited_ago="2 days ago", checker_url="https://checker.example"
+    )
+
+    squashed = _squash(html)
+
+    assert "LLM Access Checker" in squashed
+    assert "not by this tool" in squashed
+    assert "2 days ago" in squashed
+
+
+def test_the_two_scores_are_shown_apart_and_never_averaged():
+    """Ours is priority-weighted over what we checked; theirs is pillar-weighted
+    over their rubric. Merging them would invent a number neither tool computed."""
+    html = _render_panel(audit=link_audit(EXPORT), audited_ago="", checker_url="", readiness=53)
+
+    assert "32/100" in html, "the Checker's score is missing"
+    assert "53/100" in html, "our readiness is missing"
+
+
+def test_the_rubric_version_is_shown_with_the_score():
+    """The Checker refuses to trend across versions; a bare number invites it."""
+    html = _render_panel(audit=link_audit(EXPORT), audited_ago="", checker_url="")
+
+    squashed = _squash(html)
+
+    assert "v4" in squashed
+    assert "not comparable" in squashed
+
+
+def test_findings_render_in_two_groups():
+    html = _render_panel(audit=link_audit(EXPORT), audited_ago="", checker_url="")
+
+    assert "What we can generate for you" in html
+    assert "What needs a developer" in html
+    assert "Content needs JavaScript." in html, "a developer finding was dropped"
+
+
+def test_an_audit_with_no_recommendations_does_not_read_as_clean():
+    """Silence from the Checker is not a pass, and saying nothing implies one."""
+    html = _render_panel(audit=link_audit({"overall_score": 70}), audited_ago="", checker_url="")
+
+    assert "not the same as a clean result" in _squash(html)

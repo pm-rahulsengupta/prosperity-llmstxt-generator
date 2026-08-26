@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     # is what the route asks, so the check cannot be written the wrong way round
     # at the call site.
     audit_webhook_token: str = ""
+    # Where the LLM Access Checker lives, so a stored audit can link back to the
+    # report it came from. Display only -- nothing is fetched from it.
+    checker_url: str = ""
 
     # ----------------------------------------------------------------------
 

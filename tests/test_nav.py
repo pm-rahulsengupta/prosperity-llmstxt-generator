@@ -372,6 +372,10 @@ def _render_context(**extra) -> dict:
         ],
         "unfinished_run_id": "",
         "unfinished": [],
+        # From `_settings_context` -- the Checker's audit, absent by default.
+        "audit": None,
+        "audited_ago": "",
+        "checker_url": "",
         # A real one: the Danger zone calls `going.summary()`, so `None` renders
         # only while no test happens to be an admin.
         "going": __import__("app.db.repo", fromlist=["ClientDeletion"]).ClientDeletion(

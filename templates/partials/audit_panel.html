@@ -1,0 +1,109 @@
+{# What the LLM Access Checker found, on the client's profile.
+
+   Two rules govern everything here.
+
+   **Nothing on this panel was measured by this tool.** It is a second opinion
+   from a second instrument, and it is labelled as one throughout -- the same
+   line `probe_decided` draws between a probe result and our own bookkeeping,
+   applied to a second source. A stale third-party claim rendered as our own
+   live check is the worst thing this integration could introduce.
+
+   **The two scores are never merged.** Ours is priority-weighted over the
+   components we checked; theirs is pillar-weighted over their own rubric. They
+   are different measurements wearing the same unit, which is exactly what the
+   Checker's own methodology says about its rubric versions. So they sit apart,
+   each with its source and its date, and the panel never averages them. #}
+
+<div class="panel">
+    <div class="spread">
+        <h2>AI access audit</h2>
+        {% if audit and checker_url %}
+        <a class="button" href="{{ checker_url }}" target="_blank" rel="noopener">
+            Open in the Checker
+        </a>
+        {% endif %}
+    </div>
+
+    {% if not audit %}
+    {# Never audited is not a score of zero, and must not read as one. #}
+    <p class="muted">
+        No audit has been received for {{ domain }}. Run one in the LLM Access
+        Checker and it will appear here on its own &mdash; nothing needs copying
+        between the two tools.
+    </p>
+    {% else %}
+    <p class="muted">
+        Measured by the <strong>LLM Access Checker</strong>, not by this tool
+        {%- if audited_ago %}, {{ audited_ago }}{% endif %}.
+        {%- if audit.rubric_version %}
+        Rubric v{{ audit.rubric_version }} &mdash; scores from different rubric
+        versions are different measurements and are not comparable.
+        {%- endif %}
+    </p>
+
+    <div class="facts">
+        <div class="fact">
+            <div class="fact-key">Their score</div>
+            <div class="fact-value">
+                {% if audit.overall_score is not none %}
+                {{ audit.overall_score }}/100{% if audit.grade %} &middot; {{ audit.grade }}{% endif %}
+                {% else %}<span class="muted">Not scored</span>{% endif %}
+            </div>
+        </div>
+        <div class="fact">
+            <div class="fact-key">
+                Our readiness
+                <span class="fact-hint">A different rubric over different checks</span>
+            </div>
+            <div class="fact-value">
+                {% if readiness is not none %}{{ readiness }}/100
+                {% else %}<span class="muted">Never checked</span>{% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if audit.findings %}
+    {# The split is the point of this panel. The Checker's rubric is far wider
+       than anything this tool can generate: Schema, JS rendering, interactivity
+       and citability are 65% of its weighted score and none of them is a file
+       we produce. Showing the two groups apart is what stops the tool implying
+       it can fix everything it can see. #}
+    <h3>What we can generate for you</h3>
+    {% if audit.actionable %}
+    <ul class="notes">
+        {% for finding in audit.actionable %}
+        <li class="{{ 'error' if finding.is_error else '' }}">
+            <strong>{{ finding.pillar }}</strong> &mdash; {{ finding.text }}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">
+        Nothing in this audit is something this tool produces a file for.
+    </p>
+    {% endif %}
+
+    <h3>What needs a developer</h3>
+    {% if audit.for_developer %}
+    <p class="hint">
+        This tool cannot generate these &mdash; they are code, markup and
+        infrastructure. The wording is the Checker's own, carried over unchanged.
+    </p>
+    <ul class="notes">
+        {% for finding in audit.for_developer %}
+        <li class="{{ 'error' if finding.is_error else '' }}">
+            <strong>{{ finding.pillar }}</strong> &mdash; {{ finding.text }}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">Nothing outstanding that needs a developer.</p>
+    {% endif %}
+    {% else %}
+    <p class="muted">
+        The audit recorded no recommendations. That is not the same as a clean
+        result &mdash; check the report itself.
+    </p>
+    {% endif %}
+    {% endif %}
+</div>

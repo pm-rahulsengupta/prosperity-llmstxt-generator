@@ -58,6 +58,7 @@ from app.core.agents_doc import (
 from app.core.agents_render import render_agents_liquid, render_agents_md
 from app.core.ai_catalog import CONTENT_TYPE as CATALOG_TYPE
 from app.core.ai_catalog import build_catalog, render_catalog
+from app.core.audit_link import link_audit
 from app.core.bundle import (
     EFFORT_LABELS,
     EFFORT_OWNERS,
@@ -1443,6 +1444,9 @@ async def _settings_context(session: AsyncSession, user: User, domain: str, erro
     # queries every in-flight run -- reported one, and the delete guard refused
     # a delete the profile offered no way to unblock.
     unfinished = (await repo.unfinished_runs(session)).get(domain)
+
+    audit_row = await repo.latest_audit(session, domain)
+    audit_view = link_audit(audit_row.payload, domain=domain) if audit_row is not None else None
     return {
         "user": user,
         "domain": domain,
@@ -1456,6 +1460,13 @@ async def _settings_context(session: AsyncSession, user: User, domain: str, erro
         "answered_by": brief.answered_by,
         "embargoed_count": len(brief.embargoed),
         # -- the last check -------------------------------------------------
+        # The Checker's audit, if it has ever pushed one. `None` means never
+        # audited -- and the panel says so rather than rendering a zero, because
+        # a site nobody scored and a site that scored nothing are different
+        # findings.
+        "audit": audit_view,
+        "audited_ago": _ago(audit_row.audited_at) if audit_row is not None else "",
+        "checker_url": get_settings().checker_url,
         "readiness": readiness_from_dict(snapshot.readiness).score if snapshot else None,
         "checked_ago": _ago(snapshot.fetched_at) if snapshot else "",
         "is_stale": bool(snapshot and now - snapshot.fetched_at > timedelta(days=1)),

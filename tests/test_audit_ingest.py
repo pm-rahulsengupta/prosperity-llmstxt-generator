@@ -245,3 +245,78 @@ def test_a_json_array_is_refused(intake):
     client, _ = intake
 
     assert post(client, [PAYLOAD]).status_code == 400
+
+
+# -- the context builder actually runs ------------------------------------------
+
+
+@pytest.mark.parametrize("has_audit", [False, True])
+async def test_the_profile_context_builds_with_an_audit_and_without_one(monkeypatch, has_audit):
+    """The gap that let a missing import ship.
+
+    `_settings_context` is what renders a client's profile, and nothing called
+    it: the render tests hand templates a hand-built fixture instead. So a
+    `NameError` in it passed 1,226 tests and would have been a 500 on the page.
+    Ruff caught that one; this catches the next.
+
+    Stubbed at the repo boundary rather than with a fake session, because the
+    point is that the function runs end to end -- a session stub good enough to
+    fool eight queries would be a second implementation of the database.
+    """
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from app.core.onboarding import SiteBrief
+    from app.db import repo
+    from app.main import _settings_context
+
+    row = SimpleNamespace(payload=PAYLOAD, audited_at=datetime.now(UTC))
+
+    async def nothing(*a, **k):
+        return None
+
+    async def empty_list(*a, **k):
+        return []
+
+    async def empty_dict(*a, **k):
+        return {}
+
+    monkeypatch.setattr(repo, "load_site_config", nothing)
+    monkeypatch.setattr(repo, "load_snapshot", nothing)
+    monkeypatch.setattr(repo, "runs_for_domain", empty_list)
+    monkeypatch.setattr(repo, "list_share_links", empty_list)
+    monkeypatch.setattr(repo, "unfinished_runs", empty_dict)
+    monkeypatch.setattr(repo, "load_brief", lambda *a, **k: _coro(SiteBrief()))
+    monkeypatch.setattr(repo, "preview_client_deletion", lambda *a, **k: _coro(_deletion()))
+    monkeypatch.setattr(repo, "latest_audit", lambda *a, **k: _coro(row if has_audit else None))
+
+    context = await _settings_context(
+        None, SimpleNamespace(email="a@b.c", is_admin=True), "x.example", None
+    )
+
+    assert (context["audit"] is not None) is has_audit
+    if has_audit:
+        assert context["audit"].overall_score == 32
+        assert context["audited_ago"]
+
+
+async def _coro(value):
+    return value
+
+
+def _deletion():
+    from app.db.repo import ClientDeletion
+
+    return ClientDeletion(
+        domain="x.example",
+        runs=0,
+        pages=0,
+        marks=0,
+        metric_rows=0,
+        snapshots=0,
+        edits=0,
+        spend_rows=0,
+        share_links=0,
+        audits=0,
+        config=0,
+    )
