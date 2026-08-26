@@ -43,7 +43,7 @@
     <h2>Where each group stands</h2>
     <div class="table-scroll">
         <table>
-            <thead><tr><th>Group</th><th class="num" colspan="4">Components</th></tr></thead>
+            <thead><tr><th>Group</th><th class="num" colspan="2">Components</th></tr></thead>
             <tbody>
             {% for family, family_label, counts in family_rows %}
             {% include "partials/family_summary.html" %}
@@ -64,9 +64,8 @@
             <tr>
                 <td><span class="url">{{ surface.url }}</span></td>
                 <td>
-                    <span class="pill {% if surface.state.value == 'present' %}ok{% elif surface.state.value == 'absent' %}wait{% else %}bad{% endif %}">
-                        {{ surface.state.value.replace('_', ' ') }}
-                    </span>
+                    {% set look = surface_look(surface) %}
+                    <span class="{{ look.css }}">{{ look.headline }}</span>
                 </td>
                 <td class="muted">{{ surface.content_type or surface.detail or surface.status or '' }}</td>
             </tr>

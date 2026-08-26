@@ -3,19 +3,35 @@
    Written once because the family tabs, the client checklist and the developer
    handover must agree about what is done. Three templates saying the same thing
    differently is how they come to disagree. #}
+{# The chip reports the CLIENT'S SITE, never our bundle.
+
+   It used to report `status.state.value` directly, so a file we had generated
+   and they had not published read as "ready" in a positive lime chip, with the
+   404 in small grey type underneath. The tab said one thing and the readiness
+   score said the opposite about the same file. `look` collapses that to the
+   question a reader is actually asking. #}
+{% set look = component_look(status) %}
 <div class="component {{ status.state.value }}">
     <div class="spread">
         <h4>
             {{ status.component.title }}
-            <span class="pill {% if status.state.value == 'live' %}ok{% elif status.state.value == 'ready' %}wait{% elif status.state.value == 'not_applicable' %}run{% else %}bad{% endif %}">
-                {{ status.state.value.replace('_', ' ') }}
-            </span>
+            <span class="{{ look.css }}">{{ look.headline }}</span>
         </h4>
         <span class="muted">{{ status.component.priority.value }}</span>
     </div>
 
     {% if status.component.why %}<p class="muted">{{ status.component.why }}</p>{% endif %}
-    {% if status.detail %}<p class="hint">{{ status.detail }}</p>{% endif %}
+    {# What we hold for them: the remedy, stated after the finding rather than
+       instead of it. #}
+    {% if look.holding %}<p class="holding">{{ look.holding }}</p>{% endif %}
+    {# Only a probe-decided detail is a finding about their site. `derive` also
+       writes "generated and ready to publish" and "marked done by <email>" into
+       this field, which are our bookkeeping -- and under the words "What we
+       found" they read as claims about the client. Same predicate the
+       client-facing report uses for the same reason. #}
+    {% if status.detail and status.probe_decided %}
+    <p class="hint">What we found: {{ status.detail }}</p>
+    {% endif %}
 
     {% if status.state.value == 'template' %}
     <p class="notice bad">
@@ -23,7 +39,9 @@
         Stand the service up, enter its URL in onboarding, and this becomes a real
         file once it verifies.
     </p>
-    <pre class="doc template">{{ status.template_body }}</pre>
+    {# Its own scroll container. This block is routinely wider than the card, and
+       with `overflow-x: visible` it pushed the whole page sideways. #}
+    <div class="doc-scroll"><pre class="doc template">{{ status.template_body }}</pre></div>
     {% endif %}
 
     {% if status.publishable %}
@@ -48,7 +66,11 @@
     {# Spec compliance of what we generated. Shown only where a rule set exists:
        three artifacts have none written, and rendering silence as a pass would
        be the inflation the whole engine exists to prevent. #}
-    {% if status.publishable and reports is defined %}
+    {# Not gated on `publishable`. That requires READY, so publishing the file
+       made its score vanish -- and a number that disappears reads as "it
+       passed". The score describes the file we generated, which still exists
+       and is still worth judging once it is live. #}
+    {% if status.component.artifact and reports is defined %}
         {% set report = reports.get(status.key) %}
         {% if report %}
         <p class="hint">

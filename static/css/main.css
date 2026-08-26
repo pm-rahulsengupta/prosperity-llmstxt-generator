@@ -1213,3 +1213,29 @@ pre.doc.template {
     .c-guide > summary { list-style: none; font-weight: 500; color: var(--pm-ink); }
     .c-guide[open], .c-guide { break-inside: avoid; page-break-inside: avoid; }
 }
+
+/* -- what we hold, under what the site does ---------------------------------
+   The remedy, stated after the finding. Deliberately prose rather than a second
+   chip: two chips side by side invite the reader to weigh them against each
+   other, when one is the finding and the other is only what we can do about it. */
+.holding {
+    margin: 0.4rem 0 0;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink-soft);
+}
+
+/* A generated template is routinely wider than the card. With `overflow-x:
+   visible` it pushed the whole page body sideways -- measured at 1996px of
+   content in a 1430px box. Same treatment `.table-scroll` already gives wide
+   tables: it scrolls inside its own container and the page never does. */
+.doc-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+}
+.doc-scroll > pre { margin: 0; }
+
+/* A neutral chip for "not applicable": no action implied, so it should not
+   borrow the colour of anything that wants one. `.pill` with no modifier is
+   already this; naming it stops the next person reaching for `run`. */
+.pill.quiet { background: var(--pm-sunken); color: var(--pm-ink-muted); }

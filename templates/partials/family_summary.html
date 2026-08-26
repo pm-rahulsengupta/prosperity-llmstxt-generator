@@ -5,8 +5,14 @@
    render, so this cannot disagree with what a tab shows. #}
 <tr>
     <td><a href="/sites/{{ domain }}/family/{{ family.value }}">{{ family_label }}</a></td>
-    <td class="num">{% if counts.live %}<span class="pill ok">{{ counts.live }} live</span>{% endif %}</td>
-    <td class="num">{% if counts.ready %}<span class="pill wait">{{ counts.ready }} ready</span>{% endif %}</td>
-    <td class="num">{% if counts.template %}<span class="pill run">{{ counts.template }} template</span>{% endif %}</td>
-    <td class="num">{% if counts.missing %}<span class="pill bad">{{ counts.missing }} missing</span>{% endif %}</td>
+    {# Two columns, not four. The old row split "not published" across three
+       chips in three colours -- ready lime, template teal, missing red -- which
+       made a family of three unpublished files look like three different
+       situations. It is one situation with three remedies, and the remedy
+       belongs on the card, not in a summary row. #}
+    <td class="num">{% if counts.live %}<span class="pill ok">{{ counts.live }} published</span>{% endif %}</td>
+    <td class="num">
+        {% set outstanding = counts.total - counts.live %}
+        {% if outstanding %}<span class="pill bad">{{ outstanding }} not published</span>{% endif %}
+    </td>
 </tr>

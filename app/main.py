@@ -83,6 +83,7 @@ from app.core.onboarding import (
     split_embargoed,
 )
 from app.core.pipeline import rebuild
+from app.core.presentation import look_for, surface_look
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import (
     PATTERN_AGENCY,
@@ -298,6 +299,11 @@ templates.env.globals["usd"] = usd
 # route must remember: sixteen routes render templates, and the one that forgot
 # would 500 on a page that has nothing to do with navigation.
 templates.env.globals["build_nav"] = build_nav
+# How a state reads and what colour it wears, decided in one place. Registered
+# as globals for the same reason `build_nav` is: `component.html` renders on
+# eight pages, and a context key one route forgets is a 500 on that page only.
+templates.env.globals["component_look"] = look_for
+templates.env.globals["surface_look"] = surface_look
 
 
 def _asset_version(name: str) -> str:
