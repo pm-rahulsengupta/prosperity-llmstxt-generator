@@ -265,3 +265,21 @@ def test_the_post_checks_too_rather_than_trusting_the_page():
 def test_stopping_from_the_delete_page_returns_to_it():
     """So the delete an operator came to do is one click away once it is safe."""
     assert 'name="back" value="/sites/{{ domain }}/delete"' in markup("client_delete.html")
+
+
+def test_the_profile_reads_every_in_flight_run_not_only_the_ones_it_lists():
+    """It scanned the five rows it renders, which is not the same question.
+
+    Measured live: prosperitymedia.com.au had a run Queued for five days sitting
+    *sixth*, so the profile found nothing while the client list -- which queries
+    every in-flight run -- reported one, and the delete guard refused a delete
+    the profile offered no way to unblock.
+    """
+    import inspect
+
+    from app.main import _settings_context
+
+    source = inspect.getsource(_settings_context)
+
+    assert "repo.unfinished_runs(session)" in source
+    assert "for r in runs if not" not in source, "back to scanning the rendered page"

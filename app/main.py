@@ -1436,7 +1436,12 @@ async def _settings_context(session: AsyncSession, user: User, domain: str, erro
     brief = await repo.load_brief(session, domain)
     now = datetime.now(UTC)
 
-    unfinished = next((r for r in runs if not RunStatus(r.status).is_terminal), None)
+    # From the whole table, not from the five rows shown below it. Measured on
+    # the live instance: prosperitymedia.com.au had a run Queued for five days
+    # sitting *sixth*, so this found nothing while the client list -- which
+    # queries every in-flight run -- reported one, and the delete guard refused
+    # a delete the profile offered no way to unblock.
+    unfinished = (await repo.unfinished_runs(session)).get(domain)
     return {
         "user": user,
         "domain": domain,

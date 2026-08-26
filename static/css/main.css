@@ -640,7 +640,13 @@ details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
     border-bottom: 1px solid var(--pm-rule);
 }
 
+/* `flex: 1 1 auto` on the key and `0 1 auto` on the value, not `0 0 auto`.
+   With a rigid value a long one -- "Brief answered by
+   rahul.sengupta@prosperitymedia.com.au" -- took the whole row and squeezed the
+   label column to about 60px, which broke its hint into five one-word lines. */
 .fact-key {
+    flex: 1 1 auto;
+    min-width: 6rem;
     font-size: var(--pm-2xs);
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -661,11 +667,17 @@ details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
 }
 
 .fact-value {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
     text-align: right;
     font-size: var(--pm-sm);
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
 }
+
+/* A qualifier on the value ("by <whoever answered>") sits under it rather than
+   beside it, so an email address cannot push the label out of the row. */
+.fact-value .hint { display: block; margin-top: 0.15rem; }
 
 /* Where you are, with every ancestor clickable. The client is the root, because
    that is the thing every one of these pages is about. */
