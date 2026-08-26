@@ -1,12 +1,38 @@
 {% extends "base.html" %}
-{% block title %}Settings{% endblock %}
+{% block title %}{{ label or domain }} · Profile{% endblock %}
+
+{# The client profile.
+
+   This was "Settings": a name field, two links, the share table and a delete
+   form. It is the page an operator opens to answer "what state is this client
+   in, and what can I do about it" -- so every area now carries its *current
+   state* beside its control. A page of controls with no state beside them is
+   how you re-run a crawl that is already running.
+
+   The shape is borrowed from GEO Tracker's settings pages: a breadcrumb whose
+   root is the client, then cards of labelled rows with the value right-aligned,
+   and the honest caveat stated in the panel rather than left for the operator to
+   discover. #}
+
+{% macro fact(label, hint="") %}
+<div class="fact">
+    <div class="fact-key">
+        {{ label }}
+        {% if hint %}<span class="fact-hint">{{ hint }}</span>{% endif %}
+    </div>
+    <div class="fact-value">{{ caller() }}</div>
+</div>
+{% endmacro %}
 
 {% block content %}
 <div class="panel">
-    <div class="spread">
-        <h1>Settings</h1>
-        <span class="muted">{{ domain }}</span>
-    </div>
+    <p class="crumbs">
+        <a href="/clients">All clients</a> &rsaquo;
+        <a href="/sites/{{ domain }}">{{ label or domain }}</a> &rsaquo;
+        <span aria-current="page">Profile</span>
+    </p>
+    <h1>{{ label or domain }}</h1>
+    <p class="muted">{{ domain }}</p>
     {% if not exists %}
     <p class="notice">
         {{ domain }} is not on file yet. Saving a name here will add it.
@@ -14,6 +40,59 @@
     {% endif %}
 </div>
 
+{# -- state, in one block ------------------------------------------------- #}
+<div class="panel">
+    <h2>Where this client is</h2>
+    <div class="facts">
+        {% call fact("Onboarded", "The brief decides which components apply") %}
+            {% if onboarded %}
+            <span class="pill ok">Brief answered</span>
+            {% if answered_by %}<span class="hint">by {{ answered_by }}</span>{% endif %}
+            {% else %}
+            <span class="pill bad">Not onboarded</span>
+            {% endif %}
+        {% endcall %}
+        {% call fact("Readiness", "From the last stored check, not from a fresh one") %}
+            {% if readiness is not none %}
+            {{ readiness }}/100
+            {% else %}
+            <span class="muted">Never checked</span>
+            {% endif %}
+        {% endcall %}
+        {% call fact("Last checked") %}
+            {% if checked_ago %}
+            {{ checked_ago }}{% if is_stale %} <span class="pill wait">stale</span>{% endif %}
+            {% else %}
+            <span class="muted">Never</span>
+            {% endif %}
+        {% endcall %}
+        {% call fact("Withheld pages", "Never crawled, never named in any generated file") %}
+            {% if embargoed_count %}
+            {{ embargoed_count }} pattern{{ '' if embargoed_count == 1 else 's' }}
+            {% else %}
+            <span class="muted">None</span>
+            {% endif %}
+        {% endcall %}
+        {% call fact("Added") %}
+            {% if added_ago %}{{ added_ago }}{% else %}<span class="muted">&mdash;</span>{% endif %}
+        {% endcall %}
+    </div>
+    <div class="button-row">
+        <a class="button" href="/sites/{{ domain }}">Overview</a>
+        <a class="button" href="/sites/{{ domain }}/brief">
+            {{ "Open the brief" if onboarded else "Start onboarding" }}
+        </a>
+        <form method="post" action="/sites/{{ domain }}/refresh" class="inline-form">
+            <button type="submit">Check the site now</button>
+        </form>
+    </div>
+    <p class="hint">
+        Checking reads the client's site directly and stores the result. It is the
+        only control on this page that touches their server.
+    </p>
+</div>
+
+{# -- name ---------------------------------------------------------------- #}
 <div class="panel">
     <h2>Name</h2>
     <form method="post" action="/sites/{{ domain }}/settings">
@@ -34,27 +113,74 @@
     </form>
 </div>
 
+{# -- crawls -------------------------------------------------------------- #}
 <div class="panel">
-    <h2>Onboarding</h2>
-    <p class="muted">
-        The brief decides which components apply, what the site is for, and what
-        must never be published.
-    </p>
-    <div class="row">
-        <a class="button" href="/sites/{{ domain }}/brief">Open the brief</a>
-        <a class="button" href="/sites/{{ domain }}">Back to overview</a>
+    <div class="spread">
+        <h2>Crawls</h2>
+        <div class="button-row">
+            <a class="button" href="/imports/screaming-frog">Import a crawl</a>
+            <a class="button" href="/">Start a run</a>
+        </div>
     </div>
+    {% if unfinished_run_id %}
+    {# Stated here rather than left to be inferred from the table below. A run
+       that is still working is the one fact on this page that changes what an
+       operator should do next -- starting a second run while one is in flight
+       spends twice for one answer. #}
+    <p class="notice">
+        A run is still working. Starting another will crawl the same site twice.
+        <a href="/runs/{{ unfinished_run_id }}">Open it</a>, or stop it here.
+    </p>
+    <form method="post" action="/runs/{{ unfinished_run_id }}/cancel">
+        <input type="hidden" name="back" value="/sites/{{ domain }}/settings">
+        <button class="ghost" type="submit">Stop this crawl</button>
+    </form>
+    <p class="hint">
+        The stage now in flight finishes &mdash; interrupting a crawl or a batch of
+        LLM calls mid-way leaves worse state than it saves. What stopping
+        guarantees is that no further stage begins.
+    </p>
+    {% endif %}
+    {% if runs %}
+    <div class="table-scroll">
+        <table>
+            <thead>
+                <tr>
+                    <th scope="col">Started</th><th scope="col">State</th>
+                    <th scope="col" class="num">Page budget</th><th scope="col">By</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for run in runs %}
+            {% set look = run_look(run.status) %}
+            <tr>
+                <td><a href="/runs/{{ run.id }}">{{ run.started_ago }}</a></td>
+                <td><span class="{{ look.css }}">{{ look.headline }}</span></td>
+                <td class="num">{{ run.pages or "—" }}</td>
+                <td class="muted">{{ run.by or "—" }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="muted">No crawl has been run for this client.</p>
+    {% endif %}
 </div>
 
 {% if share_enabled %}
 <div class="panel">
-    <h2>Shared links</h2>
+    <div class="spread">
+        <h2>Shared links</h2>
+        <a class="button" href="/sites/{{ domain }}/client/report">Preview what the client sees</a>
+    </div>
     <p class="muted">
         Links you have sent to this client. The URL itself is shown only once, when
         it is created &mdash; it is stored as a one-way hash, so there is no way to
         show it again. If one is lost, revoke it and make another.
     </p>
     {% if links %}
+    <div class="table-scroll">
     <table>
         <thead>
             <tr>
@@ -93,6 +219,7 @@
         {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
     <p class="muted">No links have been created for this client.</p>
     {% endif %}
@@ -100,36 +227,16 @@
 {% endif %}
 
 {% if user and user.is_admin %}
-
 <div class="panel danger-zone">
     <h2>Danger zone</h2>
-    {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+    {# The confirmation itself lives on its own page, so the client list can
+       offer a delete rather than only point at one. Two copies of "show exactly
+       what is about to be destroyed" would be two things to keep in step. #}
     <p class="muted">
         Deleting {{ domain }} removes <strong>{{ going.summary() }}</strong>, and
         cannot be undone.
     </p>
-    {% if going.total %}
-    <div class="table-scroll">
-        <table>
-            <thead><tr><th>What goes</th><th class="num">Rows</th></tr></thead>
-            <tbody>
-            <tr><td>Runs</td><td class="num">{{ going.runs }}</td></tr>
-            <tr><td>Crawled pages</td><td class="num">{{ going.pages }}</td></tr>
-            <tr><td>Manual marks</td><td class="num">{{ going.marks }}</td></tr>
-            <tr><td>Search-metric rows</td><td class="num">{{ going.metric_rows }}</td></tr>
-            <tr><td>Stored checks</td><td class="num">{{ going.snapshots }}</td></tr>
-            <tr><td>Client record</td><td class="num">{{ going.config }}</td></tr>
-            </tbody>
-        </table>
-    </div>
-    {% endif %}
-    <form method="post" action="/sites/{{ domain }}/delete">
-        <div class="field">
-            <label for="confirm">Type <code>{{ domain }}</code> to confirm</label>
-            <input type="text" id="confirm" name="confirm" autocomplete="off" required>
-        </div>
-        <button class="destructive" type="submit">Delete this client and all its data</button>
-    </form>
+    <a class="button destructive" href="/sites/{{ domain }}/delete">Delete this client</a>
 </div>
 {% endif %}
 {% endblock %}

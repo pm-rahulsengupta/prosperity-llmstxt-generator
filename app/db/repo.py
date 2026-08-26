@@ -1020,6 +1020,40 @@ async def latest_complete_run(session: AsyncSession, domain: str) -> Run | None:
     return result.scalar_one_or_none()
 
 
+#: Everything that is not `COMPLETE`, `FAILED` or `CANCELLED`. Derived from the
+#: enum rather than listed, so a stage added to `RunStatus` is in flight here the
+#: moment it exists -- a hand-written list would have quietly stopped counting it.
+IN_FLIGHT = [s for s in RunStatus if not s.is_terminal]
+
+
+async def unfinished_runs(session: AsyncSession) -> dict[str, Run]:
+    """The run still working for each domain, keyed by domain.
+
+    One query for the whole client list rather than one per row: the list is the
+    page an operator lands on, and "is anything running" is the question it
+    exists to answer.
+
+    A domain can hold more than one unfinished run -- nothing stops a second
+    being started, and a crashed worker leaves the first behind forever. The most
+    recent wins, which is the one an operator means when they say "the run".
+    """
+    result = await session.execute(
+        select(Run).where(Run.status.in_(IN_FLIGHT)).order_by(desc(Run.created_at))
+    )
+    latest: dict[str, Run] = {}
+    for run in result.scalars():
+        latest.setdefault(run.domain, run)
+    return latest
+
+
+async def runs_for_domain(session: AsyncSession, domain: str, limit: int = 20) -> list[Run]:
+    """This client's runs, newest first."""
+    result = await session.execute(
+        select(Run).where(Run.domain == domain).order_by(desc(Run.created_at)).limit(limit)
+    )
+    return list(result.scalars())
+
+
 async def load_marks(session: AsyncSession, domain: str) -> dict[str, str]:
     """Component key -> who marked it done."""
     result = await session.execute(

@@ -83,7 +83,7 @@ from app.core.onboarding import (
     split_embargoed,
 )
 from app.core.pipeline import rebuild
-from app.core.presentation import look_for, surface_look
+from app.core.presentation import look_for, run_look, surface_look
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import (
     PATTERN_AGENCY,
@@ -304,6 +304,9 @@ templates.env.globals["build_nav"] = build_nav
 # eight pages, and a context key one route forgets is a 500 on that page only.
 templates.env.globals["component_look"] = look_for
 templates.env.globals["surface_look"] = surface_look
+# A run's status was spelled out inline in three templates, each deriving its
+# own pill colour, and one of them showed the enum's own wording.
+templates.env.globals["run_look"] = run_look
 
 
 def _asset_version(name: str) -> str:
@@ -1245,6 +1248,10 @@ async def clients_page(
     Reads only stored rows -- no client's server is touched by loading this,
     however many of them there are.
     """
+    # One query for every domain rather than one per row. A crashed worker leaves
+    # a run in flight forever, and the client list is where that is noticed.
+    running = await repo.unfinished_runs(session)
+
     rows = []
     for config in await repo.list_site_configs(session):
         snapshot = await repo.load_snapshot(session, config.domain)
@@ -1255,12 +1262,22 @@ async def clients_page(
                 "checked_ago": _ago(snapshot.fetched_at),
                 "is_stale": datetime.now(UTC) - snapshot.fetched_at > timedelta(days=1),
             }
+        run = running.get(config.domain)
         rows.append(
             {
                 "domain": config.domain,
                 "label": config.label,
                 "onboarded": bool(config.brief),
                 "snapshot": summary,
+                "run": (
+                    {
+                        "id": str(run.id),
+                        "status": run.status,
+                        "started_ago": _ago(run.created_at),
+                    }
+                    if run is not None
+                    else None
+                ),
             }
         )
 
@@ -1284,9 +1301,32 @@ async def create_client(
     request: Request,
     site_url: str = Form(...),
     label: str = Form(""),
+    # False, not True. An unchecked box sends *nothing*, so a `Form(True)` default
+    # would make unticking it do nothing at all. The default an operator sees is
+    # the `checked` attribute on the input; the default for a request that omits
+    # the field entirely is "do not touch their server", which is the safe one.
+    check_now: bool = Form(False),
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
+    """Add a client, check their site, and start onboarding.
+
+    The check is on by default. Without it a brand-new client had no snapshot, so
+    the overview, the checklist and the handover all rendered the "nobody has
+    checked this yet" page, and the profile showed "Never checked" beside every
+    number -- a client added and then left looked identical to one whose site
+    could not be reached. Probing costs the client's server about thirty requests
+    and buys every one of those pages something to say.
+
+    Synchronous for the same reason `refresh_client` is: the worker runs at
+    concurrency 1, so a queued check can sit behind an in-flight crawl for
+    minutes, and this is a form somebody is watching.
+
+    **A failed check must not lose the client.** The config is committed first
+    and the probe runs in its own block, so an unreachable site, a WAF or a
+    timeout leaves the client on file with no snapshot -- exactly the state the
+    "Check the site now" button on their profile exists to fix.
+    """
     try:
         normalised = normalise_site_url(site_url)
     except ValueError as exc:
@@ -1308,7 +1348,19 @@ async def create_client(
         label=label.strip(),
     )
     await session.commit()
-    # Straight into the brief, which is where onboarding actually happens.
+
+    if check_now:
+        try:
+            await _check_and_store(session, normalised, domain, user.email)
+            await session.commit()
+        except Exception:
+            # Logged, not raised. The client is already saved and the brief is
+            # still the right next screen; their profile will say the site has
+            # never been checked, which is true.
+            logger.exception("first check of %s failed; the client was still added", domain)
+            await session.rollback()
+
+    # Then straight into onboarding, which is where the brief is answered.
     return RedirectResponse(f"/sites/{domain}/brief", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1370,19 +1422,54 @@ async def refresh_client(
 
 
 async def _settings_context(session: AsyncSession, user: User, domain: str, error: str | None):
+    """Everything true about one client, in one place.
+
+    This was four fields and a delete form. It is the profile now -- the page an
+    operator opens to answer "what state is this client in and what can I do
+    about it" -- so it carries each area's *current state* beside its control.
+    A page of controls with no state beside them is how you end up re-running a
+    crawl that is already running.
+    """
     config = await repo.load_site_config(session, domain)
+    snapshot = await repo.load_snapshot(session, domain)
+    runs = await repo.runs_for_domain(session, domain, limit=5)
+    brief = await repo.load_brief(session, domain)
+    now = datetime.now(UTC)
+
+    unfinished = next((r for r in runs if not RunStatus(r.status).is_terminal), None)
     return {
         "user": user,
         "domain": domain,
         "label": config.label if config else "",
         "exists": config is not None,
+        "added_ago": _ago(config.created_at) if config is not None else "",
         "going": await repo.preview_client_deletion(session, domain),
         "error": error,
+        # -- onboarding -----------------------------------------------------
+        "onboarded": bool(config.brief) if config is not None else False,
+        "answered_by": brief.answered_by,
+        "embargoed_count": len(brief.embargoed),
+        # -- the last check -------------------------------------------------
+        "readiness": readiness_from_dict(snapshot.readiness).score if snapshot else None,
+        "checked_ago": _ago(snapshot.fetched_at) if snapshot else "",
+        "is_stale": bool(snapshot and now - snapshot.fetched_at > timedelta(days=1)),
+        # -- crawls ---------------------------------------------------------
+        "runs": [
+            {
+                "id": str(run.id),
+                "status": run.status,
+                "started_ago": _ago(run.created_at),
+                "pages": run.max_pages,
+                "by": run.created_by,
+            }
+            for run in runs
+        ],
+        "unfinished_run_id": str(unfinished.id) if unfinished is not None else "",
         "share_enabled": get_settings().share_links_enabled,
         # Never anything derived from a token: the row's id is what the revoke
         # form posts, and the label is the operator's own note.
         "links": await repo.list_share_links(session, domain),
-        "now": datetime.now(UTC),
+        "now": now,
     }
 
 
@@ -1418,6 +1505,31 @@ async def save_client_settings(
     return RedirectResponse(f"/sites/{domain}/settings", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@app.get("/sites/{domain}/delete", response_class=HTMLResponse)
+async def confirm_delete_client(
+    request: Request,
+    domain: str,
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """What deleting this client would destroy, before anything is destroyed.
+
+    A page rather than a dialog: the counts come from the same function the
+    delete itself calls, so what an operator confirms and what actually goes
+    cannot disagree, and a browser back-button lands somewhere harmless.
+    """
+    return templates.TemplateResponse(
+        request,
+        "client_delete.html",
+        {
+            "user": user,
+            "domain": domain,
+            "going": await repo.preview_client_deletion(session, domain),
+            "error": None,
+        },
+    )
+
+
 @app.post("/sites/{domain}/delete")
 async def delete_client_route(
     request: Request,
@@ -1433,11 +1545,16 @@ async def delete_client_route(
     """
     form = await request.form()
     if str(form.get("confirm") or "").strip().lower() != domain.lower():
-        context = await _settings_context(
-            session, user, domain, f"Type {domain} to confirm. Nothing was deleted."
-        )
         return templates.TemplateResponse(
-            request, "client_settings.html", context, status_code=status.HTTP_400_BAD_REQUEST
+            request,
+            "client_delete.html",
+            {
+                "user": user,
+                "domain": domain,
+                "going": await repo.preview_client_deletion(session, domain),
+                "error": f"Type {domain} to confirm. Nothing was deleted.",
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
         )
 
     removed = await repo.delete_client(session, domain)
@@ -2705,9 +2822,29 @@ async def rerun(
     return RedirectResponse(f"/runs/{new_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
+def _back_to(candidate: str, fallback: str) -> str:
+    r"""A caller-supplied return path, or the fallback if it is not one.
+
+    A form field that ends up in a `Location` header is an open redirect unless
+    something checks it. Only a path on this origin is allowed: it must start
+    with a single `/`, which rules out `https://evil.example` and the
+    protocol-relative `//evil.example` that a lone "starts with /" test lets
+    straight through.
+
+    The backslash matters as much as the slash. Browsers normalise `\` to `/` in
+    the authority position, so `/\evil.example` is scheme-relative to Chrome and
+    Firefox while passing any check that only looks for `//`.
+    """
+    candidate = (candidate or "").strip()
+    if candidate.startswith("/") and candidate[1:2] not in ("/", "\\"):
+        return candidate
+    return fallback
+
+
 @app.post("/runs/{run_id}/cancel")
 async def cancel_run(
     run_id: UUID,
+    back: str = Form(""),
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2717,6 +2854,10 @@ async def cancel_run(
     400 pages or a batch of LLM calls runs to completion, because interrupting
     one leaves half-written state that is worse than the work saved. What
     stopping guarantees is that no further expensive stage begins.
+
+    `back` exists because this is reachable from the client list now, and
+    bouncing an operator to a run detail page they did not ask for loses their
+    place in the list they were working through.
     """
     run = await repo.get_run(session, run_id)
     if run is None:
@@ -2727,7 +2868,9 @@ async def cancel_run(
     await repo.set_status(session, run, RunStatus.CANCELLED)
     await repo.record_event(session, run_id, "cancelled", f"Cancelled by {user.email}")
     await session.commit()
-    return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(
+        _back_to(back, f"/runs/{run_id}"), status_code=status.HTTP_303_SEE_OTHER
+    )
 
 
 @app.post("/runs/{run_id}/delete")

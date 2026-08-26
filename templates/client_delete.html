@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ domain }}{% endblock %}
+
+{# The one place a client is deleted from.
+
+   This was an inline form at the bottom of the settings page, which meant the
+   client list could only link *towards* a delete rather than offer one. As its
+   own page both surfaces point here, so "show exactly what is about to be
+   destroyed" has one implementation instead of two that can drift apart.
+
+   The counts come from `preview_client_deletion`, which is the same function
+   `delete_client` calls before it removes anything -- what is confirmed here and
+   what actually goes cannot disagree. #}
+
+{% block content %}
+<div class="panel">
+    <p class="crumbs">
+        <a href="/clients">All clients</a> &rsaquo;
+        <a href="/sites/{{ domain }}">{{ domain }}</a> &rsaquo;
+        <span aria-current="page">Delete</span>
+    </p>
+    <h1>Delete {{ domain }}?</h1>
+    <p class="muted">
+        This removes <strong>{{ going.summary() }}</strong>. There is no undo and no
+        soft delete &mdash; the rows are gone, not hidden.
+    </p>
+    {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+</div>
+
+<div class="panel">
+    <h2>What goes</h2>
+    {% if going.total %}
+    <div class="table-scroll">
+        <table>
+            <thead><tr><th>What goes</th><th class="num">Rows</th></tr></thead>
+            <tbody>
+            <tr><td>Crawl runs</td><td class="num">{{ going.runs }}</td></tr>
+            <tr><td>Crawled pages</td><td class="num">{{ going.pages }}</td></tr>
+            <tr><td>Manual marks</td><td class="num">{{ going.marks }}</td></tr>
+            <tr><td>Search-metric rows</td><td class="num">{{ going.metric_rows }}</td></tr>
+            <tr><td>Stored checks</td><td class="num">{{ going.snapshots }}</td></tr>
+            <tr><td>Saved refinements</td><td class="num">{{ going.edits }}</td></tr>
+            <tr><td>Recorded LLM calls</td><td class="num">{{ going.spend_rows }}</td></tr>
+            <tr><td>Client share links</td><td class="num">{{ going.share_links }}</td></tr>
+            <tr><td>Client record</td><td class="num">{{ going.config }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p class="hint">
+        Any share link you have already sent this client stops working the moment
+        this is done.
+    </p>
+    {% else %}
+    <p class="muted">
+        Nothing is stored for {{ domain }}. Deleting it removes the name and
+        nothing else.
+    </p>
+    {% endif %}
+</div>
+
+<div class="panel danger-zone">
+    <h2>Confirm</h2>
+    <form method="post" action="/sites/{{ domain }}/delete">
+        <div class="field">
+            {# The domain rather than a generic word, so an operator with several
+               clients open cannot destroy the wrong one by muscle memory. #}
+            <label for="confirm">Type <code>{{ domain }}</code> to confirm</label>
+            <input type="text" id="confirm" name="confirm" autocomplete="off"
+                   spellcheck="false" required>
+        </div>
+        <div class="button-row">
+            <button class="destructive" type="submit">Delete {{ domain }} permanently</button>
+            <a class="button" href="/clients">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

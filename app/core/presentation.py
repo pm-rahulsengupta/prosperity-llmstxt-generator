@@ -40,10 +40,12 @@ from enum import StrEnum
 from app.core.components import ComponentState
 
 __all__ = [
+    "RUN_LOOK",
     "SURFACE_LOOK",
     "Look",
     "Tone",
     "look_for",
+    "run_look",
     "surface_look",
 ]
 
@@ -141,3 +143,36 @@ SURFACE_LOOK: dict[str, Look] = {
 def surface_look(surface) -> Look:
     value = getattr(getattr(surface, "state", None), "value", "") or ""
     return SURFACE_LOOK.get(value, Look(value.replace("_", " ") or "unknown", Tone.BUSY))
+
+
+#: What a crawl run is doing, in words rather than in the enum's own spelling.
+#:
+#: `run.html` and `index.html` each derived this inline, from the raw value with
+#: its underscores swapped for spaces -- so a run sat at "awaiting review", which
+#: names the state of the machine rather than telling the operator that *they*
+#: are the thing it is waiting for.
+#:
+#: Lime (`BUSY`) is right for every non-terminal state here: this is the
+#: in-progress meaning the colour was reserved for.
+RUN_LOOK: dict[str, Look] = {
+    "pending": Look("Queued", Tone.BUSY, "Waiting for a worker to pick it up."),
+    "preflight": Look(
+        "Sizing the site", Tone.BUSY, "Reading the sitemap before anything is spent."
+    ),
+    "awaiting_review": Look(
+        "Waiting for you", Tone.BUSY, "Nothing is spent until the crawl plan is approved."
+    ),
+    "crawling": Look("Crawling", Tone.BUSY),
+    "triaging": Look("Choosing pages", Tone.BUSY),
+    "summarising": Look("Summarising", Tone.BUSY),
+    "assembling": Look("Assembling files", Tone.BUSY),
+    "complete": Look("Finished", Tone.GOOD),
+    "failed": Look("Failed", Tone.BAD),
+    "cancelled": Look("Stopped", Tone.QUIET, "Stopped before it finished."),
+}
+
+
+def run_look(status) -> Look:
+    """How a run's status reads. Accepts the enum or the stored string."""
+    value = getattr(status, "value", status) or ""
+    return RUN_LOOK.get(str(value), Look(str(value).replace("_", " ") or "unknown", Tone.BUSY))

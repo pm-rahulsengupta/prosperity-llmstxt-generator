@@ -355,6 +355,22 @@ def _render_context(**extra) -> dict:
         "links": [],
         "now": __import__("datetime").datetime.now(__import__("datetime").UTC),
         "exists": True,
+        # The client profile: every area's state beside its control.
+        "added_ago": "2 days ago",
+        "onboarded": True,
+        "answered_by": "a@b.c",
+        "embargoed_count": 0,
+        "readiness": 53,
+        "runs": [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "status": "complete",
+                "started_ago": "3 hours ago",
+                "pages": 200,
+                "by": "a@b.c",
+            }
+        ],
+        "unfinished_run_id": "",
         # A real one: the Danger zone calls `going.summary()`, so `None` renders
         # only while no test happens to be an admin.
         "going": __import__("app.db.repo", fromlist=["ClientDeletion"]).ClientDeletion(
@@ -620,8 +636,9 @@ def test_the_client_list_renders_with_and_without_clients():
                 "label": "Big Client",
                 "onboarded": True,
                 "snapshot": {"score": 53, "checked_ago": "2 hours ago", "is_stale": False},
+                "run": None,
             },
-            {"domain": "y.example", "label": "", "onboarded": False, "snapshot": None},
+            {"domain": "y.example", "label": "", "onboarded": False, "snapshot": None, "run": None},
         ],
     )
     assert "Big Client" in filled
@@ -634,7 +651,9 @@ def test_a_client_never_checked_says_so_rather_than_showing_a_zero():
     html = _render(
         "clients.html",
         deleted="",
-        rows=[{"domain": "y.example", "label": "", "onboarded": False, "snapshot": None}],
+        rows=[
+            {"domain": "y.example", "label": "", "onboarded": False, "snapshot": None, "run": None}
+        ],
     )
 
     assert "never checked" in html
@@ -649,57 +668,154 @@ def test_the_unchecked_page_offers_a_check_rather_than_running_one():
     assert "Checking reads about thirty pages" in html
 
 
-def test_the_settings_page_states_what_a_delete_would_remove():
-    """A confirm screen that says "are you sure" and nothing else is not consent."""
+def _going(**counts):
     from app.db.repo import ClientDeletion
 
+    return ClientDeletion(
+        domain="x.example",
+        **{
+            field: counts.get(field, 0)
+            for field in (
+                "runs",
+                "pages",
+                "marks",
+                "metric_rows",
+                "snapshots",
+                "edits",
+                "spend_rows",
+                "share_links",
+                "config",
+            )
+        },
+    )
+
+
+def test_the_delete_page_states_what_it_would_remove():
+    """A confirm screen that says "are you sure" and nothing else is not consent.
+
+    The counts come from `preview_client_deletion`, which is what `delete_client`
+    itself calls -- so what is confirmed here and what actually goes cannot
+    disagree.
+    """
     html = _render(
-        "client_settings.html",
-        exists=True,
+        "client_delete.html",
         error=None,
-        going=ClientDeletion(
-            domain="x.example",
-            runs=2,
-            pages=80,
-            marks=3,
-            metric_rows=412,
-            snapshots=1,
-            edits=1,
-            spend_rows=0,
-            share_links=0,
-            config=1,
-        ),
+        going=_going(runs=2, pages=80, marks=3, metric_rows=412, snapshots=1, edits=1, config=1),
     )
 
     assert "2 runs" in html and "80 crawled pages" in html and "412 search-metric rows" in html
     assert "Type <code>x.example</code> to confirm" in html
 
 
-def test_the_danger_zone_is_hidden_from_a_non_admin():
-    from app.db.repo import ClientDeletion
+def test_the_delete_page_is_the_only_place_the_confirmation_lives():
+    """One implementation of "show exactly what is about to be destroyed".
 
-    nothing = ClientDeletion(
-        domain="x.example",
-        runs=0,
-        pages=0,
-        marks=0,
-        metric_rows=0,
-        snapshots=0,
-        edits=0,
-        spend_rows=0,
-        share_links=0,
-        config=1,
+    It was inline on the profile, which is why the client list could only ever
+    link *towards* a delete. Two copies would be two things to keep in step.
+    """
+    from pathlib import Path
+
+    profile = (
+        Path(__file__).resolve().parents[1] / "templates" / "client_settings.html"
+    ).read_text(encoding="utf-8")
+
+    assert 'action="/sites/{{ domain }}/delete"' not in profile
+    assert 'href="/sites/{{ domain }}/delete"' in profile
+
+
+def test_the_client_list_offers_a_delete_and_a_way_to_stop_a_crawl():
+    """Both asks, in the place they were asked for.
+
+    A crashed worker leaves a run in flight for ever and the only page that said
+    so was the run's own, which you had to already know about to visit.
+    """
+    html = _render(
+        "clients.html",
+        deleted="",
+        rows=[
+            {
+                "domain": "x.example",
+                "label": "",
+                "onboarded": True,
+                "snapshot": None,
+                "run": {"id": "abc-123", "status": "crawling", "started_ago": "20 minutes ago"},
+            }
+        ],
     )
+
+    assert 'action="/runs/abc-123/cancel"' in html, "no way to stop it"
+    assert 'href="/sites/x.example/delete"' in html, "no way to delete the client"
+    assert "Crawling" in html
+
+
+def test_stopping_from_the_list_returns_to_the_list(monkeypatch):
+    """Bouncing an operator to a run page they did not ask for loses their place."""
+    html = _render(
+        "clients.html",
+        deleted="",
+        rows=[
+            {
+                "domain": "x.example",
+                "label": "",
+                "onboarded": True,
+                "snapshot": None,
+                "run": {"id": "abc-123", "status": "crawling", "started_ago": "1 minute ago"},
+            }
+        ],
+    )
+
+    assert '<input type="hidden" name="back" value="/clients">' in html
+
+
+def test_a_client_with_nothing_running_offers_no_stop():
+    html = _render(
+        "clients.html",
+        deleted="",
+        rows=[
+            {
+                "domain": "x.example",
+                "label": "",
+                "onboarded": True,
+                "snapshot": None,
+                "run": None,
+            }
+        ],
+    )
+
+    assert "/cancel" not in html
+
+
+def test_the_danger_zone_is_hidden_from_a_non_admin():
     html = _render(
         "client_settings.html",
         exists=True,
         error=None,
-        going=nothing,
+        going=_going(config=1),
         user=__import__("types").SimpleNamespace(email="a@b.c", is_admin=False),
     )
 
     assert "Danger zone" not in html
     assert "Delete this client" not in html
+
+
+def test_the_list_hides_delete_from_a_non_admin_too():
+    """The route is `require_admin`, so showing the link would offer a 403."""
+    html = _render(
+        "clients.html",
+        deleted="",
+        user=__import__("types").SimpleNamespace(email="a@b.c", is_admin=False),
+        rows=[
+            {
+                "domain": "x.example",
+                "label": "",
+                "onboarded": True,
+                "snapshot": None,
+                "run": None,
+            }
+        ],
+    )
+
+    assert "/delete" not in html
 
 
 def test_the_add_client_page_renders():

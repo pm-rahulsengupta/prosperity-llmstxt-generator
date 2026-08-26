@@ -30,6 +30,24 @@
             The name is what appears in the client list and in the generated
             agents.md. Without one the domain is used.
         </p>
+        {# On by default. Without a first check a new client has no snapshot, so
+           the overview, the checklist and the handover all render the "nobody
+           has checked this yet" page and the profile reads "Never checked"
+           beside every number -- a client added and then left looks identical to
+           one whose site could not be reached.
+
+           `checked` is the whole default: an unchecked box sends nothing, so the
+           route takes `Form(False)` and this attribute is what makes it on. #}
+        <label class="check">
+            <input type="checkbox" id="check_now" name="check_now" value="true" checked>
+            Check the site now
+        </label>
+        <p class="hint">
+            Reads about thirty pages of the site to see which of the files
+            are already published. It is the only part of adding a client that
+            touches their server, and it runs before the brief so the answers you
+            give can be checked against what is actually there.
+        </p>
     </form>
 </div>
 {% endblock %}

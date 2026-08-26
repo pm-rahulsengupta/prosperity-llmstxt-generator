@@ -39,7 +39,8 @@
                 <th>Onboarded</th>
                 <th class="num">Readiness</th>
                 <th>Last checked</th>
-                <th></th>
+                <th>Crawl</th>
+                <th><span class="visually-hidden">Actions</span></th>
             </tr>
             </thead>
             <tbody>
@@ -67,8 +68,40 @@
                     <span class="muted">never checked</span>
                     {% endif %}
                 </td>
-                <td class="num">
-                    <a href="/sites/{{ row.domain }}/settings">Settings</a>
+                {# A run in flight, and the way to stop it.
+
+                   A crashed worker leaves a run unfinished for ever, and until
+                   now the only place that showed was the run's own page -- which
+                   you had to already know about to visit. Nothing on the client
+                   list said a crawl was running, let alone stuck. #}
+                <td>
+                    {% if row.run %}
+                    {% set look = run_look(row.run.status) %}
+                    <a class="{{ look.css }}" href="/runs/{{ row.run.id }}">{{ look.headline }}</a>
+                    <br><span class="muted">started {{ row.run.started_ago }}</span>
+                    {% else %}
+                    <span class="muted">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div class="row-actions">
+                        {% if row.run %}
+                        {# Not destructive: the stage in flight finishes and
+                           everything already crawled is kept. No typed
+                           confirmation for something that only stops spending. #}
+                        <form method="post" action="/runs/{{ row.run.id }}/cancel">
+                            <input type="hidden" name="back" value="/clients">
+                            <button class="ghost" type="submit">Stop crawl</button>
+                        </form>
+                        {% endif %}
+                        <a href="/sites/{{ row.domain }}/settings">Settings</a>
+                        {% if user and user.is_admin %}
+                        {# A link to a confirmation page, not a delete button. A
+                           one-click destructive control in a table row is how the
+                           wrong client gets destroyed. #}
+                        <a class="destructive-link" href="/sites/{{ row.domain }}/delete">Delete</a>
+                        {% endif %}
+                    </div>
                 </td>
             </tr>
             {% endfor %}

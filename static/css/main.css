@@ -618,7 +618,82 @@ details.danger summary {
 
 details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
 
-button.destructive {
+/* -- the client profile -------------------------------------------------------
+
+   Borrowed from GEO Tracker's settings pages, which pair every value with the
+   label that names it and let the eye run down a single right edge. Two columns
+   rather than a table, because these are facts about one thing rather than rows
+   of comparable records -- a table implies you might sort them. */
+.facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(24rem, 1fr));
+    gap: 0 2.5rem;
+    margin: 0.75rem 0 1rem;
+}
+
+.fact {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--pm-rule);
+}
+
+.fact-key {
+    font-size: var(--pm-2xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--pm-ink-muted);
+}
+
+/* The definition, in the row rather than in a tooltip. A `title` is mouse-only
+   and a custom tooltip is a keyboard trap waiting to happen; this is three words
+   that answer the question the label raises. */
+.fact-hint {
+    display: block;
+    margin-top: 0.15rem;
+    max-width: 20rem;
+    font-size: var(--pm-2xs);
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--pm-ink-muted);
+}
+
+.fact-value {
+    flex: 0 0 auto;
+    text-align: right;
+    font-size: var(--pm-sm);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Where you are, with every ancestor clickable. The client is the root, because
+   that is the thing every one of these pages is about. */
+.crumbs {
+    margin: 0 0 0.5rem;
+    font-size: var(--pm-xs);
+    color: var(--pm-ink-muted);
+}
+.crumbs a { color: var(--pm-ink-soft); }
+.crumbs [aria-current] { color: var(--pm-ink-muted); }
+
+/* Per-row controls in a list. Wraps rather than forcing the table wider, and
+   keeps its own baseline so a form button sits level with a plain link. */
+.row-actions { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: center; }
+.row-actions form { margin: 0; }
+/* Smaller than a page control, and `.ghost` for the colour -- a row action is
+   not a call to action. `Stop crawl` rendered solid dark, heavier than the
+   page's own primary "Add a client", so the loudest thing on the client list
+   was the button you press when something has gone wrong. */
+.row-actions button { padding: 0.2rem 0.55rem; font-size: var(--pm-xs); }
+
+/* A link to a destructive confirmation is not itself destructive, so it does not
+   wear the solid red a button does -- but it must not read as an ordinary
+   sibling of "Settings" either. */
+.destructive-link { color: var(--pm-red); }
+
+button.destructive,
+a.button.destructive {
     background: var(--pm-red);
     color: var(--pm-white);
     border-color: var(--pm-red);
