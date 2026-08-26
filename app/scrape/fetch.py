@@ -27,6 +27,7 @@ from enum import StrEnum
 
 from app.scrape.extract import ExtractedPage, extract, looks_like_js_shell
 from app.scrape.firecrawl import FirecrawlFetcher
+from app.scrape.politeness import Politeness
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +95,13 @@ class PageFetcher:
         timeout: float = 30.0,
         allow_browser: bool = True,
         firecrawl: FirecrawlFetcher | None = None,
+        politeness: Politeness | None = None,
     ) -> None:
         self.user_agent = user_agent
+        # The rate the site asked for in robots.txt. Defaults to "none published",
+        # whose `wait()` is a no-op, so callers that have not read robots.txt get
+        # today's behaviour rather than a silent slowdown.
+        self.politeness = politeness or Politeness()
         self.timeout = timeout
         self.allow_browser = allow_browser
         self.firecrawl = firecrawl
@@ -109,6 +115,12 @@ class PageFetcher:
 
     async def fetch(self, url: str) -> FetchResult:
         result = FetchResult(url=url)
+
+        # Before the first attempt, not inside `_attempt`: a page that escalates
+        # HTTP -> browser -> stealth is one page being fetched, and charging it
+        # three delays would triple the crawl for the pages that are already the
+        # slowest. The rate limit is on pages, which is what the site sees.
+        await self.politeness.wait()
 
         for tier in self._ladder():
             attempt = await self._attempt(tier, url)

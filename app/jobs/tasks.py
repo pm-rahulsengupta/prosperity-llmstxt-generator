@@ -51,12 +51,15 @@ from app.llm.stages import (
 )
 from app.scrape.fetch import PageFetcher
 from app.scrape.firecrawl import FirecrawlFetcher
+from app.scrape.politeness import Politeness, split_disallowed
 from app.scrape.preflight import effective_page_cap, run_preflight
 
 logger = logging.getLogger(__name__)
 
 
-def build_fetcher(settings, allow_browser: bool = True) -> PageFetcher:
+def build_fetcher(
+    settings, allow_browser: bool = True, politeness: Politeness | None = None
+) -> PageFetcher:
     firecrawl = (
         FirecrawlFetcher(api_key=settings.firecrawl_api_key, base_url=settings.firecrawl_base_url)
         if settings.firecrawl_enabled
@@ -68,6 +71,7 @@ def build_fetcher(settings, allow_browser: bool = True) -> PageFetcher:
         max_browser_concurrency=settings.max_browser_concurrency,
         allow_browser=allow_browser,
         firecrawl=firecrawl,
+        politeness=politeness,
     )
 
 
@@ -375,7 +379,41 @@ async def generate_task(run_id: str) -> None:
                     session, rid, "crawl", f"Fetching {len(urls)} pages", done=0, total=len(urls)
                 )
 
-            fetcher = build_fetcher(settings, allow_browser=True)
+            # robots.txt, obeyed rather than merely recorded.
+            #
+            # `recon` has parsed both of these since the beginning and used
+            # neither: they were read, printed into one summary line, and then
+            # ignored while the crawler ran at full speed. Measured on
+            # nrma.com.au, which asks for `Crawl-delay: 10` and got eight
+            # concurrent fetchers -- 80x its stated rate. The throttling that
+            # produces reads as 403/429 to the ladder in `fetch.py`, which
+            # escalates to a browser and makes the load worse.
+            robots = pre.recon.robots
+            urls, blocked = split_disallowed(urls, robots.disallowed)
+            politeness = Politeness.from_robots(robots.crawl_delay)
+
+            async with session_scope() as session:
+                # Logged for the same reason the embargo is: an operator has to
+                # be able to answer "why is this page missing", and a silent
+                # disappearance leaves no trail to answer it with.
+                for rule, count in sorted(blocked.items()):
+                    await repo.record_event(
+                        session,
+                        rid,
+                        "crawl",
+                        f"robots.txt disallows {rule!r}: {count} URL(s) not crawled",
+                    )
+                if politeness.applies:
+                    minutes = politeness.estimate_seconds(len(urls)) / 60
+                    note = (
+                        f"robots.txt asks for {politeness.delay:.0f}s between requests; "
+                        f"{len(urls)} pages will take at least {minutes:.0f} min"
+                    )
+                    if politeness.capped_from:
+                        note += f" (published delay {politeness.capped_from:.0f}s, capped)"
+                    await repo.record_event(session, rid, "crawl", note)
+
+            fetcher = build_fetcher(settings, allow_browser=True, politeness=politeness)
             depths = _depth_by_url(urls, pre.recon.site_url)
             results = await fetcher.fetch_many(urls)
 
