@@ -32,33 +32,46 @@ def test_no_nav_item_is_named_after_a_file_it_does_not_open():
     assert named_after_a_file == set(), named_after_a_file
 
 
-def test_the_crawl_runner_is_named_for_what_it_does():
-    items = flat(build_nav("/"))
+def test_the_unscoped_rail_is_the_two_things_you_can_do_without_a_client():
+    """It carried twenty items, twelve of them greyed out and unusable.
 
-    assert "Crawl runs" in items
-    assert "Check any site" in items
-
-
-def test_the_index_is_active_only_on_the_index():
-    """`/` is a prefix of every path and would otherwise light everywhere."""
-    assert flat(build_nav("/"))["Crawl runs"].active
-    assert not flat(build_nav("/agents"))["Crawl runs"].active
-    assert not flat(build_nav("/admin"))["Crawl runs"].active
-
-
-def test_a_run_page_lights_the_section_it_belongs_to():
-    """A run is the output of the crawl flow.
-
-    Leaving the sidebar entirely dark on the page an operator spends most of
-    their time on is a worse answer than naming its section.
+    "Add a client", "Crawl runs" and "Import a crawl" are things you do *to* the
+    client list rather than places within it, so they moved onto `/clients` as
+    buttons -- see `test_nothing_lost_its_only_door`, which is what stops that
+    move making a page unreachable.
     """
-    assert flat(build_nav("/runs/abc-123"))["Crawl runs"].active
+    assert set(flat(build_nav("/"))) == {"All clients", "Check any site"}
+
+
+def test_the_index_special_case_survives_the_items_that_used_it():
+    """`/` is a prefix of every path, so a prefix match lights it everywhere.
+
+    No nav item points at `/` any more, but `_active` still special-cases it and
+    a future one would inherit the bug. Asserted directly rather than through an
+    item that no longer exists.
+    """
+    from app.nav import _active
+
+    assert _active("/", "/")
+    assert not _active("/agents", "/")
+    assert _active("/clients/new", "/clients")
+
+
+def test_a_run_page_shows_the_client_the_run_belongs_to():
+    """`base.html` falls back to `run.domain` when no `domain` is in context.
+
+    So the rail on a run detail page is that client's rail. It used to light a
+    global "Crawl runs" item, which named the flow but not the client.
+    """
+    groups = build_nav("/runs/abc-123", "example.com")
+
+    assert "example.com" in [g.label for g in groups]
+    assert flat(groups)["Overview"].url == "/sites/example.com"
 
 
 def test_the_check_form_lights_on_its_own_page():
-    items = flat(build_nav("/agents"))
-    assert items["Check any site"].active
-    assert not items["Crawl runs"].active
+    assert flat(build_nav("/agents"))["Check any site"].active
+    assert not flat(build_nav("/clients"))["Check any site"].active
 
 
 # -- gap counts ---------------------------------------------------------------
@@ -117,39 +130,71 @@ def test_a_measured_list_renders_its_count():
     assert "gap done" in html, "zero renders a tick, not an empty space"
 
 
-def test_site_items_are_shown_but_marked_when_there_is_no_domain():
-    """GEO Tracker keeps its Team page visible and lets the page explain itself.
+def test_site_items_are_absent_rather_than_greyed_out_when_there_is_no_client():
+    """The borrow from GEO Tracker that did not survive contact.
 
-    Hiding an item leaves an operator hunting for a page that exists.
+    It keeps *one* item visible-but-disabled so the page can explain what it
+    needs. Twelve of them is a wall of dead text that reads as a broken page,
+    and every one pointed at `/clients` -- so clicking any of the twelve did the
+    same thing as clicking the item directly above them.
     """
-    brief = flat(build_nav("/"))["Brief"]
-
-    assert brief.disabled
-    assert brief.hint
-    assert brief.url == "/clients", "with no domain it points at the picker"
+    assert "Brief" not in flat(build_nav("/"))
 
 
-def test_the_picker_it_points_at_actually_exists():
+def test_nothing_renders_disabled_any_more():
+    """The guard on reintroducing it.
+
+    `NavItem.disabled` and the `.off` styling are both gone; this fails if a
+    later item brings back a link that renders but cannot be used.
+    """
+    for group in build_nav("/", "example.com", True):
+        for item in group.items:
+            assert not hasattr(item, "disabled"), item
+
+
+def test_site_items_appear_once_a_client_is_selected():
+    groups = build_nav("/sites/example.com", domain="example.com")
+
+    assert flat(groups)["Brief"].url == "/sites/example.com/brief"
+    assert "example.com" in [g.label for g in groups], "the rail names which client"
+
+
+def test_every_url_the_rail_offers_resolves_to_a_route():
     """This assertion used to encode a fiction.
 
     `nav.py` said disabled links "point at the picker rather than at a dead
-    path", and the test asserted they pointed at `/`. There was no picker: `/`
-    was the run starter, and the only way to reach a client was to find one of
-    their runs in the most recent forty and click it.
+    path", and the test asserted they pointed at `/`. There was no picker.
+    Rather than checking one item, check them all -- static paths against the
+    route table, scoped ones against their templated form.
     """
+    from starlette.routing import Match
+
     from app.main import app
 
-    paths = {getattr(route, "path", "") for route in app.routes}
+    def resolves(url: str) -> bool:
+        scope = {"type": "http", "method": "GET", "path": url, "path_params": {}}
+        return any(r.matches(scope)[0] is Match.FULL for r in app.routes)
 
-    assert "/clients" in paths
-    assert flat(build_nav("/"))["Brief"].url in paths
+    for group in build_nav("/", "example.com", True):
+        for item in group.items:
+            assert resolves(item.url.split("#", 1)[0]), item
 
 
-def test_site_items_become_usable_once_a_domain_is_known():
-    brief = flat(build_nav("/", domain="example.com"))["Brief"]
+def test_nothing_lost_its_only_door():
+    """Three items left the rail. Two of them had no other link anywhere.
 
-    assert not brief.disabled
-    assert brief.url == "/sites/example.com/brief"
+    `/imports/screaming-frog` in particular was reachable only from the sidebar,
+    so dropping it without adding a door would have left it URL-only -- the same
+    defect as the client report, which sat unlinked for two days.
+    """
+    from pathlib import Path
+
+    markup = "".join(
+        (Path(__file__).resolve().parents[1] / "templates" / name).read_text(encoding="utf-8")
+        for name in ("clients.html", "client_home.html")
+    )
+    for href in ('href="/clients/new"', 'href="/"', 'href="/imports/screaming-frog"'):
+        assert href in markup, href
 
 
 def test_admin_items_are_hidden_from_a_non_admin():
@@ -225,7 +270,8 @@ def test_the_sidebar_does_not_break_existing_pages(template):
         env.undefined = previous
 
     assert 'class="side"' in html
-    assert "Check any site" in html
+    # Present in both rails: the destination when unscoped, the way out when not.
+    assert "All clients" in html
 
 
 # -- the eight new pages ------------------------------------------------------
@@ -727,13 +773,15 @@ def test_every_page_offers_a_skip_link_before_the_sidebar():
     assert html.index('class="skip"') < html.index('class="side"')
 
 
-def test_a_disabled_nav_item_says_why_to_a_screen_reader():
-    """It renders as an ordinary link with a `title`, and a title is mouse-only."""
-    # No domain, which is when the site-scoped items are the disabled ones.
+def test_the_rail_no_longer_explains_why_a_link_does_not_work():
+    """There is no such link now, so the explanation would be a lie.
+
+    This asserted a visually-hidden "Pick a client first" beside each of the
+    twelve disabled items. The items are gone; so is the sentence.
+    """
     html = _render("clients.html", rows=[], deleted="", domain="")
 
-    assert "visually-hidden" in html
-    assert "Pick a client first" in html
+    assert "Pick a client first" not in html
 
 
 def test_email_fields_are_typed_as_email():

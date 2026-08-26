@@ -1,9 +1,13 @@
 {# The left-hand nav, mirroring GEO Tracker's grouped sidebar.
 
-   Site-scoped items need a domain. Where there is none in context they still
-   render, pointing at the picker, rather than being hidden -- GEO Tracker takes
-   the same line with its Team page: a visible item that explains what it needs
-   beats one nobody can find. #}
+   The rail is contextual: two global items with no client selected, that
+   client's sections once one is. Nothing renders disabled any more, so the
+   `off` class, the `title` hint and the visually-hidden "Pick a client first"
+   text this template used to carry have gone with it -- see `app/nav.py` for
+   why twelve greyed-out items read as a broken page rather than an instruction.
+
+   A group may have no label (the way back out), which renders no heading rather
+   than an empty one. #}
 {% from "partials/icons.html" import icon %}
 <nav class="side" aria-label="Sections">
     {# The rail stretches to the full page height; this is what sticks inside it.
@@ -11,30 +15,24 @@
        heights -- so they are separated. #}
     <div class="side-inner">
     {% for group in nav_groups %}
-    {% set group_index = loop.index %}
     <div class="side-group">
-        <p class="side-label">{{ group.label }}</p>
+        {% if group.label %}<p class="side-label{% if group.is_name %} name{% endif %}">{{ group.label }}</p>{% endif %}
         <ul>
             {% for item in group['items'] %}
             <li>
+                {% set classes = ("on" if item.active else "", "back" if item.back else "")|select|join(" ") %}
                 <a href="{{ item.url }}"
-                   class="{% if item.active %}on{% endif %}{% if item.disabled %} off{% endif %}"
+                   {% if classes %}class="{{ classes }}"{% endif %}
                    {% if item.active %}aria-current="page"{% endif %}
-                   {% if item.disabled %}aria-describedby="hint-{{ group_index }}-{{ loop.index }}"{% endif %}
                    {% if item.hint %}title="{{ item.hint }}"{% endif %}>
                     {{ icon(item.icon) }}
                     <span class="side-title">{{ item.title }}</span>
                     {% if item.gap is not none %}
                         {% if item.gap %}
-                        <span class="gap" title="{{ item.gap }} not yet live">{{ item.gap }}</span>
+                        <span class="gap" title="{{ item.gap }} not yet published">{{ item.gap }}</span>
                         {% else %}
-                        <span class="gap done" title="all live" aria-label="all live">&check;</span>
+                        <span class="gap done" title="all published" aria-label="all published">&check;</span>
                         {% endif %}
-                    {% endif %}
-                    {% if item.disabled and item.hint %}
-                    <span class="visually-hidden" id="hint-{{ group_index }}-{{ loop.index }}">
-                        &mdash; {{ item.hint }}
-                    </span>
                     {% endif %}
                 </a>
             </li>

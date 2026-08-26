@@ -11,7 +11,17 @@
 <div class="panel">
     <div class="spread">
         <h1>Clients</h1>
-        <a class="button primary" href="/clients/new">Add a client</a>
+        {# These three used to be sidebar items. They are things you do to the
+           client list rather than places within it, and the rail is now the two
+           entry points plus whichever client you are in.
+
+           "Import a crawl" in particular had no other door anywhere in the app,
+           so it lives here rather than being reachable only by URL. #}
+        <div class="button-row">
+            <a class="button" href="/">Crawl runs</a>
+            <a class="button" href="/imports/screaming-frog">Import a crawl</a>
+            <a class="button primary" href="/clients/new">Add a client</a>
+        </div>
     </div>
     <p class="muted">
         Every site on file. Nothing here touches a client's server &mdash; the

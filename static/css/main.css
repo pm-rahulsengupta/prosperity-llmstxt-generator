@@ -591,6 +591,10 @@ input[type="date"] { font-family: inherit; }
    two safe actions sit in the open; the irreversible one takes a deliberate
    click to even reveal, and a typed confirmation to perform. */
 
+/* A cluster of buttons, distinct from `.actions` below -- which is a row of
+   action *forms* and sizes its children at `flex: 1 1 18rem`. */
+.button-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+
 .actions { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
 .actions form { flex: 1 1 18rem; }
 .actions .hint {
@@ -670,6 +674,19 @@ button.destructive {
     color: var(--pm-on-dark-muted);
 }
 
+/* One group label is the client's domain rather than a category. A domain set
+   as a tiny uppercase eyebrow is unreadable, and it is a name, not a heading
+   over a kind of thing -- so it takes the weight of the page it names. */
+.side-label.name {
+    font-size: var(--pm-sm);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--pm-white);
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    overflow-wrap: anywhere;
+}
+
 .side ul { list-style: none; margin: 0; padding: 0; }
 
 .side a {
@@ -714,12 +731,21 @@ button.destructive {
 }
 .side a.on .ico { color: var(--pm-emerald); }
 
-/* Reachable, and honest that it needs something first. Hiding it would leave an
-   operator hunting for a page that exists. */
-.side a.off { color: var(--pm-on-dark-muted); }
-.side a.off .ico { color: #6b7479; }
-.side a.off:hover { background: transparent; color: var(--pm-on-dark-muted); cursor: help; }
-.side a.off:hover .ico { color: #6b7479; }
+/* The way out of a client, not a destination inside one. Set quieter and
+   smaller than its siblings so the eye reads it as an exit rather than as the
+   first item of the list below it.
+
+   This replaces the `.off` rules, which styled the twelve greyed-out
+   site-scoped items. Nothing renders disabled now -- the rail swaps context
+   instead -- so the class had no markup left to match. */
+.side a.back {
+    font-size: var(--pm-xs);
+    color: var(--pm-on-dark-muted);
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+}
+.side a.back:hover { color: var(--pm-white); }
+.side a.back .ico { width: 14px; height: 14px; }
 
 /* The global rule caps `main` at 1180px and centres it. That was right when a
    page was a centred document; with a 224px rail beside it, on a 1920 screen it
