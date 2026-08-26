@@ -222,12 +222,16 @@ def test_the_delete_page_refuses_while_a_crawl_is_running():
         "client_delete.html",
         domain="x.example",
         error=None,
-        unfinished_run_id="abc-123",
-        unfinished_run_state="Crawling",
+        unfinished=[
+            {"id": "abc-123", "status": "crawling", "started_ago": "20 minutes ago"},
+            {"id": "def-456", "status": "pending", "started_ago": "5 days ago"},
+        ],
     )
 
     assert 'action="/sites/x.example/delete"' not in html, "the delete form is still reachable"
     assert 'action="/runs/abc-123/cancel"' in html, "refused with no way to satisfy the rule"
+    assert 'action="/runs/def-456/cancel"' in html, "only the newest is stoppable"
+    assert "2 crawls" in html, "does not say how many are left"
     assert "worker mid-stage" in html
 
 
@@ -241,8 +245,7 @@ def test_the_delete_form_returns_once_nothing_is_running():
         "client_delete.html",
         domain="x.example",
         error=None,
-        unfinished_run_id="",
-        unfinished_run_state="",
+        unfinished=[],
     )
 
     assert 'action="/sites/x.example/delete"' in html
@@ -258,7 +261,7 @@ def test_the_post_checks_too_rather_than_trusting_the_page():
     source = inspect.getsource(delete_client_route)
     guard = source.split("form = await request.form()", 1)[0]
 
-    assert "unfinished_runs" in guard, "the POST would delete a client mid-crawl"
+    assert "unfinished_runs_for_domain" in guard, "the POST would delete a client mid-crawl"
     assert "HTTP_409_CONFLICT" in guard
 
 

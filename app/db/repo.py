@@ -1046,6 +1046,23 @@ async def unfinished_runs(session: AsyncSession) -> dict[str, Run]:
     return latest
 
 
+async def unfinished_runs_for_domain(session: AsyncSession, domain: str) -> list[Run]:
+    """Every run still working for one client, newest first.
+
+    `unfinished_runs` answers "is anything running" for a whole list and keeps
+    only the most recent per domain, which is the right answer for a badge and
+    the wrong one for a page that asks you to clear them: prosperitymedia.com.au
+    held four, and stopping one only revealed the next with no sign of how many
+    were left.
+    """
+    result = await session.execute(
+        select(Run)
+        .where(Run.domain == domain, Run.status.in_(IN_FLIGHT))
+        .order_by(desc(Run.created_at))
+    )
+    return list(result.scalars())
+
+
 async def runs_for_domain(session: AsyncSession, domain: str, limit: int = 20) -> list[Run]:
     """This client's runs, newest first."""
     result = await session.execute(

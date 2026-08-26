@@ -60,22 +60,34 @@
 
 <div class="panel danger-zone">
     <h2>Confirm</h2>
-    {% if unfinished_run_id %}
+    {% if unfinished %}
     {# The same rule `run.html` states for deleting a single run, which deleting
        the whole client was bypassing: the run rows would go while a worker still
        held the id and wrote more of them back.
 
-       Offered with the way to satisfy it rather than as a dead end. #}
+       Every one of them is listed, not just the most recent. This client held
+       four, and showing one at a time meant four rounds of "a crawl is still
+       working" with no sign of how many were left. Offered with the way to
+       satisfy the rule rather than as a dead end. #}
     <p class="notice error">
-        A crawl for this client is still working &mdash;
-        <a href="/runs/{{ unfinished_run_id }}">{{ unfinished_run_state|lower }}</a>.
-        Stop it first: a worker mid-stage holds its run id and would write rows
-        back after the delete.
+        {{ unfinished|length }} crawl{{ '' if unfinished|length == 1 else 's' }} for this
+        client {{ 'is' if unfinished|length == 1 else 'are' }} still working. Stop
+        {{ 'it' if unfinished|length == 1 else 'them' }} first: a worker mid-stage
+        holds its run id and would write rows back after the delete.
     </p>
-    <form method="post" action="/runs/{{ unfinished_run_id }}/cancel">
-        <input type="hidden" name="back" value="/sites/{{ domain }}/delete">
-        <button type="submit">Stop the crawl</button>
-    </form>
+    <ul class="stop-list">
+        {% for run in unfinished %}
+        {% set look = run_look(run.status) %}
+        <li>
+            <span class="{{ look.css }}">{{ look.headline }}</span>
+            <a href="/runs/{{ run.id }}">started {{ run.started_ago }}</a>
+            <form method="post" action="/runs/{{ run.id }}/cancel">
+                <input type="hidden" name="back" value="/sites/{{ domain }}/delete">
+                <button class="ghost" type="submit">Stop</button>
+            </form>
+        </li>
+        {% endfor %}
+    </ul>
     {% else %}
     <form method="post" action="/sites/{{ domain }}/delete">
         <div class="field">

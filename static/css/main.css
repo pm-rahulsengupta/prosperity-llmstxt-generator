@@ -704,6 +704,18 @@ details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
    sibling of "Settings" either. */
 .destructive-link { color: var(--pm-red); }
 
+/* One row per crawl that has to be stopped before a client can go. A list, not
+   a table: it is a work queue you empty, and every row disappears as you do. */
+.stop-list { list-style: none; margin: 0.75rem 0 0; padding: 0; }
+.stop-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--pm-rule);
+}
+.stop-list form { margin: 0 0 0 auto; }
+
 button.destructive,
 a.button.destructive {
     background: var(--pm-red);

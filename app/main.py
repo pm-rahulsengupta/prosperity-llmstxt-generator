@@ -1520,14 +1520,17 @@ async def _delete_context(session: AsyncSession, user: User, domain: str, error:
     larger blast radius. Found with two clients sat unfinished on the live
     instance, one of them the client this was about to be used on.
     """
-    unfinished = await repo.unfinished_runs(session)
-    run = unfinished.get(domain)
     return {
         "user": user,
         "domain": domain,
         "going": await repo.preview_client_deletion(session, domain),
-        "unfinished_run_id": str(run.id) if run is not None else "",
-        "unfinished_run_state": run_look(run.status).headline if run is not None else "",
+        # All of them, not the most recent. This client held four, and stopping
+        # one only revealed the next -- four rounds of "a crawl is still
+        # working" with no sign of how many were left.
+        "unfinished": [
+            {"id": str(run.id), "status": run.status, "started_ago": _ago(run.created_at)}
+            for run in await repo.unfinished_runs_for_domain(session, domain)
+        ],
         "error": error,
     }
 
@@ -1569,7 +1572,7 @@ async def delete_client_route(
 
     # Checked on the POST as well as on the page. A confirmation page an operator
     # left open for ten minutes says nothing about what is running now.
-    if (await repo.unfinished_runs(session)).get(domain) is not None:
+    if await repo.unfinished_runs_for_domain(session, domain):
         return templates.TemplateResponse(
             request,
             "client_delete.html",
