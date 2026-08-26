@@ -389,7 +389,7 @@ async def generate_task(run_id: str) -> None:
             # produces reads as 403/429 to the ladder in `fetch.py`, which
             # escalates to a browser and makes the load worse.
             robots = pre.recon.robots
-            urls, blocked = split_disallowed(urls, robots.disallowed)
+            urls, blocked = split_disallowed(urls, robots.disallowed, robots.allowed)
             politeness = Politeness.from_robots(robots.crawl_delay)
 
             async with session_scope() as session:

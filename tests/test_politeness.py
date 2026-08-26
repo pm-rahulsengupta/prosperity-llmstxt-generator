@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import time
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,8 @@ from app.scrape.politeness import (
     path_is_allowed,
     split_disallowed,
 )
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 # Trimmed from the live file, keeping one of each shape it actually uses.
 NRMA_DISALLOWED = [
@@ -189,7 +192,9 @@ def test_what_is_dropped_is_counted_per_rule():
     kept, counts = split_disallowed(urls, NRMA_DISALLOWED)
 
     assert kept == ["https://www.nrma.com.au/car-insurance", "https://www.nrma.com.au/blog"]
-    assert counts == {"/get-quote": 1, "/admin/": 1, "/taxonomy": 1}
+    # `/taxonomy/*`, not `/taxonomy`: both match a term page and the longest is
+    # the one that decided, so it is the one an operator is sent to.
+    assert counts == {"/get-quote": 1, "/admin/": 1, "/taxonomy/*": 1}
 
 
 def test_a_url_with_no_path_is_treated_as_the_root():
@@ -238,3 +243,86 @@ def test_the_operator_is_told_what_the_delay_will_cost():
 
     assert "estimate_seconds" in source
     assert "record_event" in source
+
+
+# -- against the real file ---------------------------------------------------------
+#
+# `tests/fixtures/nrma_robots.txt` is nrma.com.au's actual robots.txt, fetched
+# 2026-08-26 and trimmed to keep one of every rule shape it uses. The hand-written
+# lists above prove the matcher; this proves the parser and the matcher agree with
+# what a real site publishes, which is the join where a fix like this goes inert.
+
+
+def _nrma_robots():
+    from app.scrape.recon import parse_robots
+
+    return parse_robots((FIXTURES / "nrma_robots.txt").read_text(encoding="utf-8"))
+
+
+def test_the_parser_finds_the_delay_that_started_all_this():
+    """If this returns None the whole feature is inert and nothing else fails."""
+    assert _nrma_robots().crawl_delay == 10.0
+
+
+def test_the_delay_reaches_the_gate():
+    polite = Politeness.from_robots(_nrma_robots().crawl_delay)
+
+    assert polite.applies
+    assert polite.estimate_seconds(400) / 60 == pytest.approx(66.5)
+
+
+def test_the_parser_finds_both_rule_kinds():
+    robots = _nrma_robots()
+
+    assert "/get-quote" in robots.disallowed
+    assert "/misc/*.css$" in robots.allowed, "Allow lines were dropped on the floor"
+    assert robots.sitemaps == ["https://www.nrma.com.au/sitemap.xml"]
+
+
+def test_an_allow_inside_a_blocked_directory_survives():
+    """`Disallow: /misc/` with `Allow: /misc/*.css$` above it.
+
+    The first version of `path_is_allowed` read `Disallow` only, so the explicitly
+    permitted path was silently skipped -- dropping pages a client allowed on
+    purpose.
+    """
+    robots = _nrma_robots()
+
+    assert path_is_allowed("/misc/style.css", robots.disallowed, robots.allowed)
+    assert not path_is_allowed("/misc/secret.txt", robots.disallowed, robots.allowed)
+
+
+def test_the_pages_worth_crawling_are_untouched():
+    """The check that this does not quietly gut a real crawl."""
+    robots = _nrma_robots()
+    urls = [
+        "https://www.nrma.com.au/",
+        "https://www.nrma.com.au/car-insurance",
+        "https://www.nrma.com.au/car-insurance/comprehensive",
+        "https://www.nrma.com.au/home-insurance",
+        "https://www.nrma.com.au/blog",
+        "https://www.nrma.com.au/llm-info",
+        "https://www.nrma.com.au/get-quote",
+        "https://www.nrma.com.au/taxonomy/term/12",
+        "https://www.nrma.com.au/cron.php",
+    ]
+
+    kept, counts = split_disallowed(urls, robots.disallowed, robots.allowed)
+
+    assert "https://www.nrma.com.au/llm-info" in kept
+    assert len(kept) == 6
+    assert counts == {"/get-quote": 1, "/taxonomy/*": 1, "/cron.php": 1}
+
+
+def test_the_rule_named_in_the_report_is_the_one_that_decided():
+    """Longest match, not first in file order.
+
+    `/taxonomy` and `/taxonomy/*` both match a term page; naming the weaker one
+    would send an operator to the wrong line of the file.
+    """
+    kept, counts = split_disallowed(
+        ["https://www.nrma.com.au/taxonomy/term/12"], ["/taxonomy", "/taxonomy/*"]
+    )
+
+    assert kept == []
+    assert counts == {"/taxonomy/*": 1}

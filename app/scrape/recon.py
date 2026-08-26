@@ -34,6 +34,11 @@ _HAS_DIGITS_AND_WORDS = re.compile(r"^[a-z0-9]+(-[a-z0-9]+){2,}$", re.I)
 class RobotsInfo:
     sitemaps: list[str] = field(default_factory=list)
     disallowed: list[str] = field(default_factory=list)
+    # `Allow` overrides `Disallow` for the same path in every major crawler --
+    # a rule `crawl_rules.py` already states and this file used to drop on the
+    # floor. Without it a site that blocks a directory and re-permits one path
+    # inside it has that path silently skipped.
+    allowed: list[str] = field(default_factory=list)
     crawl_delay: float | None = None
     fetched: bool = False
 
@@ -82,7 +87,7 @@ class SiteRecon:
 
 
 def parse_robots(text: str) -> RobotsInfo:
-    """Extract sitemap references, global disallows and crawl-delay.
+    """Extract sitemap references, the `*` group's rules, and crawl-delay.
 
     Only the `*` user-agent group is read for disallows: this tool identifies itself
     as its own agent, and a site that blocks a named bot but not `*` is not telling
@@ -105,6 +110,8 @@ def parse_robots(text: str) -> RobotsInfo:
             in_star_group = value == "*"
         elif field_name == "disallow" and in_star_group and value:
             info.disallowed.append(value)
+        elif field_name == "allow" and in_star_group and value:
+            info.allowed.append(value)
         elif field_name == "crawl-delay" and in_star_group:
             with suppress(ValueError):
                 info.crawl_delay = float(value)

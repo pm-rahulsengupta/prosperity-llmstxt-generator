@@ -48,29 +48,43 @@ __all__ = ["Politeness", "path_is_allowed", "split_disallowed"]
 MAX_DELAY_SECONDS = 30.0
 
 
-def path_is_allowed(path: str, disallowed: list[str]) -> bool:
-    """Whether `path` may be fetched, given the `Disallow` rules for `*`.
+def _match_length(path: str, rule: str) -> int:
+    """How many characters of `rule` match `path`, or -1 for no match.
 
-    Prefix matching with `*` and `$` honoured, which is what every major crawler
-    implements and what the rules in these files are written against. An empty
-    `Disallow:` value means "nothing is disallowed" and is skipped rather than
-    matching everything -- getting that backwards would silently crawl nothing.
+    Length is what decides between a conflicting `Allow` and `Disallow`, so the
+    matcher has to return it rather than a bool. `*` and `$` are honoured, which
+    is what every major crawler implements and what real files are written
+    against.
+    """
+    rule = rule.strip()
+    if not rule:
+        # `Disallow:` with no value is the documented way to say "allow all".
+        return -1
+    if rule.endswith("$"):
+        return len(rule) - 1 if fnmatch.fnmatchcase(path, rule[:-1]) else -1
+    if "*" in rule:
+        pattern = rule if rule.endswith("*") else rule + "*"
+        return len(rule) if fnmatch.fnmatchcase(path, pattern) else -1
+    return len(rule) if path.startswith(rule) else -1
+
+
+def path_is_allowed(path: str, disallowed: list[str], allowed: list[str] | None = None) -> bool:
+    """Whether `path` may be fetched, given the `*` group's rules.
+
+    **Longest match wins, and a tie goes to `Allow`.** That is the rule every
+    major crawler implements, and `crawl_rules.py` already states it -- but the
+    first version of this function read `Disallow` only, so a site that blocks a
+    directory and re-permits one path inside it (`Disallow: /blog/` with
+    `Allow: /blog/public/`) had the permitted path silently skipped. Silently
+    dropping pages a client explicitly allowed is the exact failure the rest of
+    this module is built to avoid.
     """
     path = path or "/"
-    for rule in disallowed:
-        rule = rule.strip()
-        if not rule:
-            # `Disallow:` with no value is the documented way to say "allow all".
-            continue
-        if rule.endswith("$"):
-            if fnmatch.fnmatchcase(path, rule[:-1]):
-                return False
-        elif "*" in rule:
-            if fnmatch.fnmatchcase(path, rule if rule.endswith("*") else rule + "*"):
-                return False
-        elif path.startswith(rule):
-            return False
-    return True
+    block = max((_match_length(path, rule) for rule in disallowed), default=-1)
+    if block < 0:
+        return True
+    permit = max((_match_length(path, rule) for rule in (allowed or [])), default=-1)
+    return permit >= block
 
 
 @dataclass
@@ -128,7 +142,9 @@ class Politeness:
             await asyncio.sleep(remaining)
 
 
-def split_disallowed(urls: list[str], disallowed: list[str]) -> tuple[list[str], dict[str, int]]:
+def split_disallowed(
+    urls: list[str], disallowed: list[str], allowed: list[str] | None = None
+) -> tuple[list[str], dict[str, int]]:
     """Partition a crawl list by the site's own `Disallow` rules.
 
     Shaped after `split_embargoed`, and reported the same way: the survivors plus
@@ -147,9 +163,12 @@ def split_disallowed(urls: list[str], disallowed: list[str]) -> tuple[list[str],
     counts: dict[str, int] = {}
     for url in urls:
         path = urlparse(url).path or "/"
-        hit = next((r for r in disallowed if r.strip() and not path_is_allowed(path, [r])), None)
-        if hit is not None:
-            counts[hit] = counts.get(hit, 0) + 1
-        else:
+        if path_is_allowed(path, disallowed, allowed):
             kept.append(url)
+            continue
+        # Name the rule that actually did it -- the longest match, which is the
+        # one that decided. Reporting the first rule in file order would name a
+        # weaker rule that an `Allow` may have already overridden.
+        hit = max(disallowed, key=lambda rule: _match_length(path, rule))
+        counts[hit] = counts.get(hit, 0) + 1
     return kept, counts

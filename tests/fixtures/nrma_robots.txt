@@ -1,0 +1,49 @@
+#
+# robots.txt
+#
+# This file is to prevent the crawling and indexing of certain parts
+# of your site by web crawlers and spiders run by sites like Yahoo!
+# and Google. By telling these "robots" where not to go on your site,
+# you save bandwidth and server resources.
+
+User-agent: *
+Crawl-delay: 10
+# CSS, JS, Images
+Allow: /misc/*.css$
+Allow: /misc/*.css?
+Allow: /misc/*.js$
+Allow: /misc/*.png
+Allow: /themes/*.css$
+Allow: /themes/*.js$
+# Directories
+Disallow: /includes/
+Disallow: /misc/
+Disallow: /modules/
+Disallow: /profiles/
+Disallow: /scripts/
+Disallow: /themes/
+# Files
+Disallow: /CHANGELOG.txt
+Disallow: /cron.php
+Disallow: /install.php
+Disallow: /update.php
+Disallow: /xmlrpc.php
+# Paths (clean URLs)
+Disallow: /admin/
+Disallow: /comment/reply/
+Disallow: /get-quote
+Disallow: /node/add/
+Disallow: /page-not-found
+Disallow: /search/
+Disallow: /user/register/
+Disallow: /user/login/
+# Paths (no clean URLs)
+Disallow: /?q=admin/
+Disallow: /taxonomy
+Disallow: /taxonomy/*
+Disallow: /chinese?*
+Disallow: /sites/nrma/files/nrma/policy_booklets/*
+Disallow: /content/policy-booklets/*
+Disallow: /search
+
+Sitemap: https://www.nrma.com.au/sitemap.xml
