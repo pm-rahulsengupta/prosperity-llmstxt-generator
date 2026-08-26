@@ -258,8 +258,14 @@ QUESTIONS: tuple[Question, ...] = (
         prompt="Facts the tool must never guess: founding year, locations, team size, awards.",
         kind="facts",
         effect=(
-            "Checked against the corpus by the consistency audit. A fact that is missing "
-            "becomes a blocking question rather than an invention."
+            # Corrected when the audit was actually built. The old wording said a
+            # *missing* fact blocks; it does not, and should not -- a site that
+            # never states its founding year has not denied one, and an audit
+            # that interrupts on absence is one an operator turns off. Only a
+            # contradiction blocks. See `app.core.consistency`.
+            "Checked against the crawled pages. A fact the site contradicts is raised "
+            "before anything is generated; a fact it simply does not mention is "
+            "published as stated by you, and marked as unverified."
         ),
         placeholder="founded = 2013",
     ),
