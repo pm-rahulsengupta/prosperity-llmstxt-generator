@@ -38,6 +38,15 @@ ESCALATE_STATUSES = frozenset({401, 403, 405, 406, 429, 500, 502, 503, 520, 521,
 # without this. Railway is Docker.
 BROWSER_FLAGS = ("--disable-dev-shm-usage", "--no-sandbox")
 
+#: Share of the rendered word count that raw HTML must reach before we stop
+#: calling the difference a finding. Below this, a non-JS crawler is getting a
+#: materially different page from the one a person sees.
+#:
+#: 0.6 rather than something tighter: pages routinely hydrate a menu, a cookie
+#: banner and a footer under JS, and reporting every one of those as "invisible
+#: to AI" would bury the pages where the article itself is missing.
+JS_VISIBLE_SHARE = 0.6
+
 
 class Tier(StrEnum):
     HTTP = "http"
@@ -57,10 +66,36 @@ class FetchResult:
     # Set when the response settles the question: a 404 is not going to become a
     # 200 because we spent 800MB launching Chromium at it.
     terminal: bool = False
+    # What a crawler that does not execute JavaScript actually received, kept
+    # even when a browser tier later returned more.
+    #
+    # The ladder exists to rescue a page, and in rescuing it it destroyed the most
+    # important finding this tool can report. GPTBot, ClaudeBot and PerplexityBot
+    # do not run JavaScript. If raw HTML is a shell and Chromium returns 2,000
+    # words, the honest reading is "AI crawlers see almost nothing here" -- but
+    # the ladder recorded a clean 200 with 2,000 words and moved on, so the
+    # generated llms.txt described content no AI crawler can reach and nothing
+    # anywhere said so. A confidently wrong deliverable is worse than a failed
+    # crawl, because a failed crawl is visible.
+    raw_words: int = 0
+    rendered_words: int = 0
 
     @property
     def ok(self) -> bool:
         return self.page is not None and not self.page.is_thin
+
+    @property
+    def needs_javascript(self) -> bool:
+        """Whether this page is materially poorer without a browser.
+
+        A ratio rather than an absolute difference: a page that gains a nav menu
+        under JS is not a finding, and one that goes from a shell to an article
+        is. `rendered_words` of 0 means no browser tier ran, which is not the
+        same as "JS makes no difference" -- it means the question was never asked.
+        """
+        if not self.rendered_words:
+            return False
+        return self.raw_words < self.rendered_words * JS_VISIBLE_SHARE
 
 
 @dataclass(slots=True)
@@ -127,6 +162,18 @@ class PageFetcher:
             result.attempts.append(f"{tier}:{attempt.status or attempt.error or '?'}")
             result.status = attempt.status or result.status
             result.tier = tier
+
+            # Both sides of the comparison, recorded as they happen. The HTTP
+            # rung is what a non-JS crawler gets; any browser rung is what a
+            # person gets. Kept even when the run ends on the cheap tier, where
+            # `rendered_words` stays 0 and `needs_javascript` is correctly False
+            # -- nothing rendered, so nothing was hidden.
+            if attempt.page is not None:
+                words = attempt.page.word_count
+                if tier is Tier.HTTP:
+                    result.raw_words = words
+                elif tier in (Tier.DYNAMIC, Tier.STEALTH):
+                    result.rendered_words = max(result.rendered_words, words)
 
             if attempt.page is not None:
                 result.page = attempt.page

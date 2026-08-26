@@ -451,6 +451,15 @@ async def generate_task(run_id: str) -> None:
             for entry in entries:
                 entry.is_optional = is_optional_page(entry)
 
+            # Pages a non-JS crawler cannot read properly.
+            #
+            # The ladder rescues these silently, which is the right thing to do
+            # for the crawl and the wrong thing to report: GPTBot, ClaudeBot and
+            # PerplexityBot do not run JavaScript, so a page Chromium had to
+            # rescue is a page they see as a shell. Counting them here is what
+            # turns a rescue back into a finding.
+            js_only = [r for r in results if r.needs_javascript]
+
             async with session_scope() as session:
                 await repo.replace_pages(session, rid, entries, scores)
                 await repo.record_event(
@@ -461,6 +470,14 @@ async def generate_task(run_id: str) -> None:
                     done=len(entries),
                     total=len(urls),
                 )
+                if js_only:
+                    await repo.record_event(
+                        session,
+                        rid,
+                        "crawl",
+                        f"{len(js_only)} page(s) needed JavaScript to read. AI crawlers "
+                        f"that do not run it see a fraction of this content.",
+                    )
                 run = await repo.get_run(session, rid)
                 if run is not None:
                     run.stats = {
@@ -469,6 +486,10 @@ async def generate_task(run_id: str) -> None:
                             "by_tier": dict(fetcher.stats.by_tier),
                             "failed": fetcher.stats.failed,
                             "requested": len(urls),
+                            # Stored, not just logged: a run's events scroll away
+                            # and this is the finding a client is paying for.
+                            "js_only": len(js_only),
+                            "js_only_urls": [r.url for r in js_only[:50]],
                         },
                     }
                     await repo.set_status(session, run, RunStatus.TRIAGING)
