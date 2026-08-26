@@ -22,13 +22,19 @@
             <div class="k">Components live</div>
             <div class="v">{{ status.live_count }} of {{ status.applicable_count }}</div>
         </div>
+        {# "{n} to do" rather than a bare total. It read as "6 things to do"
+           while the checklist page said "2 of 6 done", and the bare number was
+           the same for every client -- that split is a property of the
+           component registry, not of the site. #}
         <div class="stat">
             <div class="k">Your checklist</div>
-            <div class="v"><a href="/sites/{{ domain }}/checklist">{{ client_count }}</a></div>
+            <div class="v">
+                <a href="/sites/{{ domain }}/checklist">{{ client_todo }} to do</a>
+            </div>
         </div>
         <div class="stat">
             <div class="k">Needs a developer</div>
-            <div class="v"><a href="/sites/{{ domain }}/handover">{{ dev_count }}</a></div>
+            <div class="v"><a href="/sites/{{ domain }}/handover">{{ dev_todo }} to do</a></div>
         </div>
     </div>
 

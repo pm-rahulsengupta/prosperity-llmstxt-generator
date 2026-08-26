@@ -64,28 +64,38 @@ def test_the_check_form_lights_on_its_own_page():
 # -- gap counts ---------------------------------------------------------------
 
 
-def test_a_family_with_outstanding_work_carries_its_count():
-    from app.core.components import Family
+def test_the_lists_carry_the_outstanding_count():
+    """A badge is a call to act, so it sits where acting happens.
 
-    items = flat(build_nav("/", "x.example", gaps={Family.CRAWL: 2}))
+    These were on the six families, which put a number beside a navigational tab
+    and none beside either list -- and a family badge answered a question nobody
+    asks ("how many Delivery items are unpublished") while the checklist you
+    actually work through wore nothing.
+    """
+    items = flat(build_nav("/", "x.example", gaps={"checklist": 4, "handover": 11}))
 
-    assert items["Crawl rules"].gap == 2
+    assert items["Your checklist"].gap == 4
+    assert items["Developer handover"].gap == 11
+
+
+def test_the_families_no_longer_carry_one():
+    items = flat(build_nav("/", "x.example", gaps={"checklist": 4, "handover": 11}))
+
+    assert all(items[name].gap is None for name in ("Crawl rules", "Content", "Delivery"))
 
 
 def test_measured_and_clear_is_zero_not_absent():
     """`0` and `None` are different answers and the nav must not merge them.
 
-    Zero means every applicable component in that family is live. `None` means
-    nothing has been measured -- no client, or no stored probe. A family with no
-    data must not read as a family with no problems.
+    Zero means everything on that list is published. `None` means nothing has
+    been measured -- no client, or no stored probe. A list with no data must not
+    read as a list with no problems.
     """
-    from app.core.components import Family
-
-    measured = flat(build_nav("/", "x.example", gaps={Family.CONTENT: 0}))
+    measured = flat(build_nav("/", "x.example", gaps={"checklist": 0}))
     unmeasured = flat(build_nav("/", "x.example"))
 
-    assert measured["Content"].gap == 0
-    assert unmeasured["Content"].gap is None
+    assert measured["Your checklist"].gap == 0
+    assert unmeasured["Your checklist"].gap is None
 
 
 def test_an_unmeasured_family_renders_no_pill_rather_than_a_zero():
@@ -94,15 +104,13 @@ def test_an_unmeasured_family_renders_no_pill_rather_than_a_zero():
     assert 'class="gap"' not in html
 
 
-def test_a_measured_family_renders_its_count():
-    from app.core.components import Family
-
+def test_a_measured_list_renders_its_count():
     html = _render(
         "clients.html",
         rows=[],
         deleted="",
         domain="x.example",
-        nav_gaps={Family.CRAWL: 3, Family.CONTENT: 0},
+        nav_gaps={"checklist": 3, "handover": 0},
     )
 
     assert ">3<" in html
@@ -289,6 +297,10 @@ def _render_context(**extra) -> dict:
         "max_days": 90,
         "minted": "",
         "error": "",
+        "client_todo": 4,
+        "client_total": 6,
+        "dev_todo": 11,
+        "dev_total": 14,
         "share_section": "report",
         "family_key": "crawl",
         # Overridden by the tests that assert on the sidebar's gap pills.

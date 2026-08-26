@@ -75,11 +75,16 @@ def build_nav(
     path: str,
     domain: str = "",
     is_admin: bool = False,
-    gaps: dict[Family, int] | None = None,
+    gaps: dict[str, int] | None = None,
 ) -> list[NavGroup]:
     """Build the sidebar for one request.
 
-    `gaps` is how many applicable components each family still has outstanding.
+    `gaps` is outstanding work, keyed "checklist" and "handover".
+
+    It used to be per-family, which put a call to act on six navigational tabs
+    and on neither of the two pages where acting happens. It also counted
+    everything not yet live, including templates nobody can action until a
+    service exists.
     Routes that have derived a `SiteStatus` pass it and the sidebar answers
     "where is the work" without opening a tab; routes that have not pass nothing
     and it stays a plain menu. Passing a wrong-but-plausible zero would be worse
@@ -157,7 +162,6 @@ def build_nav(
                         active=scoped and _active(path, f"/sites/{domain}/family/{family.value}"),
                         disabled=not scoped,
                         hint=site_hint,
-                        gap=(gaps or {}).get(family),
                         icon=FAMILY_ICONS.get(family, ""),
                     )
                     for family, label in FAMILY_LABELS.items()
@@ -167,6 +171,15 @@ def build_nav(
         NavGroup(
             label="Deliverables",
             items=[
+                # The badges live here, not on the six families.
+                #
+                # A badge is a call to act, so it belongs on the page where the
+                # acting happens. On a family it answered a question nobody was
+                # asking -- "how many Delivery items are unpublished" -- and it
+                # counted *everything* not yet live, including templates that
+                # cannot be acted on until a service exists. These two count
+                # outstanding work, which is what a number beside a link should
+                # mean.
                 NavItem(
                     "Your checklist",
                     site_url("/checklist"),
@@ -174,6 +187,7 @@ def build_nav(
                     disabled=not scoped,
                     hint=site_hint,
                     icon="checklist",
+                    gap=(gaps or {}).get("checklist"),
                 ),
                 NavItem(
                     "Developer handover",
@@ -182,6 +196,7 @@ def build_nav(
                     disabled=not scoped,
                     hint=site_hint,
                     icon="handover",
+                    gap=(gaps or {}).get("handover"),
                 ),
             ],
         ),
@@ -202,7 +217,7 @@ def build_nav(
                 # panel further down that page. It now links to the panel.
                 NavItem(
                     "Search data",
-                    site_url("/brief#search-console"),
+                    site_url("/brief#search-data"),
                     active=False,
                     disabled=not scoped,
                     hint=site_hint or "Upload or fetch Search Console data",

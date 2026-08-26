@@ -2461,15 +2461,29 @@ def _component_context(request, user, domain, status, view) -> dict:
         "markable": {
             s.key for s in status.statuses if manually_markable(s.component) and not s.probe_decided
         },
+        # What is left to do, for the overview tile. `client_count` was the
+        # *total* on the checklist -- the same number for every client -- and
+        # read as "6 things to do" when the checklist itself said "2 of 6 done".
+        "client_todo": sum(1 for s in status.for_client() if s.state is not ComponentState.LIVE),
+        "client_total": len(status.for_client()),
+        "dev_todo": sum(1 for s in status.for_developer() if s.state is not ComponentState.LIVE),
+        "dev_total": len(status.for_developer()),
         "checked_ago": view.checked_ago,
         "is_stale": view.is_stale,
         "label": "",
-        # Outstanding work per family, for the sidebar. Derived from the same
-        # `SiteStatus` the page body renders, so a count in the nav cannot
-        # disagree with the tab it points at.
+        # Outstanding work, for the two pages where work happens. Derived from
+        # the same `SiteStatus` the page body renders, so a count in the nav
+        # cannot disagree with the page it points at.
+        #
+        # These were per-family, which put a call to act on six navigational
+        # tabs and on neither list. A family badge also answered a question
+        # nobody asks -- "how many Delivery items are unpublished" -- while the
+        # checklist, which is the thing you work through, wore nothing.
         "nav_gaps": {
-            family: counts["total"] - counts["live"]
-            for family, _label, counts in status.family_counts()
+            "checklist": sum(1 for s in status.for_client() if s.state is not ComponentState.LIVE),
+            "handover": sum(
+                1 for s in status.for_developer() if s.state is not ComponentState.LIVE
+            ),
         },
         # Spec compliance of what we generated, keyed by component. Cheap: the
         # rules do no I/O. Absent for an artifact that has no rule set, which the

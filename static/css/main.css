@@ -1239,3 +1239,9 @@ pre.doc.template {
    borrow the colour of anything that wants one. `.pill` with no modifier is
    already this; naming it stops the next person reaching for `run`. */
 .pill.quiet { background: var(--pm-sunken); color: var(--pm-ink-muted); }
+
+/* The way in to the client deliverable. It sits beside Share because that is
+   where an operator is standing when they think about what the client will
+   read -- and until now the only way to look was to mint a share token, which
+   is a thing with an expiry and a revoke button. */
+.preview-link { margin: 0.75rem 0 0; font-size: var(--pm-sm); }

@@ -3,6 +3,13 @@
    A disclosure rather than a permanent form: minting a client link is an
    occasional act, and a form sitting open on every page invites an accidental
    one. `<details>` needs no JavaScript, so it works with the script blocked. #}
+{# The deliverable, before you send it. It was reachable only by typing the URL
+   or by minting a share token -- so the only way to see what a client sees was
+   to create something with an expiry and a revoke button. #}
+<p class="preview-link">
+    <a href="/sites/{{ domain }}/client/report">Preview what the client sees</a>
+</p>
+
 {% if share_enabled %}
 <details class="share-open">
     <summary>Share this with the client</summary>
