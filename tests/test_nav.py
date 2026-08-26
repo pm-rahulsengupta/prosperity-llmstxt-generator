@@ -384,6 +384,7 @@ def _render_context(**extra) -> dict:
             edits=0,
             spend_rows=0,
             share_links=0,
+            audits=0,
             config=0,
         ),
         **extra,
@@ -685,6 +686,7 @@ def _going(**counts):
                 "edits",
                 "spend_rows",
                 "share_links",
+                "audits",
                 "config",
             )
         },
@@ -865,6 +867,7 @@ def test_every_page_renders_under_strict_undefined(template):
             edits=0,
             spend_rows=0,
             share_links=0,
+            audits=0,
             config=1,
         ),
         **(_overview_context() if template == "client_home.html" else {}),

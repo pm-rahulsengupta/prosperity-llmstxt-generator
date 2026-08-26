@@ -131,6 +131,15 @@ class Settings(BaseSettings):
     size_check_location_code: int = 2036  # Australia
     size_check_language_code: str = "en"
 
+    # The shared secret the LLM Access Checker presents when it pushes an audit.
+    #
+    # Empty means the endpoint is closed, not open: an unset token must never
+    # degrade into "accept anything", which is the one way a machine-to-machine
+    # endpoint fails dangerously rather than merely uselessly. `audit_intake_open`
+    # is what the route asks, so the check cannot be written the wrong way round
+    # at the call site.
+    audit_webhook_token: str = ""
+
     # ----------------------------------------------------------------------
 
     @field_validator(
@@ -139,6 +148,7 @@ class Settings(BaseSettings):
         "firecrawl_api_key",
         "pagespeed_api_key",
         "dataforseo_password",
+        "audit_webhook_token",
         mode="after",
     )
     @classmethod
@@ -179,6 +189,17 @@ class Settings(BaseSettings):
     @property
     def size_check_enabled(self) -> bool:
         return bool(self.dataforseo_login and self.dataforseo_password)
+
+    @property
+    def audit_intake_open(self) -> bool:
+        """Whether the LLM Access Checker may push audits here.
+
+        Named for what it permits rather than for a service being "enabled",
+        because what is gated is an inbound door rather than an outbound call --
+        and because `if not settings.audit_intake_open: refuse` is harder to
+        write the wrong way round than a bare truthiness test on a secret.
+        """
+        return bool(self.audit_webhook_token)
 
     def canonical_policy(self, domain: str) -> CanonicalPolicy:
         """The canonicalisation rules for one site.

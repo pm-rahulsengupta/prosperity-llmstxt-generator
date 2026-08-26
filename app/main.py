@@ -12,6 +12,7 @@ more than elegance.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import mimetypes
 import re
@@ -1612,6 +1613,105 @@ async def import_form(request: Request, user: User = Depends(require_user)):
     return templates.TemplateResponse(
         request, "import.html", {"user": user, "error": None, "report": None}
     )
+
+
+# -- audits pushed from the LLM Access Checker --------------------------------
+
+
+def _audit_domain(payload: dict) -> str:
+    """The domain an audit is about, normalised the way this tool stores them.
+
+    The Checker sends `parsed.netloc`, which carries the `www.` a site was
+    audited under. `repo.domain_of` is what every other table here is keyed by,
+    so routing the payload through it is what makes an audit land on the client
+    an operator already has rather than creating a second one beside it.
+    """
+    raw = str(payload.get("domain") or "").strip()
+    return repo.domain_of(raw) if raw else ""
+
+
+def _audit_taken_at(payload: dict) -> datetime:
+    """When the Checker ran it, falling back to now.
+
+    Not to the epoch: a missing timestamp would sort the audit to the bottom for
+    ever and `latest_audit` would keep returning an older one, which is a worse
+    lie than being a few seconds out.
+    """
+    stamp = str(payload.get("generated_at") or "").strip()
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return datetime.now(UTC)
+
+
+@app.post("/api/audits")
+async def receive_audit(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """Accept one audit from the LLM Access Checker.
+
+    Machine-to-machine, so it carries its own bearer token rather than a session
+    cookie -- `require_user` would be wrong here and would also mean the Checker
+    needed a Google account.
+
+    Three refusals, in order of how quietly they would otherwise fail:
+
+    * **Intake closed.** No token configured means the door is shut, not open.
+      An unset secret degrading into "accept anything" is the one way this fails
+      dangerously rather than merely uselessly.
+    * **Wrong token.** `compare_digest`, not `==`, so a wrong guess costs the
+      same time whatever it got right.
+    * **No domain.** An audit we cannot attribute to a client is not storable;
+      taking it and dropping it would be worse than refusing it.
+
+    The payload is stored verbatim. It is built as a dict literal inside the
+    Checker's Streamlit UI rather than as a versioned contract, so anything read
+    out of it here is a convenience copy and a shape change has to degrade the
+    join rather than lose the audit.
+    """
+    settings = get_settings()
+    if not settings.audit_intake_open:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Audit intake is not configured on this instance.",
+        )
+
+    presented = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    if not hmac.compare_digest(presented, settings.audit_webhook_token):
+        logger.warning("rejected an audit push with a bad token")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad token.")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Body is not JSON.") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Body is not a JSON object.")
+
+    domain = _audit_domain(payload)
+    if not domain:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No domain in the payload.")
+
+    audit_id = str(payload.get("audit_id") or "").strip()
+    if not audit_id:
+        # Falling back to the timestamp keeps the push idempotent for a Checker
+        # that has no database configured and therefore no id to send.
+        audit_id = f"{domain}:{payload.get('generated_at') or ''}"
+
+    row, is_new = await repo.save_audit(
+        session,
+        domain=domain,
+        audit_id=audit_id[:64],
+        payload=payload,
+        overall_score=payload.get("overall_score"),
+        pillar_scores=payload.get("pillar_scores") or {},
+        rubric_version=payload.get("rubric_version"),
+        audited_at=_audit_taken_at(payload),
+    )
+    await session.commit()
+    logger.info("stored audit %s for %s (new=%s)", audit_id, domain, is_new)
+    return {"stored": True, "domain": domain, "created": is_new, "id": str(row.id)}
 
 
 @app.post("/imports/screaming-frog", response_class=HTMLResponse)

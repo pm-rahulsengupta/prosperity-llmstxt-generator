@@ -597,6 +597,56 @@ class SiteSnapshot(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class SiteAudit(Base):
+    """One audit from the LLM Access Checker, as it sent it.
+
+    The Checker is the diagnosis and this tool is the remediation; until now they
+    had never spoken, so an operator audited a client, got forty findings, and
+    then opened a second tool that started from scratch and knew none of them.
+    The Checker pushes each audit here as it saves it.
+
+    **Appended, not replaced** -- the opposite of `SiteSnapshot` next door, and
+    deliberately. That row answers "how is this site now" and a history would be
+    a different feature. This one carries a score from a versioned rubric that
+    its author refuses to trend across versions, so keeping the series is what
+    lets us say "audited three days ago under v4" instead of implying the number
+    has always meant the same thing.
+
+    `payload` is the whole export, stored verbatim. The Checker builds it as a
+    dict literal inside a Streamlit UI module rather than as a versioned
+    contract, so a shape change there must degrade the join rather than lose the
+    audit. Everything else on this row is a copy of something inside `payload`,
+    lifted out only because it is queried or sorted on.
+
+    `audit_id` is the Checker's own primary key, and unique here. A webhook that
+    fires twice -- a retry, a redeploy mid-request -- must leave one row.
+    """
+
+    __tablename__ = "site_audits"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    audit_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    overall_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pillar_scores: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
+    # Which rubric produced `overall_score`. Stored because the Checker treats
+    # scores from different versions as different measurements wearing the same
+    # unit, and a number rendered without it invites exactly the comparison it
+    # refuses to make.
+    rubric_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # When the Checker ran it, not when we heard about it. Both, because a push
+    # that arrives late is a different fact from an audit that ran late.
+    audited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_site_audits_domain_audited", "domain", "audited_at"),)
+
+
 class ArtifactEdit(Base):
     """Conversational refinements to a generated file, as operations.
 

@@ -31,6 +31,7 @@ from app.db.models import (
     RunStatus,
     SectionRow,
     ShareLink,
+    SiteAudit,
     SiteConfig,
     SiteMetric,
     SiteSnapshot,
@@ -305,6 +306,7 @@ class ClientDeletion:
     edits: int
     spend_rows: int
     share_links: int
+    audits: int
     config: int
 
     @property
@@ -318,6 +320,7 @@ class ClientDeletion:
             + self.edits
             + self.spend_rows
             + self.share_links
+            + self.audits
             + self.config
         )
 
@@ -331,6 +334,7 @@ class ClientDeletion:
             (self.edits, "saved refinement"),
             (self.spend_rows, "recorded LLM call"),
             (self.share_links, "client share link"),
+            (self.audits, "stored access audit"),
         ):
             if count:
                 parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
@@ -370,6 +374,7 @@ async def _client_row_counts(session: AsyncSession, domain: str) -> ClientDeleti
         edits=await count(ArtifactEdit, ArtifactEdit.domain),
         spend_rows=await count(LlmSpend, LlmSpend.domain),
         share_links=await count(ShareLink, ShareLink.domain),
+        audits=await count(SiteAudit, SiteAudit.domain),
         config=await count(SiteConfig, SiteConfig.domain),
     )
 
@@ -400,6 +405,7 @@ async def delete_client(session: AsyncSession, domain: str) -> ClientDeletion:
     await session.execute(delete(ArtifactEdit).where(ArtifactEdit.domain == domain))
     await session.execute(delete(LlmSpend).where(LlmSpend.domain == domain))
     await session.execute(delete(ShareLink).where(ShareLink.domain == domain))
+    await session.execute(delete(SiteAudit).where(SiteAudit.domain == domain))
     await session.execute(delete(SiteConfig).where(SiteConfig.domain == domain))
     await session.flush()
     return counts
@@ -1069,6 +1075,57 @@ async def runs_for_domain(session: AsyncSession, domain: str, limit: int = 20) -
         select(Run).where(Run.domain == domain).order_by(desc(Run.created_at)).limit(limit)
     )
     return list(result.scalars())
+
+
+async def save_audit(
+    session: AsyncSession,
+    *,
+    domain: str,
+    audit_id: str,
+    payload: dict,
+    overall_score: int | None,
+    pillar_scores: dict,
+    rubric_version: int | None,
+    audited_at: datetime,
+) -> tuple[SiteAudit, bool]:
+    """Store one audit from the Checker. Returns the row and whether it is new.
+
+    Idempotent on the Checker's own id, because a webhook fires more than once in
+    practice -- a retry, a redeploy mid-request, an operator re-saving. A repeat
+    updates the row rather than being ignored: the second push is the more recent
+    statement of the same audit, and silently dropping it would make a corrected
+    score invisible.
+    """
+    result = await session.execute(select(SiteAudit).where(SiteAudit.audit_id == audit_id))
+    row = result.scalar_one_or_none()
+    is_new = row is None
+    if row is None:
+        row = SiteAudit(audit_id=audit_id)
+        session.add(row)
+
+    row.domain = domain
+    row.payload = payload
+    row.overall_score = overall_score
+    row.pillar_scores = pillar_scores
+    row.rubric_version = rubric_version
+    row.audited_at = audited_at
+    await session.flush()
+    return row, is_new
+
+
+async def latest_audit(session: AsyncSession, domain: str) -> SiteAudit | None:
+    """The most recent audit for a domain, or `None` if there has never been one.
+
+    `None` means "never audited", never "audited and found nothing" -- the same
+    distinction `load_snapshot` draws, and the one the whole tool is built on.
+    """
+    result = await session.execute(
+        select(SiteAudit)
+        .where(SiteAudit.domain == domain)
+        .order_by(desc(SiteAudit.audited_at))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def load_marks(session: AsyncSession, domain: str) -> dict[str, str]:
