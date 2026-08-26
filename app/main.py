@@ -541,8 +541,14 @@ async def index(request: Request, session: AsyncSession = Depends(get_session)):
     so finding a client meant finding one of their runs. `/clients` is the front
     door now and this is one of the things you do to a client.
     """
-    user = current_user(request)
-    if user is None and not settings.allow_anonymous:
+    # Resolved rather than read off the cookie, like every other page. This read
+    # `current_user(request)`, whose `is_admin` is whatever was true at sign-in --
+    # so `/` could draw an Admin nav group for somebody who no longer has one,
+    # and every link in it would then 404. The 401 becomes a redirect in
+    # `_auth_redirect`, which is what the hand-rolled check below was doing.
+    try:
+        user = await require_user(request, session)
+    except HTTPException:
         # /login sends a brand-new instance on to /signup.
         return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
     runs = await repo.list_runs(session, limit=40)

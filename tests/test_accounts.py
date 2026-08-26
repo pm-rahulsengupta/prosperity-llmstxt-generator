@@ -7,6 +7,7 @@ here runs anywhere.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -18,7 +19,7 @@ from app.accounts import (
     verify_password,
 )
 from app.auth import User, user_from_claims
-from app.config import Settings
+from app.config import Settings, get_settings
 
 
 def test_a_hash_is_not_the_password():
@@ -119,31 +120,125 @@ def test_session_identity_carries_the_admin_flag():
 # -- the admin surface ------------------------------------------------------
 
 
-def test_a_non_admin_gets_404_not_403_from_an_admin_route():
+async def test_a_non_admin_gets_404_not_403_from_an_admin_route():
     """Copied from geo-tracker: a 403 confirms there is an admin area worth
     attacking, a 404 says nothing. The surface exposes spend and accounts."""
     from fastapi import HTTPException
 
-    from app.auth import require_admin_or_404
-
-    class FakeRequest:
-        session: ClassVar[dict] = {
-            "user": {"email": "member@prosperitymedia.com.au", "is_admin": False}
-        }
+    from app.auth import User, require_admin_or_404
 
     with pytest.raises(HTTPException) as excinfo:
-        require_admin_or_404(FakeRequest())
+        await require_admin_or_404(User(email="member@prosperitymedia.com.au"))
     assert excinfo.value.status_code == 404
     # And it must not name the real reason.
     assert "admin" not in str(excinfo.value.detail).lower()
 
 
-def test_an_admin_passes_through():
-    from app.auth import require_admin_or_404
+async def test_an_admin_passes_through():
+    from app.auth import User, require_admin_or_404
 
-    class FakeRequest:
-        session: ClassVar[dict] = {
-            "user": {"email": "owner@prosperitymedia.com.au", "is_admin": True}
-        }
+    account = User(email="owner@prosperitymedia.com.au", is_admin=True)
 
-    assert require_admin_or_404(FakeRequest()).is_admin
+    assert (await require_admin_or_404(account)).is_admin
+
+
+# -- authority is read from the database, never from the cookie -----------------
+#
+# `find_by_email` is stubbed rather than exercised: what changed is the decision
+# `require_user` makes about a row, and the query itself is covered by
+# `test_signup_gate.py`, which has Postgres.
+
+
+def _cookie(email: str, **claims):
+    class Request:
+        session: ClassVar[dict] = {"user": {"email": email, **claims}}
+
+    return Request()
+
+
+def _row(email: str, *, is_admin: bool = False, is_active: bool = True):
+    return SimpleNamespace(email=email, name="", is_admin=is_admin, is_active=is_active)
+
+
+def _stub(monkeypatch, row):
+    async def find_by_email(session, email):
+        return row
+
+    monkeypatch.setattr("app.auth.find_by_email", find_by_email)
+
+
+async def test_the_cookie_cannot_grant_admin_on_its_own(monkeypatch):
+    """`sign_in` copies `is_admin` into the session and nothing read it back.
+
+    So the flag was decided once, at sign-in, and frozen for the life of the
+    cookie: promoting somebody on /accounts did nothing until they signed out and
+    back in, and *revoking* admin did not end the session it was revoked from.
+    """
+    from app.auth import require_user
+
+    _stub(monkeypatch, _row("member@prosperitymedia.com.au", is_admin=False))
+
+    resolved = await require_user(_cookie("member@prosperitymedia.com.au", is_admin=True), None)
+
+    assert resolved.is_admin is False, "the cookie claimed admin; the row does not"
+
+
+async def test_a_promotion_takes_effect_without_a_re_login(monkeypatch):
+    from app.auth import require_user
+
+    _stub(monkeypatch, _row("member@prosperitymedia.com.au", is_admin=True))
+
+    resolved = await require_user(_cookie("member@prosperitymedia.com.au", is_admin=False), None)
+
+    assert resolved.is_admin is True
+
+
+async def test_a_deactivated_account_loses_the_session_it_already_had(monkeypatch):
+    """`resolve_sso` refuses a deactivated account at the door.
+
+    A session already through the door kept working, because nothing rechecked.
+    """
+    from fastapi import HTTPException
+
+    from app.auth import require_user
+
+    _stub(monkeypatch, _row("member@prosperitymedia.com.au", is_active=False))
+
+    with pytest.raises(HTTPException) as excinfo:
+        await require_user(_cookie("member@prosperitymedia.com.au"), None)
+
+    assert excinfo.value.status_code == 401
+
+
+async def test_a_session_for_a_deleted_account_is_refused(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.auth import require_user
+
+    _stub(monkeypatch, None)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await require_user(_cookie("ghost@prosperitymedia.com.au"), None)
+
+    assert excinfo.value.status_code == 401
+
+
+async def test_anonymous_mode_consults_no_table(monkeypatch):
+    """`ALLOW_ANONYMOUS` has no accounts table to read, by definition.
+
+    Looking one up would 401 the local-development identity that `require_user`
+    just synthesised.
+    """
+    from app.auth import require_user
+
+    def explode(session, email):
+        raise AssertionError("consulted the accounts table in anonymous mode")
+
+    monkeypatch.setattr("app.auth.find_by_email", explode)
+    monkeypatch.setenv("ALLOW_ANONYMOUS", "true")
+    get_settings.cache_clear()
+
+    try:
+        assert (await require_user(_cookie("irrelevant@example.com"), None)).is_admin
+    finally:
+        get_settings.cache_clear()

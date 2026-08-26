@@ -25,9 +25,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from authlib.integrations.starlette_client import OAuth
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.accounts import find_by_email
 from app.config import Settings, get_settings
+from app.db.base import get_session
 
 logger = logging.getLogger(__name__)
 
@@ -108,18 +111,12 @@ def sign_in(request: Request, user: User) -> None:
     }
 
 
-def require_user(request: Request) -> User:
-    """FastAPI dependency. A session is always required; only the way in varies.
+def _signed_in(request: Request) -> User:
+    """Whoever the cookie claims to be. Says nothing about their authority.
 
-    Two ways to sign in, and the app supports both at once rather than switching
-    on a mode flag: a password account, and -- once a Google client is configured
-    -- Google. Whichever produced the session, what lands here is a session.
-
-    The one exception is a machine with neither an identity provider nor a
-    database-backed account, i.e. `pytest` and a bare `python -m app.web` with no
-    migrations run. `ALLOW_ANONYMOUS=true` opts into that explicitly. It is
-    refused in any https deployment by `Settings.assert_deployable`, so it cannot
-    be the reason a public instance is open.
+    Split out of `require_user` when that stopped being the whole answer. Kept
+    separate because two things genuinely differ: whether there is a session at
+    all (cheap, no I/O) and what that person is currently allowed to do.
     """
     settings = get_settings()
     if settings.allow_anonymous:
@@ -135,14 +132,65 @@ def require_user(request: Request) -> User:
     return user
 
 
-def require_admin(request: Request) -> User:
-    user = require_user(request)
-    if not user.is_admin:
+async def require_user(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """FastAPI dependency. A session is always required; only the way in varies.
+
+    Two ways to sign in, and the app supports both at once rather than switching
+    on a mode flag: a password account, and -- once a Google client is configured
+    -- Google. Whichever produced the session, what lands here is a session.
+
+    **The cookie is an identity, not an authority.** `sign_in` copies `is_admin`
+    into it and nothing ever read that back, so the flag was decided once, at
+    sign-in, and then frozen for the life of the cookie:
+
+    - Promoting somebody on /accounts did nothing until they signed out and back
+      in, with nothing anywhere saying a re-login was needed.
+    - Revoking admin, or deactivating an account outright, did not end the
+      session it was revoked from. `resolve_sso` refuses a deactivated account at
+      the *door*; a session already through the door kept working indefinitely.
+
+    Both are fixed by resolving the row here rather than at the six privileged
+    checks, because `user.is_admin` is also what decides whether a *template*
+    draws the Admin nav group and the client Danger Zone. Fixing only
+    `require_admin` would have left an admin who could delete a client by POSTing
+    to the URL but could not see the button.
+
+    The cost is one indexed lookup per authenticated request, on routes that
+    mostly hold a session open already.
+
+    The one exception is a machine with neither an identity provider nor a
+    database-backed account, i.e. `pytest` and a bare `python -m app.web` with no
+    migrations run. `ALLOW_ANONYMOUS=true` opts into that explicitly. It is
+    refused in any https deployment by `Settings.assert_deployable`, so it cannot
+    be the reason a public instance is open.
+    """
+    user = _signed_in(request)
+    if get_settings().allow_anonymous:
+        # No accounts table to consult, by definition.
+        return user
+
+    row = await find_by_email(session, user.email)
+    if row is None or not row.is_active:
+        # Deleted or deactivated since sign-in.
+        logger.info("session for %s no longer resolves to an active account", user.email)
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Sign in to continue.",
+            headers={"Location": "/login"},
+        )
+    return User(email=row.email, name=row.name, picture=user.picture, is_admin=row.is_admin)
+
+
+async def require_admin(account: User = Depends(require_user)) -> User:
+    if not account.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only an admin can manage accounts.")
-    return user
+    return account
 
 
-def require_admin_or_404(request: Request) -> User:
+async def require_admin_or_404(account: User = Depends(require_user)) -> User:
     """Admin, or the page does not exist.
 
     404 rather than 403, copied from geo-tracker's `/admin` layout. A 403 confirms
@@ -150,8 +198,7 @@ def require_admin_or_404(request: Request) -> User:
     the lie is that a genuine admin who has lost their flag sees a puzzling 404 --
     worth it for a surface that exposes spend and account management.
     """
-    user = require_user(request)
-    if not user.is_admin:
-        logger.info("non-admin %s probed an admin route", user.email)
+    if not account.is_admin:
+        logger.info("non-admin %s probed an admin route", account.email)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
-    return user
+    return account

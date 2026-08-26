@@ -61,8 +61,10 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 # `Depends(...)` in a parameter default is FastAPI's dependency-injection idiom,
-# not the mutable-default bug B008 exists to catch.
+# not the mutable-default bug B008 exists to catch. `auth.py` holds the
+# dependencies themselves, which take dependencies of their own the same way.
 "app/main.py" = ["B008"]
+"app/auth.py" = ["B008"]
 # conftest must set the event-loop policy before anything imports psycopg, so its
 # imports cannot all sit at the top.
 "tests/conftest.py" = ["E402"]
