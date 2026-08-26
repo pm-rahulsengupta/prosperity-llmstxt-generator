@@ -1128,6 +1128,25 @@ async def latest_audit(session: AsyncSession, domain: str) -> SiteAudit | None:
     return result.scalar_one_or_none()
 
 
+async def delete_audit(session: AsyncSession, audit_id: str) -> str:
+    """Remove one stored audit. Returns the domain it belonged to, or "".
+
+    An audit can arrive wrongly -- pushed against the wrong domain, sent by a
+    smoke test, or superseded by a re-run the Checker could not overwrite. Until
+    this existed the only way to remove one was to delete the whole client, and
+    an audit nobody can retract is one that keeps making a claim about a client's
+    site long after everyone knows it is wrong.
+    """
+    result = await session.execute(select(SiteAudit).where(SiteAudit.audit_id == audit_id))
+    row = result.scalar_one_or_none()
+    if row is None:
+        return ""
+    domain = row.domain
+    await session.delete(row)
+    await session.flush()
+    return domain
+
+
 async def load_marks(session: AsyncSession, domain: str) -> dict[str, str]:
     """Component key -> who marked it done."""
     result = await session.execute(

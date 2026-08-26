@@ -105,5 +105,20 @@
         result &mdash; check the report itself.
     </p>
     {% endif %}
+
+    {% if user and user.is_admin and audit_id %}
+    {# An audit can arrive wrongly -- pushed against the wrong domain, sent by a
+       smoke test, superseded by a re-run. Until this existed the only way to
+       remove one was to delete the whole client, so a wrong finding kept making
+       a claim about a real client's site with no way to take it back. #}
+    <form method="post" action="/audits/{{ audit_id }}/delete" class="inline-form">
+        <input type="hidden" name="back" value="/sites/{{ domain }}/settings">
+        <button class="ghost" type="submit">Remove this audit</button>
+    </form>
+    <p class="hint">
+        For an audit pushed against the wrong client or sent by a test. The
+        Checker keeps its own copy either way.
+    </p>
+    {% endif %}
     {% endif %}
 </div>

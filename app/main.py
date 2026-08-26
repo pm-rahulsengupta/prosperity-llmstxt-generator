@@ -1465,6 +1465,7 @@ async def _settings_context(session: AsyncSession, user: User, domain: str, erro
         # a site nobody scored and a site that scored nothing are different
         # findings.
         "audit": audit_view,
+        "audit_id": audit_row.audit_id if audit_row is not None else "",
         "audited_ago": _ago(audit_row.audited_at) if audit_row is not None else "",
         "checker_url": get_settings().checker_url,
         "readiness": readiness_from_dict(snapshot.readiness).score if snapshot else None,
@@ -1723,6 +1724,30 @@ async def receive_audit(
     await session.commit()
     logger.info("stored audit %s for %s (new=%s)", audit_id, domain, is_new)
     return {"stored": True, "domain": domain, "created": is_new, "id": str(row.id)}
+
+
+@app.post("/audits/{audit_id}/delete")
+async def delete_audit_route(
+    audit_id: str,
+    back: str = Form(""),
+    user: User = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Retract one stored audit.
+
+    Admin-only, because it removes a client-visible finding. Deleting a stray
+    audit used to mean deleting the whole client -- so an audit pushed against
+    the wrong domain, or sent by a smoke test, kept making a claim about a real
+    client's site with no way to take it back short of destroying their record.
+
+    Idempotent: an id that is already gone is a success, because the caller's
+    intent -- that this audit not exist -- is satisfied either way.
+    """
+    domain = await repo.delete_audit(session, audit_id)
+    await session.commit()
+    logger.info("audit %s deleted by %s", audit_id, user.email)
+    fallback = f"/sites/{domain}/settings" if domain else "/clients"
+    return RedirectResponse(_back_to(back, fallback), status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/imports/screaming-frog", response_class=HTMLResponse)

@@ -270,7 +270,7 @@ async def test_the_profile_context_builds_with_an_audit_and_without_one(monkeypa
     from app.db import repo
     from app.main import _settings_context
 
-    row = SimpleNamespace(payload=PAYLOAD, audited_at=datetime.now(UTC))
+    row = SimpleNamespace(payload=PAYLOAD, audited_at=datetime.now(UTC), audit_id="abc-123")
 
     async def nothing(*a, **k):
         return None
@@ -320,3 +320,43 @@ def _deletion():
         audits=0,
         config=0,
     )
+
+
+# -- retracting one --------------------------------------------------------------
+
+
+def test_the_retract_route_is_admin_only():
+    """It removes a client-visible finding, so it is not a general staff action."""
+    import inspect
+
+    from app.main import delete_audit_route
+
+    depends = inspect.signature(delete_audit_route).parameters["user"].default
+
+    assert depends.dependency.__name__ == "require_admin"
+
+
+def test_retracting_is_idempotent():
+    """An id already gone is a success.
+
+    The caller's intent -- that this audit not exist -- is satisfied either way,
+    and a 404 on the second click of a double-submitted form is noise.
+    """
+    import inspect
+
+    from app.main import delete_audit_route
+
+    source = inspect.getsource(delete_audit_route)
+
+    assert "HTTPException" not in source, "a missing audit is not an error"
+
+
+def test_the_panel_offers_the_retraction_only_to_an_admin():
+    from pathlib import Path
+
+    markup = (
+        Path(__file__).resolve().parents[1] / "templates" / "partials" / "audit_panel.html"
+    ).read_text(encoding="utf-8")
+
+    assert "{% if user and user.is_admin and audit_id %}" in markup
+    assert 'action="/audits/{{ audit_id }}/delete"' in markup

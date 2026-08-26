@@ -374,6 +374,7 @@ def _render_context(**extra) -> dict:
         "unfinished": [],
         # From `_settings_context` -- the Checker's audit, absent by default.
         "audit": None,
+        "audit_id": "",
         "audited_ago": "",
         "checker_url": "",
         # A real one: the Danger zone calls `going.summary()`, so `None` renders
