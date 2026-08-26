@@ -243,3 +243,46 @@ def test_our_bookkeeping_does_not_render_as_a_finding():
 
     assert "What we found: generated and ready to publish" not in html
     assert "marked done by" not in html
+
+
+# -- the residue -----------------------------------------------------------------
+
+
+def test_the_search_data_nav_item_lands_on_something():
+    """It pointed at `#search-console`, which existed nowhere.
+
+    So the item landed five panels above the thing it named. I then renamed the
+    href to `#search-data` without adding the target, which moved the dead
+    anchor rather than fixing it. Both halves are asserted here.
+    """
+    from app.nav import build_nav
+
+    items = {i.title: i for g in build_nav("/", "x.example") for i in g.items}
+    href = items["Search data"].url
+    anchor = href.split("#", 1)[1]
+
+    brief = (ROOT / "templates" / "brief.html").read_text(encoding="utf-8")
+    assert f'id="{anchor}"' in brief, f"nav points at #{anchor}, which brief.html does not define"
+
+
+def test_the_sidebar_emits_no_duplicate_ids():
+    """We audit clients for this exact thing (WCAG 4.1.1, `unique-ids`).
+
+    Three nav groups each built `hint-1-0`, `hint-2-1`, ... from the inner loop
+    only, so every disabled item's `aria-describedby` resolved to whichever
+    duplicate the parser met first.
+    """
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tests"))
+    from collections import Counter
+
+    from lxml import html as lxml_html
+
+    from tests.test_nav import _render
+
+    doc = lxml_html.fromstring(_render("clients.html", rows=[], deleted="", domain=""))
+    ids = [element.get("id") for element in doc.xpath("//*[@id]")]
+    repeated = [value for value, count in Counter(ids).items() if count > 1]
+
+    assert repeated == [], f"duplicate ids: {repeated}"
