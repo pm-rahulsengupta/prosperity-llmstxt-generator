@@ -44,6 +44,8 @@ from app.core.components import (
     Priority,
     SiteType,
 )
+from app.scrape.recon import parse_sitemap
+from app.scrape.sitemap_check import judge_sitemap, same_site
 
 __all__ = [
     "CHECKLIST",
@@ -147,6 +149,11 @@ MAX_CONCURRENCY = 4
 # One page per sitemap group, bounded. Enough to cover the templates a site
 # actually uses without turning an audit into a crawl.
 MAX_SAMPLES = 4
+#: Child sitemaps opened to confirm an index leads to real pages. Three, not all
+#: of them: the index already names the commonest failure -- children on another
+#: host -- for free, and following every child of a large site would double the
+#: request count of the whole audit to sharpen an answer we already have.
+MAX_SITEMAP_CHILDREN = 3
 
 # Three Layer 1 items are visible in the HTML without rendering it. A static
 # parse is weaker than Lighthouse -- it cannot see what CSS or JavaScript does at
@@ -520,8 +527,29 @@ async def audit_readiness(
             async with gate:
                 return await _fetch(client, origin + path)
 
+        async def limited_url(url: str):
+            async with gate:
+                return await _fetch(client, url)
+
         responses = await asyncio.gather(*(limited(item.path) for item in fetchable))
         by_key = dict(zip([i.key for i in fetchable], responses, strict=True))
+
+        # The sitemap's own children, so the check can say whether it leads to
+        # any pages rather than only that it parsed as XML. Bounded: the index
+        # names the commonest failure -- children on another host -- for free,
+        # and following every child of a large site would double the request
+        # count of the whole audit to sharpen an answer we already have.
+        sitemap_children: dict[str, str | None] | None = None
+        sitemap_response = by_key.get("sitemap")
+        if sitemap_response is not None and sitemap_response.status_code < 400:
+            _, nested = parse_sitemap(sitemap_response.text)
+            on_site = [u for u in nested if same_site(u, origin)][:MAX_SITEMAP_CHILDREN]
+            if on_site:
+                fetched = await asyncio.gather(*(limited_url(u) for u in on_site))
+                sitemap_children = {
+                    url: (r.text if r is not None and r.status_code < 400 else None)
+                    for url, r in zip(on_site, fetched, strict=True)
+                }
 
         home = await _fetch(client, origin + "/")
         markdown = await _fetch(client, origin + "/", headers={"Accept": "text/markdown"})
@@ -647,6 +675,19 @@ async def audit_readiness(
             continue
 
         state, detail = _state_for(by_key.get(item.key), item.expect)
+
+        # A sitemap that answers 200 as XML has passed nothing yet.
+        #
+        # This component is titled "live and reachable" and the generic check
+        # settles neither: opencorp.com.au serves a valid `<sitemapindex>` whose
+        # thirteen children all point at a password-protected staging host, and
+        # it was marked Published. A crawler following it collects thirteen 401s.
+        if item.key == "sitemap" and state is CheckState.PASS:
+            response = by_key.get("sitemap")
+            verdict = judge_sitemap(response.text if response else "", origin, sitemap_children)
+            state = CheckState.PASS if verdict.ok else CheckState.FAIL
+            detail = f"{detail} — {verdict.detail}"
+
         if state is CheckState.FAIL and applies is Applicability.CONDITIONAL:
             # "If you run one" cannot be failed by a probe: absence is the correct
             # answer for most sites, and scoring it would punish a law firm for
