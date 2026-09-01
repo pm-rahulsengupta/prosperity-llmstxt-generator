@@ -956,7 +956,7 @@ async def probe_site_live(session: AsyncSession, normalised: str):
     # the page is not waiting on a crawl.
     probe = await probe_site(normalised, settings.crawl_user_agent)
     tech = await probe_tech(normalised, settings.crawl_user_agent)
-    domain = urlparse(normalised).netloc
+    domain = repo.domain_of(normalised)
     brief = await repo.load_brief(session, domain)
 
     # Links come from a completed llms.txt run for the same domain. The two files
@@ -1367,7 +1367,7 @@ async def create_client(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    domain = urlparse(normalised).netloc
+    domain = repo.domain_of(normalised)
     existing = await repo.load_site_config(session, domain)
     await repo.save_site_config(
         session,
@@ -1824,7 +1824,7 @@ async def import_screaming_frog(
             "that answered 200 are kept.",
         )
 
-    domain = urlparse(normalised).netloc
+    domain = repo.domain_of(normalised)
     off_site = [e.url for e in entries if domain not in urlparse(e.url).netloc]
     if off_site:
         # A pasted export from the wrong crawl is easy to do and expensive to
@@ -2373,7 +2373,7 @@ async def agents_generate(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    domain = urlparse(normalised).netloc
+    domain = repo.domain_of(normalised)
     await _check_and_store(session, normalised, domain, user.email)
 
     # Checking a site makes it a known client. Without this the snapshot exists,
@@ -2688,7 +2688,7 @@ async def agents_download(
     seen the age of.
     """
     normalised = normalise_site_url(site)
-    domain = urlparse(normalised).netloc
+    domain = repo.domain_of(normalised)
     view = await _from_snapshot(session, domain)
     if view is None:
         raise HTTPException(

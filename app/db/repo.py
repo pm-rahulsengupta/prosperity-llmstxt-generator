@@ -39,6 +39,21 @@ from app.db.models import (
 
 
 def domain_of(site_url: str) -> str:
+    """The one spelling of a domain this schema is keyed by.
+
+    Lowercase, no leading `www.`. Nine tables carry a bare `domain` string with no
+    foreign key between them, so the only thing making them one client is that they
+    agree on this function.
+
+    They did not. Five call sites in `main.py` used `urlparse(...).netloc`, which
+    keeps both the case and the `www.`, and that is what `SiteConfig` and every
+    other client-scoped table were keyed by while `Run.domain` used this. A client
+    added as `www.redspot.com.au` therefore had a config under one key and runs
+    under the other: `client_home` filters runs by `r.domain == domain` against the
+    path segment, so the client page for any `www.` site listed no runs at all, and
+    the delete guard could not see the in-flight runs it exists to find. Both
+    spellings resolved to a page, so nothing looked broken -- the pages disagreed.
+    """
     host = urlparse(site_url if "//" in site_url else f"https://{site_url}").netloc
     # Lowered *before* the prefix is stripped, not after. `removeprefix` is exact,
     # so "WWW.NRMA.COM.AU" kept its prefix and came back as "www.nrma.com.au" --
