@@ -152,10 +152,19 @@ def surface_look(surface) -> Look:
 #: names the state of the machine rather than telling the operator that *they*
 #: are the thing it is waiting for.
 #:
-#: Lime (`BUSY`) is right for every non-terminal state here: this is the
-#: in-progress meaning the colour was reserved for.
+#: Lime (`BUSY`) is right for every non-terminal state here *except* `pending`,
+#: which is the one that is not in progress at all: the row exists and nothing is
+#: working on it. It takes `QUIET`, the same tone as `cancelled`, so a run nobody
+#: started does not sit in the client list wearing the colour that means "working".
 RUN_LOOK: dict[str, Look] = {
-    "pending": Look("Queued", Tone.BUSY, "Waiting for a worker to pick it up."),
+    # Not "Queued". A run reaches `pending` the moment its row is written, which
+    # is *before* anything is deferred -- the job is only enqueued when the brief
+    # gate is passed. Calling that "Waiting for a worker" sent three separate
+    # investigations at the worker, which was idle and blameless every time:
+    # redspot.com.au, rentalcover.com and westpac.com.au all sat here for days
+    # with an empty queue. The status names the run's own state; the hint says
+    # plainly that nothing is waiting to pick it up, because nothing is.
+    "pending": Look("Not started", Tone.QUIET, "Nothing has been queued for this run yet."),
     "preflight": Look(
         "Sizing the site", Tone.BUSY, "Reading the sitemap before anything is spent."
     ),

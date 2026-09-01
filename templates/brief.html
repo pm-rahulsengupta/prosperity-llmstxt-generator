@@ -173,7 +173,10 @@
     </p>
     {% endif %}
 
-    <form method="post" action="/sites/{{ domain }}/metrics" enctype="multipart/form-data">
+    {# `run` rides along the same way it does on the brief and suggest forms. Without
+       it the upload's redirect landed back here with no run id, the brief form below
+       then posted bare, and the run it was started for was never queued at all. #}
+    <form method="post" action="/sites/{{ domain }}/metrics{% if run_id %}?run={{ run_id }}{% endif %}" enctype="multipart/form-data">
         <div class="field">
             <label for="export">Upload a Search Console export</label>
             <input type="file" id="export" name="export" accept=".csv,.zip" required>

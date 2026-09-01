@@ -574,7 +574,27 @@ async def create_run(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    run = await repo.create_run(session, normalised, created_by=user.email)
+    # A run this domain already has and has never started is reused rather than
+    # duplicated. Two presses of one button wrote two rows and deferred two
+    # preflights -- nrma.com.au carries the pair, a minute apart, priced twice --
+    # and every abandoned onboarding left another row nothing would ever touch.
+    # Reuse is safe precisely because `pending` means no work has been done: the
+    # form's own cap and llms-full choice are written over whatever the stale row
+    # was carrying, so the operator gets the run they just asked for.
+    # `repo.domain_of`, not `urlparse(...).netloc`: the two disagree about `www.`
+    # and only the former matches what `create_run` writes into `Run.domain`.
+    run = await repo.pending_run_for_domain(session, repo.domain_of(normalised))
+    if run is None:
+        run = await repo.create_run(session, normalised, created_by=user.email)
+    else:
+        # Restamped, because the row is now this person's request. A stale pending
+        # run can be days old and someone else's -- redspot.com.au's was aaron's,
+        # six days cold -- and leaving the original name on it would credit the
+        # run, and its cost, to whoever last abandoned the form. `site_url` is
+        # rewritten for the same reason: the domain matched, but the scheme or the
+        # `www.` may not have, and the crawl uses this field, not the domain.
+        run.site_url = normalised
+        run.created_by = user.email
     run.max_pages = max_pages
     # Stored on the plan rather than in a column: it is a decision about this
     # run, it travels with the plan the operator approves, and it needs no
@@ -852,6 +872,7 @@ MAX_METRICS_UPLOAD = 25 * 1024 * 1024
 async def upload_metrics(
     request: Request,
     domain: str,
+    run: str | None = None,
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -895,8 +916,15 @@ async def upload_metrics(
     await session.commit()
 
     notes = "; ".join(imported.notes)
+    # `run` is carried back deliberately. Uploading an export in the middle of
+    # onboarding used to drop it here, and the brief form rendered by the redirect
+    # then had no run id to post -- so answering the brief saved the answers and
+    # silently declined to start the run they were being answered for. That is how
+    # redspot.com.au sat unstarted for six days.
     return RedirectResponse(
-        f"/sites/{domain}/brief?imported={written}" + (f"&notes={quote(notes)}" if notes else ""),
+        f"/sites/{domain}/brief?imported={written}"
+        + (f"&notes={quote(notes)}" if notes else "")
+        + (f"&run={quote(run)}" if run else ""),
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -2959,6 +2987,48 @@ async def run_detail(
             "status": RunStatus(run.status),
         },
     )
+
+
+@app.post("/runs/{run_id}/start")
+async def start_run(
+    run_id: UUID,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Enqueue a run that was created but never deferred.
+
+    A run row is written by `create_run` *before* the brief gate, and the job is
+    only deferred if the brief is submitted with `?run=` still on the URL. Every
+    way of leaving that page without submitting it -- uploading a Search Console
+    export, which used to drop the parameter on the redirect, or simply
+    navigating away -- left a row nothing would ever pick up, with no control
+    anywhere to start it. Three runs across three operators sat like that for up
+    to eleven days.
+
+    Deliberately not a re-run: `rerun` clones, which is right for a run that has
+    something worth comparing against and wrong for one that never began. This
+    starts *this* row, so the id an operator is looking at is the id that runs.
+
+    Guarded to `pending` alone. `preflight_task` has no status check of its own --
+    it sets PREFLIGHT and later overwrites `run.plan` whatever it finds -- so
+    without this guard a double-submit would restart a finished run and destroy
+    its plan.
+    """
+    run = await repo.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such run.")
+    if RunStatus(run.status) is not RunStatus.PENDING:
+        # Not an error worth a 4xx: the usual cause is a second click on a button
+        # the first click already consumed, and the run page shows the true state.
+        return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    await repo.record_event(session, run.id, "preflight", f"Started by {user.email}")
+    await session.commit()
+
+    from app.jobs.tasks import preflight_task
+
+    await preflight_task.defer_async(run_id=str(run_id), requested_max_pages=run.max_pages or 0)
+    return RedirectResponse(f"/runs/{run_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @app.post("/runs/{run_id}/rerun")

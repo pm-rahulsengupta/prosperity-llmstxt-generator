@@ -320,3 +320,134 @@ def test_the_run_page_and_the_client_list_agree_on_the_words():
         "admin/runs.html",
     ):
         assert "run_look(" in markup(name), f"{name} does not use the shared mapping"
+
+
+# -- a run that was created and never queued -----------------------------------
+#
+# Three of the nine runs on the live instance sat here: redspot.com.au for six
+# days, rentalcover.com for five, westpac.com.au for eleven -- three operators,
+# three domains, one defect. A run row is written before the brief gate and the
+# job is deferred only if the brief is submitted with `?run=` still on the URL,
+# so every way of leaving that page without submitting it stranded the row. The
+# status called it "Queued", which sent three separate investigations at a
+# worker that was idle and blameless every time.
+
+
+def test_a_run_nobody_started_does_not_claim_a_worker_has_it():
+    """The label was the whole misdirection, so it is the first thing pinned.
+
+    `pending` is reached the moment `create_run` writes the row -- before
+    anything is deferred. Describing that as waiting for a worker points at the
+    one component that is provably not involved.
+    """
+    look = run_look(RunStatus.PENDING)
+    words = f"{look.headline} {look.holding}".lower()
+
+    assert look.headline.lower() != "queued", "still names a queue that does not hold it"
+    assert "worker" not in words, "still blames the worker"
+    assert "waiting for" not in words, "still reads as waiting on something else to act"
+    assert look.tone is not Tone.BUSY, "a run nobody started is not in progress"
+
+
+def test_the_progress_panel_does_not_blame_the_worker_either():
+    """It carried its own copy of the sentence, so fixing `RUN_LOOK` missed it."""
+    panel = markup("partials/progress.html").lower()
+
+    assert "waiting for a worker" not in panel
+    assert "not started" in panel
+
+
+def test_the_run_page_offers_to_start_a_run_that_was_never_queued():
+    """There was no control anywhere that started an existing pending run.
+
+    `rerun` was the only way out and it clones, which is right for a run with
+    something worth comparing against and wrong for one that never began: it
+    leaves the id the operator is looking at stranded and starts a different one.
+    """
+    page = markup("run.html")
+
+    assert 'action="/runs/{{ run.id }}/start"' in page, "no way to start a stranded run"
+    assert "run.status == 'pending'" in page, "the control is not gated on the state it fixes"
+
+
+def test_starting_a_run_is_refused_unless_it_is_pending():
+    """`preflight_task` has no status check of its own.
+
+    It sets PREFLIGHT and later overwrites `run.plan` whatever it finds, so an
+    unguarded start would let a second click destroy a finished run's plan.
+    """
+    import inspect
+
+    from app.main import start_run
+
+    source = inspect.getsource(start_run)
+
+    assert "RunStatus.PENDING" in source, "nothing stops this restarting a finished run"
+    assert "defer_async" in source, "guards the call but never makes it"
+
+
+def test_the_metrics_upload_carries_the_run_it_was_uploaded_for():
+    """This is the leak that stranded redspot.com.au, end to end.
+
+    Uploading a Search Console export mid-onboarding redirected back to the brief
+    with `imported` and `notes` but not `run`. The brief form then rendered with
+    no run id, posted bare, and saving the answers silently declined to start the
+    run they were answered for.
+    """
+    import inspect
+
+    from app.main import upload_metrics
+
+    source = inspect.getsource(upload_metrics)
+
+    assert "run=" in source, "the redirect still drops the run id"
+    assert 'action="/sites/{{ domain }}/metrics{% if run_id %}?run={{ run_id }}{% endif %}"' in (
+        markup("brief.html")
+    ), "the upload form never sends the run id in the first place"
+
+
+def test_a_second_submit_reuses_the_run_nobody_started():
+    """nrma.com.au holds two runs a minute apart, identically priced.
+
+    Nothing stopped a double-press writing a second row and deferring a second
+    preflight. Reuse is safe only for `pending`, which is the one status that
+    means no work has been done and nothing is going to act on it.
+    """
+    import inspect
+
+    from app.main import create_run
+
+    source = inspect.getsource(create_run)
+
+    assert "pending_run_for_domain" in source, "still writes a row per press"
+    assert "repo.domain_of" in source, (
+        "urlparse().netloc keeps 'www.' and Run.domain does not, so the lookup never matches"
+    )
+
+
+def test_a_rerun_keeps_the_llms_full_choice():
+    """`clone_run` carried the page cap and dropped `generate_full`.
+
+    The run page offers no way to set it, so a re-run produced no llms-full.txt
+    however the original was configured -- the same silent drop that made it a
+    column instead of a key in `plan`.
+    """
+    import inspect
+
+    from app.db.repo import clone_run
+
+    assert "generate_full=original.generate_full" in inspect.getsource(clone_run)
+
+
+def test_a_domain_typed_in_capitals_is_the_same_domain():
+    """`removeprefix` is exact, so it ran before the lowering and did nothing.
+
+    "WWW.NRMA.COM.AU" came back as "www.nrma.com.au" -- a third key for a domain
+    the SiteConfig/Run split already keys two ways, reachable by an operator
+    doing nothing stranger than typing the site in capitals.
+    """
+    from app.db.repo import domain_of
+
+    assert domain_of("https://WWW.NRMA.COM.AU") == "nrma.com.au"
+    assert domain_of("https://www.nrma.com.au") == "nrma.com.au"
+    assert domain_of("https://NRMA.com.au") == "nrma.com.au"

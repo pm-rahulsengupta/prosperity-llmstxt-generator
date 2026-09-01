@@ -40,7 +40,12 @@ from app.db.models import (
 
 def domain_of(site_url: str) -> str:
     host = urlparse(site_url if "//" in site_url else f"https://{site_url}").netloc
-    return (host or site_url).removeprefix("www.").lower()
+    # Lowered *before* the prefix is stripped, not after. `removeprefix` is exact,
+    # so "WWW.NRMA.COM.AU" kept its prefix and came back as "www.nrma.com.au" --
+    # a third key for a domain already split two ways, and one an operator can
+    # produce just by typing the site in capitals. Hostnames are case-insensitive;
+    # the order was the whole bug.
+    return (host or site_url).lower().removeprefix("www.")
 
 
 # -- runs -------------------------------------------------------------------
@@ -1003,6 +1008,12 @@ async def clone_run(session: AsyncSession, run_id: uuid.UUID, created_by: str) -
         # The cap is carried because it is usually a deliberate choice; the plan
         # is not, because re-running exists to get a new one.
         max_pages=original.max_pages,
+        # Carried for exactly the reason the cap is. It was omitted, and since the
+        # run page offers no way to set it, a re-run silently produced no
+        # llms-full.txt however the original was configured -- the same class of
+        # bug as `run.plan = plan.to_dict()` dropping it, which is why it became a
+        # column in the first place.
+        generate_full=original.generate_full,
     )
     session.add(fresh)
     await session.flush()
@@ -1067,6 +1078,28 @@ async def unfinished_runs_for_domain(session: AsyncSession, domain: str) -> list
         .order_by(desc(Run.created_at))
     )
     return list(result.scalars())
+
+
+async def pending_run_for_domain(session: AsyncSession, domain: str) -> Run | None:
+    """The most recent run for this domain that was created and never queued.
+
+    `pending` is the only status that means "the row exists and nothing, anywhere,
+    is going to act on it" -- every other in-flight status has either a job or a
+    person behind it. So it is the one status it is safe to hand back to a second
+    identical request instead of writing another row.
+
+    Exists because nothing stopped a double-submit: nrma.com.au holds two runs
+    created in the same minute by the same operator, with the same page count and
+    the same cost, because the button was pressed twice and each press deferred
+    its own preflight.
+    """
+    result = await session.execute(
+        select(Run)
+        .where(Run.domain == domain, Run.status == RunStatus.PENDING)
+        .order_by(desc(Run.created_at))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def runs_for_domain(session: AsyncSession, domain: str, limit: int = 20) -> list[Run]:

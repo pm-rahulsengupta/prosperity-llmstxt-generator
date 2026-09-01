@@ -202,6 +202,16 @@
     <h3>Run actions</h3>
 
     <div class="actions">
+        {% if run.status == 'pending' %}
+        <form method="post" action="/runs/{{ run.id }}/start">
+            <button type="submit">Start this run</button>
+            <span class="hint">
+                This run was created but never queued &mdash; answering the brief is what
+                normally starts it. Runs this row rather than cloning it, so the id above
+                is the one that works. It stops at the review gate like any other run.
+            </span>
+        </form>
+        {% else %}
         <form method="post" action="/runs/{{ run.id }}/rerun">
             <button type="submit">Re-run from the start</button>
             <span class="hint">
@@ -209,6 +219,7 @@
                 two can be compared. It stops at the review gate like any other run.
             </span>
         </form>
+        {% endif %}
 
         {% if not status.is_terminal %}
         <form method="post" action="/runs/{{ run.id }}/cancel">
