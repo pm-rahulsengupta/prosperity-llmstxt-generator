@@ -126,6 +126,49 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
                 await repo.record_event(session, rid, "preflight", f"Failed: {exc}")
         return
 
+    # Stop here when the site refused us outright, before the two LLM calls below.
+    #
+    # Preflight used to carry on and hand the planner an empty URL inventory, which
+    # produces a plausible-looking empty plan, parks the run at the review gate, and
+    # invites an operator to approve a crawl of nothing. nrma.com.au did exactly that
+    # four times: "Waiting for you" with no sitemap, then a one-page output. The run
+    # said nothing about a block anywhere, because discovery reported a refusal and a
+    # missing file identically.
+    #
+    # Failing is the honest outcome. Nothing about this run can be salvaged by
+    # approving it, and the error names both the cause and the way round it. The
+    # DataForSEO count above is still worth its one call -- "Google indexes 924 pages
+    # we cannot see" is precisely the evidence that this is a block and not an empty
+    # site -- so the guard sits after the size check and before the spend that would
+    # be wasted.
+    if pre.recon.shut_out:
+        detail = "; ".join(block.describe() for block in pre.recon.blocked[:5])
+        indexed = pre.size.indexed_estimate
+        message = (
+            f"Could not read {domain} from this server: {pre.recon.blocked_summary()} "
+            f"Refused: {detail}."
+            + (
+                f" Google still indexes about {indexed:,} pages, so the site is there -- "
+                "this is our access, not their content."
+                if indexed
+                else ""
+            )
+            + " Crawl it from an address the site accepts and upload the export through "
+            "Imports → Screaming Frog, which skips the fetch entirely."
+        )
+        logger.warning("preflight blocked for %s: %s", site_url, detail)
+        async with session_scope() as session:
+            run = await repo.get_run(session, rid)
+            if run is not None:
+                run.sitemap_total = pre.size.sitemap_total
+                run.sitemap_html = pre.size.sitemap_html
+                run.indexed_estimate = pre.size.indexed_estimate
+                run.size_warnings = [*pre.size.warnings, pre.recon.blocked_summary()]
+                run.stats = {**(run.stats or {}), "serp_calls": pre.serp_calls}
+                await repo.set_status(session, run, RunStatus.FAILED, error=message)
+                await repo.record_event(session, rid, "preflight", message)
+        return
+
     cap = effective_page_cap(pre.size, requested_max_pages, settings.crawl_default_max_pages)
 
     # Loaded here rather than passed in from the route: a run can be deferred long
@@ -174,7 +217,14 @@ async def preflight_task(run_id: str, requested_max_pages: int = 0) -> None:
         run.sitemap_html = pre.size.sitemap_html
         run.indexed_estimate = pre.size.indexed_estimate
         run.size_tier = pre.size.tier
-        run.size_warnings = list(pre.size.warnings)
+        # A partial block still belongs on the run. Some sites refuse robots.txt and
+        # serve their sitemaps, or refuse one sitemap out of forty; the run proceeds,
+        # but the page count it reports is a floor rather than the site's size, and
+        # an operator reading "412 pages" deserves to know some doors were shut.
+        run.size_warnings = [
+            *pre.size.warnings,
+            *([pre.recon.blocked_summary()] if pre.recon.blocked else []),
+        ]
         run.max_pages = cap
         run.plan = plan.to_dict()
         run.plan_source = plan.source

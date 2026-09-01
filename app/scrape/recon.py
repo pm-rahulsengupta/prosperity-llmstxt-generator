@@ -30,6 +30,62 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 _HAS_DIGITS_AND_WORDS = re.compile(r"^[a-z0-9]+(-[a-z0-9]+){2,}$", re.I)
 
 
+#: Statuses that mean a server refused us, as opposed to not having the file.
+#:
+#: An edge WAF answers 403 to `robots.txt` exactly as it answers 403 to a page, so
+#: without this distinction a blocked site is indistinguishable from a site that
+#: publishes no sitemap -- and the run reports the client's site as empty when the
+#: truth is that we were denied at the door. Measured on nrma.com.au: 403 from the
+#: Railway worker and 200 from an Australian residential address, on the same
+#: static text file, with `server: AkamaiGHost` on the refusal.
+#:
+#: 404 and 410 are deliberately absent. Those really are "no such file", which is
+#: the ordinary case `fetch_robots` already handles correctly.
+BLOCKED_STATUSES = frozenset({401, 403, 405, 406, 429, 451, 503})
+
+#: `Server` values that name the thing doing the blocking. Worth reporting because
+#: the remedy differs: an IP-reputation deny needs a different address, a bot
+#: challenge needs a different fetcher, and an operator cannot tell which from a
+#: bare 403.
+_WAF_HINTS = (
+    ("akamai", "Akamai"),
+    ("imperva", "Imperva"),
+    ("incapsula", "Imperva Incapsula"),
+    ("cloudflare", "Cloudflare"),
+    ("awselb", "AWS ELB"),
+    ("cloudfront", "CloudFront"),
+    ("sucuri", "Sucuri"),
+    ("barracuda", "Barracuda"),
+    ("f5", "F5 BIG-IP"),
+    ("fastly", "Fastly"),
+)
+
+
+def name_blocker(server: str) -> str:
+    """A recognisable name for whatever refused us, or the raw `Server` value."""
+    lowered = (server or "").lower()
+    for needle, label in _WAF_HINTS:
+        if needle in lowered:
+            return label
+    return server or "unidentified"
+
+
+@dataclass(slots=True, frozen=True)
+class BlockedFetch:
+    """One request a site refused, kept so the run can say so in words."""
+
+    url: str
+    status: int
+    server: str = ""
+
+    @property
+    def blocker(self) -> str:
+        return name_blocker(self.server)
+
+    def describe(self) -> str:
+        return f"{self.url} returned {self.status} ({self.blocker})"
+
+
 @dataclass(slots=True)
 class RobotsInfo:
     sitemaps: list[str] = field(default_factory=list)
@@ -75,6 +131,39 @@ class SiteRecon:
     # five named sitemaps is usually a genuine hub, and that is a promotion
     # signal in its own right rather than only a tiebreak to be resolved away.
     url_memberships: dict[str, int] = field(default_factory=dict)
+    #: Every request the site refused during discovery. Empty is the normal case
+    #: and the only one the planner cares about; a non-empty list is the finding.
+    blocked: list[BlockedFetch] = field(default_factory=list)
+
+    @property
+    def shut_out(self) -> bool:
+        """Refused, and nothing to show for the attempt.
+
+        The distinction that matters: a 403 on `robots.txt` alone is a nuisance --
+        the conventional sitemap paths may still answer. A 403 on robots.txt *and*
+        no URLs from any sitemap means we never got in, and every number derived
+        from this recon describes our access rather than the client's site.
+        """
+        return bool(self.blocked) and not self.urls
+
+    def blockers(self) -> list[str]:
+        """The distinct names of whatever refused us, in first-seen order."""
+        seen: list[str] = []
+        for block in self.blocked:
+            if block.blocker not in seen:
+                seen.append(block.blocker)
+        return seen
+
+    def blocked_summary(self) -> str:
+        """One sentence an operator can act on, or empty when nothing was refused."""
+        if not self.blocked:
+            return ""
+        statuses = sorted({block.status for block in self.blocked})
+        codes = ", ".join(str(status) for status in statuses)
+        return (
+            f"{len(self.blocked)} request(s) refused by {' / '.join(self.blockers())} "
+            f"(HTTP {codes}). This is a block on us, not a gap on the site."
+        )
 
     def multi_listed(self, url: str) -> int:
         """How many sitemaps list this URL. 1 when unknown, never 0."""

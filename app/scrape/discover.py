@@ -14,6 +14,8 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.scrape.recon import (
+    BLOCKED_STATUSES,
+    BlockedFetch,
     RobotsInfo,
     SiteRecon,
     cluster_urls,
@@ -42,13 +44,24 @@ def normalise_site_url(site_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-async def fetch_robots(client: httpx.AsyncClient, site_url: str) -> RobotsInfo:
+async def fetch_robots(
+    client: httpx.AsyncClient, site_url: str, blocked: list[BlockedFetch] | None = None
+) -> RobotsInfo:
     url = urljoin(site_url, "/robots.txt")
     try:
         response = await client.get(url)
     except httpx.HTTPError as exc:
         logger.info("robots.txt unreachable at %s: %s", url, exc)
         return RobotsInfo()
+
+    # Recorded before the 200 check, because a refusal and a missing file are the
+    # same `RobotsInfo()` to every caller and must not be the same finding. Without
+    # this, a WAF denying us reads as "this site publishes no robots.txt".
+    if response.status_code in BLOCKED_STATUSES:
+        block = BlockedFetch(url, response.status_code, response.headers.get("server", ""))
+        logger.info("robots.txt refused: %s", block.describe())
+        if blocked is not None:
+            blocked.append(block)
 
     if response.status_code != 200 or "html" in response.headers.get("content-type", ""):
         # A soft-404 returning the homepage is common; parsing it yields nonsense.
@@ -57,7 +70,7 @@ async def fetch_robots(client: httpx.AsyncClient, site_url: str) -> RobotsInfo:
 
 
 async def collect_sitemap_urls(
-    client: httpx.AsyncClient, seeds: list[str]
+    client: httpx.AsyncClient, seeds: list[str], blocked: list[BlockedFetch] | None = None
 ) -> tuple[dict[str, str], int, list[str], dict[str, int]]:
     """Walk the sitemap tree breadth-first.
 
@@ -94,6 +107,13 @@ async def collect_sitemap_urls(
             if isinstance(response, BaseException):
                 logger.debug("sitemap fetch failed for %s: %s", url, response)
                 continue
+            if response.status_code in BLOCKED_STATUSES and blocked is not None:
+                # Same reasoning as `fetch_robots`: a sitemap we were refused and a
+                # sitemap that does not exist both end this iteration, and only one
+                # of them is a fact about the client's site.
+                blocked.append(
+                    BlockedFetch(url, response.status_code, response.headers.get("server", ""))
+                )
             if response.status_code != 200:
                 continue
 
@@ -160,17 +180,36 @@ async def discover(site_url: str, user_agent: str, timeout: float = DEFAULT_TIME
         timeout=timeout,
         headers={"User-Agent": user_agent},
     ) as client:
-        robots = await fetch_robots(client, origin)
+        blocked: list[BlockedFetch] = []
+        robots = await fetch_robots(client, origin, blocked)
         url_sources, sitemap_count, notes, memberships = await collect_sitemap_urls(
-            client, sitemap_candidates(origin, robots)
+            client, sitemap_candidates(origin, robots), blocked
         )
     urls = list(url_sources)
 
+    # Order matters: the block is stated first and the absences are then attributed
+    # to it. Reporting "no robots.txt found" above a 403 invites the reader to
+    # conclude the client has published nothing, which is the misreading that sent
+    # a week of nrma.com.au runs to the wrong explanation.
+    if blocked:
+        notes.append(
+            f"Blocked by the site: {'; '.join(block.describe() for block in blocked[:5])}"
+            + (f" (+{len(blocked) - 5} more)" if len(blocked) > 5 else "")
+        )
     if not robots.fetched:
-        notes.append("No robots.txt found. Falling back to the conventional sitemap paths.")
+        notes.append(
+            "robots.txt could not be read because the request was refused."
+            if blocked
+            else "No robots.txt found. Falling back to the conventional sitemap paths."
+        )
     if not urls:
         notes.append(
-            "No sitemap URLs found. Discovery will have to fall back to link crawling "
+            "No URLs were discovered because the site refused every request. This is not "
+            "a site without a sitemap -- it is a site we cannot reach from this server. "
+            "Crawl it from an address the site accepts and upload the result through "
+            "Imports → Screaming Frog, which skips the fetch entirely."
+            if blocked
+            else "No sitemap URLs found. Discovery will have to fall back to link crawling "
             "from the homepage."
         )
 
@@ -183,4 +222,5 @@ async def discover(site_url: str, user_agent: str, timeout: float = DEFAULT_TIME
         notes=notes,
         url_sources=url_sources,
         url_memberships=memberships,
+        blocked=blocked,
     )
