@@ -15,25 +15,19 @@ import uuid
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app import accounts
-from app.config import Settings
-from app.db.base import sqlalchemy_url
 from app.db.models import User
+from tests.conftest import engine_or_skip
 
 pytestmark = pytest.mark.asyncio
 
 
 async def _engine():
-    url = sqlalchemy_url(Settings(_env_file=".env").database_url)
-    engine = create_async_engine(url, poolclass=None)
-    try:
-        async with engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
-    except Exception as exc:
-        await engine.dispose()
-        pytest.skip(f"no database reachable: {type(exc).__name__}")
+    # One shared probe: this block was duplicated verbatim across four files, so
+    # the hang it papered over had to be found four times before it was fixed once.
+    engine = await engine_or_skip()
     return engine
 
 

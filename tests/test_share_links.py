@@ -12,13 +12,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.config import Settings
 from app.core import share
 from app.db import repo
-from app.db.base import sqlalchemy_url
 from app.db.models import Base
+from tests.conftest import engine_or_skip
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,14 +29,9 @@ async def session():
     Separate from the developer's own tables because these tests mint and revoke
     credentials, and must never be able to touch a real client's links.
     """
-    url = sqlalchemy_url(Settings(_env_file=".env").database_url)
-    engine = create_async_engine(url, poolclass=None)
-    try:
-        async with engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
-    except Exception as exc:
-        await engine.dispose()
-        pytest.skip(f"no database reachable: {type(exc).__name__}")
+    # One shared probe: this block was duplicated verbatim across four files, so
+    # the hang it papered over had to be found four times before it was fixed once.
+    engine = await engine_or_skip()
 
     schema = f"test_share_{uuid.uuid4().hex[:8]}"
     async with engine.begin() as connection:

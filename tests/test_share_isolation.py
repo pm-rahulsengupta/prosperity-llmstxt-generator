@@ -21,6 +21,7 @@ from starlette.testclient import TestClient
 
 from app.config import Settings
 from app.core import share
+from tests.conftest import skip_without_database
 
 # No asyncio mark: every test here drives the app through `TestClient`, which
 # runs the event loop itself. Marking them async would make pytest-asyncio open a
@@ -37,6 +38,9 @@ def staff_cookie(secret: str) -> str:
 @pytest.fixture
 def client(monkeypatch):
     """A live app with share links on, and a database if there is one."""
+    # Checked before the app is built. Startup connects, and with no database that
+    # stalls inside the `TestClient` context where there is nothing to catch it.
+    skip_without_database()
     monkeypatch.setenv("SHARE_LINKS_ENABLED", "true")
     from app.config import get_settings
 

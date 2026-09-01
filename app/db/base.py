@@ -63,11 +63,28 @@ def psycopg_dsn(url: str) -> str:
     return url
 
 
+#: Seconds libpq may spend opening a connection before it gives up.
+#:
+#: Set because psycopg's async connect does not fail fast when there is nothing
+#: listening -- it hangs. Measured on Windows under `WindowsSelectorEventLoopPolicy`
+#: (which `app.runtime` sets, because psycopg refuses the proactor loop): a TCP
+#: connect to 127.0.0.1:5432 is refused in under a millisecond, and
+#: `engine.connect()` still never returns. With this set it raises `OperationalError`
+#: in a few seconds instead.
+#:
+#: It matters beyond the local machine. `pool_pre_ping` opens a replacement
+#: connection when it finds a dead one, so an unreachable database turns every
+#: request into a hang rather than an error -- and a request that hangs never
+#: reaches the healthcheck's notice, while one that fails does.
+CONNECT_TIMEOUT_SECONDS = 10
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> AsyncEngine:
     settings = get_settings()
     return create_async_engine(
         sqlalchemy_url(settings.database_url),
+        connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
         pool_pre_ping=True,
         # Railway restarts the database for maintenance and the pool keeps the dead
         # connections. pre_ping catches that; recycling bounds how long a stale one
