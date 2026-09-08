@@ -96,7 +96,26 @@ def description_from_url(url: str) -> str:
 
 
 def domain_of(url: str) -> str:
-    return urlparse(url).netloc.replace("www.", "")
+    """The host, lowercased, with one leading `www.` removed.
+
+    Deliberately identical to `app.db.repo.domain_of`, and kept separate only
+    because `app/core/` holds no database import. The two are the same rule and
+    have to stay the same rule: this one names the site in the rendered file,
+    that one keys every table, and a client reading `WWW.Example.com` at the top
+    of their `llms.txt` while the app files them under `example.com` is one
+    disagreement with two visible halves.
+
+    Two corrections against the original one-liner, both of which the repo copy
+    already had:
+
+    * **Lowercase first.** Hostnames are case-insensitive, and `removeprefix` is
+      not, so `WWW.REDSPOT.COM.AU` kept its prefix and became a third spelling of
+      a domain the tables were already splitting two ways.
+    * **`removeprefix`, not `replace`.** `replace` strips the substring wherever
+      it occurs, so a host that contains `www.` after the first label loses it
+      from the middle and resolves to a domain that is not the client's.
+    """
+    return urlparse(url).netloc.lower().removeprefix("www.")
 
 
 def estimate_tokens(text: str) -> int:

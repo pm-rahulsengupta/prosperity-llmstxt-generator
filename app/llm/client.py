@@ -103,6 +103,43 @@ class LLMUsage:
         }
 
 
+def _unfence(content: str) -> str:
+    """Strip a markdown code fence the model wrapped its JSON in.
+
+    `response_format={"type": "json_schema", ..., "strict": True}` is an OpenAI
+    feature, and an OpenAI-compatible gateway is free to accept the parameter and
+    then ignore it. Measured on 2026-09-09 against the Prosperity OmniRoute
+    gateway: `kr/claude-sonnet-4.5`, `kr/glm-5`, `kr/deepseek-3.2` and
+    `kr/qwen3-coder-next` all returned schema-correct JSON wrapped in a ```json
+    fence, `json.loads` raised on the first backtick, and every stage recorded
+    "invalid JSON" and fell back to the heuristic path. The answer was there;
+    three characters of packaging stood between it and being used.
+
+    That is the failure this module exists to stop -- a stage that has never once
+    produced output while nothing says so -- arriving through a different door, so
+    it is fixed here rather than by forbidding those providers.
+
+    Deliberately narrow, and written without a regex because the cases that matter
+    are positional. The fence must open the string and close it, so a fence inside
+    a JSON *value* -- a QA finding quoting a code block -- is untouched, and an
+    unfenced response is returned unchanged. If what is left still is not JSON, the
+    existing decode error stands and the fallback is recorded exactly as before.
+    """
+    text = content.strip()
+    if not text.startswith("```") or not text.endswith("```") or len(text) < 6:
+        return content
+
+    # Everything up to the first newline is the fence's info string ("json", "" ...).
+    # A fence with no newline at all is not wrapping a document; leave it be.
+    newline = text.find("\n")
+    if newline == -1:
+        return content
+    if not text[3:newline].strip().isascii() or any(c in text[3:newline] for c in "`\"'"):
+        return content
+
+    return text[newline + 1 : -3].strip("\r\n").rstrip()
+
+
 class LLMUnavailable(RuntimeError):
     """Raised only where a caller has asked for a hard failure instead of a fallback."""
 
@@ -200,7 +237,7 @@ class LLMClient:
             self.usage.record_fallback(stage, "response was filtered by the provider")
             return None
 
-        content = choice.message.content or ""
+        content = _unfence(choice.message.content or "")
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:

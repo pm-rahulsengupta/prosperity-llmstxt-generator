@@ -402,7 +402,7 @@ async def generate_task(run_id: str) -> None:
         else:
             await _abort_if_cancelled(rid, "crawl")
             pre = await run_preflight(site_url, settings)
-            urls = select_urls(pre.recon, plan, cap)
+            urls = select_urls(pre.recon, plan, cap, brief=site_brief)
 
             # Embargo is enforced here, before the fetch, because "excluded from the
             # output" is not what anyone means by it. A page withheld for legal or

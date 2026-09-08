@@ -86,6 +86,7 @@ class CountFailure(StrEnum):
     OUT_OF_CREDITS = "out_of_credits"
     RATE_LIMITED = "rate_limited"
     NO_RESULTS = "no_results"
+    NOT_AN_ESTIMATE = "not_an_estimate"
     API_ERROR = "api_error"
     TRANSPORT = "transport_error"
 
@@ -140,6 +141,11 @@ FAILURE_MESSAGES: dict[CountFailure, str] = {
         "No indexed-page count: Google returned no results for a `site:` query on "
         "this domain, which usually means it is not indexed at all."
     ),
+    CountFailure.NOT_AN_ESTIMATE: (
+        "No indexed-page count: Google no longer publishes a result estimate for "
+        "`site:` queries, so the figure returned describes page one of the SERP and "
+        "not the index. The sitemap is the only size signal for this run."
+    ),
     CountFailure.API_ERROR: ("No indexed-page count: DataForSEO returned an error for this query."),
     CountFailure.TRANSPORT: (
         "No indexed-page count: could not reach DataForSEO. The sitemap is the only "
@@ -168,6 +174,13 @@ class IndexedCount:
     def explain(self) -> str:
         message = FAILURE_MESSAGES.get(self.reason, FAILURE_MESSAGES[CountFailure.API_ERROR])
         return f"{message} ({self.detail})" if self.detail else message
+
+
+#: Below this, a `site:` result count is treated as the SERP page rather than an
+#: index estimate. Set just above the largest artefact observed (26, reddit.com) and
+#: below the smallest count that would change a planning decision: every tier
+#: threshold starts at 100, so no credible estimate is lost by discarding one here.
+SMALLEST_CREDIBLE_ESTIMATE = 30
 
 
 # Buckets, by the larger of the two counts. The numbers are crawl-cost thresholds,
@@ -371,6 +384,41 @@ async def indexed_page_count(
     return result
 
 
+def _organic_items(result: dict) -> int:
+    """How many organic results this SERP actually returned."""
+    return sum(1 for item in (result.get("items") or []) if item.get("type") == "organic")
+
+
+def _describes_only_page_one(count: int, result: dict) -> bool:
+    """True when `se_results_count` is the SERP page, not an estimate of the index.
+
+    Google has stopped putting an "About N results" line on `site:` queries, and
+    DataForSEO passes through what is there. What arrives now tracks page one:
+    measured on 2026-09-09, `site:amazon.com` and `site:nytimes.com` both returned
+    25, `site:github.com` and `site:wikipedia.org` both returned 10, and raising
+    `depth` from 10 to 100 moved none of them. Those four sites do not share an
+    index size; the field is no longer reporting one.
+
+    Read as a count it was catastrophic rather than merely useless, because it is
+    small: `assess` compares it against the sitemap and warns that "most of what is
+    published is not being kept ... cap the crawl and lean on the exclude rules" for
+    every site with more than fifty pages. redspot.com.au carried that warning into
+    its review gate on a figure of 10.
+
+    The test is the SERP's own shape rather than a magic floor. An estimate of the
+    whole index cannot be smaller than the results already on the page in front of
+    it, so a count at or below that is not an estimate. `SMALLEST_CREDIBLE_ESTIMATE`
+    covers the gap above it -- 25 with ten results shown is arithmetically possible
+    and, for a `site:` query, is the observed artefact.
+
+    A genuinely tiny site loses its count and falls back to the sitemap, which is
+    the number it would have planned against anyway. Reporting nothing is the
+    conservative direction: `best_count` takes the larger of the two, so a missing
+    count cannot shrink a crawl, and the reason is recorded rather than implied.
+    """
+    return count <= max(_organic_items(result), SMALLEST_CREDIBLE_ESTIMATE)
+
+
 def parse_results_count(body: dict) -> IndexedCount:
     """Read a DataForSEO SERP response, including the reason it did not answer.
 
@@ -381,8 +429,14 @@ def parse_results_count(body: dict) -> IndexedCount:
     for task in body.get("tasks") or []:
         for result in task.get("result") or []:
             count = result.get("se_results_count")
-            if isinstance(count, int) and count >= 0:
-                return IndexedCount(count=count, reason=CountFailure.OK)
+            if not isinstance(count, int) or count < 0:
+                continue
+            if _describes_only_page_one(count, result):
+                return IndexedCount(
+                    reason=CountFailure.NOT_AN_ESTIMATE,
+                    detail=f"se_results_count={count} over {_organic_items(result)} organic results",
+                )
+            return IndexedCount(count=count, reason=CountFailure.OK)
 
     for task in body.get("tasks") or []:
         status = task.get("status_code")

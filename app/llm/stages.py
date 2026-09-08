@@ -250,8 +250,28 @@ async def suggest_brief(
     return parsed
 
 
-def select_urls(recon: SiteRecon, plan: CrawlPlan, page_cap: int) -> list[str]:
-    """Turn a plan into the actual crawl list, in priority order and inside budget."""
+def select_urls(
+    recon: SiteRecon,
+    plan: CrawlPlan,
+    page_cap: int,
+    brief: SiteBrief | None = None,
+) -> list[str]:
+    """Turn a plan into the actual crawl list, in priority order and inside budget.
+
+    `brief` carries the operator's answers. Only ``must_appear`` is read here, and
+    it is read because the onboarding form promises it is: the question is labelled
+    *"Absolute. Joins the identity set, which no traffic rule can exclude"*, and
+    until now that was true of exactly one thing -- the group verdict in
+    `core/metrics._apply_overrides`. It was never true of the crawl. A URL the
+    operator named could be excluded by a template rule, or fall past
+    ``ordered[:page_cap]``, and a page that is not fetched cannot appear in any
+    file assembled afterwards.
+
+    Measured on the stranded redspot.com.au run: 173 named URLs, a plan with 44
+    include rules and a 400-page cap over 442 sitemap URLs, and
+    ``/vehicles/van-hire/tradies/`` fell off the end of the truncation. Nothing
+    reported it, because from the crawl's point of view nothing had gone wrong.
+    """
     by_template: dict[str, list[str]] = {
         template.template: _urls_for(template, recon) for template in recon.templates
     }
@@ -291,7 +311,48 @@ def select_urls(recon: SiteRecon, plan: CrawlPlan, page_cap: int) -> list[str]:
     if home not in ordered and recon.site_url not in ordered:
         ordered.insert(0, home)
 
-    return ordered[:page_cap] if page_cap > 0 else ordered
+    return _with_required(ordered, recon, brief, page_cap)
+
+
+def _with_required(
+    ordered: list[str],
+    recon: SiteRecon,
+    brief: SiteBrief | None,
+    page_cap: int,
+) -> list[str]:
+    """Apply the cap without dropping a URL the operator declared must appear.
+
+    The named URLs move to the front rather than being appended after the
+    truncation. Appending would keep them in the list and change which page is
+    dropped for each one added, silently trading an operator's explicit choice
+    against the planner's priority order at the boundary. Promoting states the
+    precedence the form already claims: what a person named outranks what a
+    template inferred.
+
+    Matched against the recon inventory, so a typo, a stale URL or a page the
+    sitemap does not list adds nothing to the crawl -- `must_appear` is a claim
+    about priority, not a licence to fetch a URL discovery never found. Two of
+    redspot's 173 are exactly that case.
+
+    Order among the promoted URLs is the plan's own, so a run whose named set is
+    already inside the cap selects precisely what it selected before. Nothing here
+    can lengthen a crawl beyond `page_cap`.
+    """
+    if not brief or not brief.must_appear:
+        return ordered[:page_cap] if page_cap > 0 else ordered
+
+    known = set(recon.urls)
+    required = {url for url in brief.must_appear if url in known}
+    if not required:
+        return ordered[:page_cap] if page_cap > 0 else ordered
+
+    promoted = [url for url in ordered if url in required]
+    # A named URL that discovery found but the plan excluded still belongs in the
+    # crawl: "regardless of what the numbers say" covers a rule as much as a score.
+    promoted += [url for url in recon.urls if url in required and url not in set(ordered)]
+    rest = [url for url in ordered if url not in required]
+
+    return (promoted + rest)[:page_cap] if page_cap > 0 else promoted + rest
 
 
 def _urls_for(template: PathTemplate, recon: SiteRecon) -> list[str]:
