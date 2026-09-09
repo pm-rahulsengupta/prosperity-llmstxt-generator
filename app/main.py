@@ -3709,8 +3709,101 @@ async def _chat_panel(request: Request, session: AsyncSession, run_id: UUID, use
     return templates.TemplateResponse(
         request,
         "partials/chat.html",
-        {"user": user, "run": run, "messages": messages},
+        {
+            "user": user,
+            "run": run,
+            "messages": messages,
+            "revisions": await repo.recent_revisions(session, run_id),
+        },
     )
+
+
+@app.post("/runs/{run_id}/undo/{revision_id}", response_class=HTMLResponse)
+async def undo_edit(
+    request: Request,
+    run_id: UUID,
+    revision_id: int,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Put the run back to how one revision found it.
+
+    Every chat turn has snapshotted the state it was about to change since the
+    table was written, and nothing has ever read one. `run.html` says plainly
+    "There is no undo", which was true of the product and not of the data.
+
+    The rows are restored and the file is then **re-rendered from them**, rather
+    than the stored text being written back. The text is downstream of the model:
+    restoring it alone would give an operator a file that reverts itself the next
+    time anything is re-rendered, which is the source tool's defect one layer
+    down and the reason this table snapshots `pages` at all.
+
+    Restoring does not delete the revision it restored from, and takes its own
+    snapshot first -- so undo is itself undoable, and an operator who reverts
+    the wrong turn is not stuck with it.
+    """
+    run = await repo.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such run.")
+
+    revisions = await repo.recent_revisions(session, run_id, limit=50)
+    revision = next((r for r in revisions if r.id == revision_id), None)
+    if revision is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such revision for this run.")
+
+    pages = await repo.get_pages(session, run_id)
+    session.add(
+        DocumentRevision(
+            run_id=run_id,
+            llmstxt=run.llmstxt,
+            llms_full=run.llms_full,
+            site_name=run.site_name,
+            site_summary=run.site_summary,
+            pages={
+                page.url: {
+                    "title": page.title,
+                    "description": page.description,
+                    "section": page.section_name,
+                    "is_optional": page.is_optional,
+                    "included": page.included,
+                }
+                for page in pages
+            },
+            reason=f"before undoing revision {revision_id}",
+            author=user.email,
+        )
+    )
+
+    restored = await repo.restore_revision(session, run, revision)
+    await session.flush()
+
+    # Re-render from the restored rows rather than trusting the stored text.
+    rows = await repo.get_pages(session, run_id)
+    rebuilt = rebuild(
+        _result_from_rows(run, rows),
+        excluded_urls={page.url for page in rows if not page.included},
+        site_name=run.site_name,
+        site_summary=run.site_summary,
+    )
+    await repo.store_result(session, run, rebuilt)
+
+    session.add(
+        ChatMessage(
+            run_id=run_id,
+            role="assistant",
+            body=(
+                f'Reverted to the state before "{revision.reason}". '
+                f"{restored} page{'' if restored == 1 else 's'} restored, and the files "
+                "were re-rendered from them."
+            ),
+            author="model",
+        )
+    )
+    await repo.record_event(
+        session, run_id, "undo", f"{user.email} reverted to revision {revision_id}"
+    )
+    await session.commit()
+    return await _chat_panel(request, session, run_id, user)
 
 
 # -- admin ------------------------------------------------------------------

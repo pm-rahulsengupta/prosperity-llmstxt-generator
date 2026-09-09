@@ -33,8 +33,43 @@
         </div>
         <div class="narrow"><button class="primary" type="submit">Send</button></div>
     </div>
-    <p class="muted">
+    <p class="hint">
         The file is re-validated after every edit. If a change would make it
         spec-invalid it is rolled back and nothing is altered.
     </p>
 </form>
+
+{# Every chat turn has snapshotted the state it was about to change since the
+   table was written, and nothing read one -- while the run page said in as many
+   words that there is no undo. The rows were always there.
+
+   Behind a disclosure rather than a row of buttons: reverting is rare, and a
+   list of them sitting open beside the composer invites an accidental press on
+   the control that discards work. Same reasoning as the share form. #}
+{% if revisions is defined and revisions %}
+<details class="spec">
+    <summary>Undo an edit ({{ revisions | length }} saved)</summary>
+    <ul class="notes">
+        {% for r in revisions %}
+        <li>
+            <form class="inline-form" method="post"
+                  action="/runs/{{ run.id }}/undo/{{ r.id }}"
+                  hx-post="/runs/{{ run.id }}/undo/{{ r.id }}"
+                  hx-target="#chat" hx-swap="innerHTML"
+                  hx-disabled-elt="find button">
+                <button class="ghost" type="submit">Revert</button>
+            </form>
+            <span class="hint">
+                to before &ldquo;{{ r.reason }}&rdquo;
+                {% if r.author %}&mdash; {{ r.author }}{% endif %}
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+    <p class="hint">
+        Reverting restores the pages and re-renders the files from them, so the
+        change does not come back on the next edit. It takes its own snapshot
+        first, so an undo can itself be undone.
+    </p>
+</details>
+{% endif %}

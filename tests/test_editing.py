@@ -412,3 +412,80 @@ def test_a_refused_turn_still_records_what_it_spent():
     assert len(after_rollback) == 2, "the chat gate no longer rolls back; re-read this test"
 
     assert "record_spend" in after_rollback[1], "a rolled-back turn costs money and records none"
+
+
+# -- undo, which the data supported and the product did not ----------------------
+
+
+def test_the_undo_route_exists_and_is_gated():
+    """`DocumentRevision` was written on every chat turn from the day the table
+    was added and read by nothing, while the run page said in as many words that
+    there is no undo. The rows were always there."""
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+
+    route = next(
+        (r for r in app.routes if isinstance(r, APIRoute) and "undo" in r.path),
+        None,
+    )
+
+    assert route is not None, "nothing reads the revisions table"
+    assert "POST" in route.methods, "reverting is a write and must not be a GET"
+
+    # The same extraction `test_route_auth` uses. `test_every_route_is_gated_or_
+    # listed` already covers this route generically; asserting it here as well is
+    # deliberate, because a route that can rewrite a client deliverable is worth
+    # naming in the file about editing rather than only in the file about auth.
+    gates = {
+        dependency.call.__name__
+        for dependency in route.dependant.dependencies
+        if getattr(dependency, "call", None) is not None
+    }
+    assert gates & {"require_user", "require_admin"}, "undo is ungated"
+
+
+def test_undo_rerenders_from_the_rows_rather_than_restoring_the_text():
+    """The property that makes undo real rather than cosmetic.
+
+    The rendered text is downstream of the page rows -- `rebuild` derives it from
+    them -- so writing the stored text back without restoring the rows gives an
+    operator a file that reverts itself the next time anything is re-rendered.
+    That is the source tool's `_rebuild_llmstxt` defect one layer down, and it is
+    the reason the table snapshots `pages` at all.
+    """
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    handlers = re.split(r"\n(?=@app\.)", source)
+    undo = next(h for h in handlers if "/undo/" in h)
+
+    assert "restore_revision" in undo, "the page rows are not restored"
+    assert "rebuild(" in undo, "the files are not re-rendered from the restored rows"
+    assert "store_result" in undo, "the re-render is not written back"
+
+
+def test_undo_snapshots_before_it_reverts():
+    """An operator who reverts the wrong turn must not be stuck with it."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    handlers = re.split(r"\n(?=@app\.)", source)
+    undo = next(h for h in handlers if "/undo/" in h)
+
+    assert undo.index("DocumentRevision(") < undo.index("restore_revision"), (
+        "undo reverts before snapshotting, so it cannot itself be undone"
+    )
+
+
+def test_the_chat_panel_offers_a_revert_for_each_saved_revision():
+    from pathlib import Path
+
+    markup = (
+        Path(__file__).resolve().parents[1] / "templates" / "partials" / "chat.html"
+    ).read_text(encoding="utf-8")
+
+    assert "revisions" in markup, "the panel never mentions the saved revisions"
+    assert "/undo/" in markup, "there is no control that reaches the undo route"

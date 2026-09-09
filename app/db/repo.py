@@ -1294,3 +1294,55 @@ async def runs_since(session: AsyncSession, days: int = 30) -> list[Run]:
         select(Run).where(Run.created_at >= cutoff).order_by(desc(Run.created_at))
     )
     return list(result.scalars())
+
+
+async def recent_revisions(
+    session: AsyncSession, run_id: uuid.UUID, limit: int = 10
+) -> list[DocumentRevision]:
+    """The last few pre-edit snapshots for a run, newest first.
+
+    `DocumentRevision` was written on every chat turn from the day the table was
+    added and read by nothing, while `run.html` told the operator in as many
+    words that there is no undo. The rows were there the whole time; this is the
+    query that was missing.
+    """
+    result = await session.execute(
+        select(DocumentRevision)
+        .where(DocumentRevision.run_id == run_id)
+        .order_by(desc(DocumentRevision.at), desc(DocumentRevision.id))
+        .limit(limit)
+    )
+    return list(result.scalars())
+
+
+async def restore_revision(session: AsyncSession, run: Run, revision: DocumentRevision) -> int:
+    """Put the run back to how a revision found it. Returns pages restored.
+
+    The page rows are restored, not merely the rendered text. The text is
+    downstream of the model -- `rebuild` re-derives it from the rows — so
+    restoring the text alone would give an operator a file that reverts itself
+    the next time anything is re-rendered. That is the source tool's defect and
+    it is the reason this table snapshots `pages` at all.
+
+    A URL in the snapshot that no longer has a row is skipped rather than
+    recreated. A page can only leave a run by the run being re-crawled, and
+    re-creating one here would put a row back with no crawl behind it.
+    """
+    run.site_name = revision.site_name
+    run.site_summary = revision.site_summary
+    run.llmstxt = revision.llmstxt
+    run.llms_full = revision.llms_full
+
+    rows = {page.url: page for page in await get_pages(session, run.id)}
+    restored = 0
+    for url, state in (revision.pages or {}).items():
+        page = rows.get(url)
+        if page is None:
+            continue
+        page.title = state.get("title", page.title)
+        page.description = state.get("description", page.description)
+        page.section_name = state.get("section", page.section_name)
+        page.is_optional = bool(state.get("is_optional", page.is_optional))
+        page.included = bool(state.get("included", page.included))
+        restored += 1
+    return restored
