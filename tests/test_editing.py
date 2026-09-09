@@ -489,3 +489,108 @@ def test_the_chat_panel_offers_a_revert_for_each_saved_revision():
 
     assert "revisions" in markup, "the panel never mentions the saved revisions"
     assert "/undo/" in markup, "there is no control that reaches the undo route"
+
+
+# -- the section order that was stored and never read ---------------------------
+
+
+class _Row:
+    """A stand-in for `SectionRow`, which needs a database to make."""
+
+    def __init__(self, name: str, position: int, description: str = ""):
+        self.name = name
+        self.position = position
+        self.description = description
+
+
+class _Page:
+    def __init__(self, url: str, section: str, position: int):
+        self.url = url
+        self.section_name = section
+        self.position = position
+        self.is_optional = False
+        self.included = True
+
+    def to_entry(self):
+        from app.core.models import PageEntry
+
+        return PageEntry(url=self.url, title=self.url, description="d")
+
+
+class _Run:
+    site_url = "https://x.example"
+    site_name = "X"
+    site_summary = "s"
+    pattern = "catalog"
+    llmstxt = ""
+    llms_full = ""
+    notes = ""
+
+
+def test_stored_section_order_survives_a_rebuild():
+    """`SectionRow.position` was written on every save and `repo.get_sections` was
+    written to read it, and nothing ever called it -- so a chat turn that
+    reordered sections had its order thrown away by the next re-render.
+
+    That is verbatim the defect `save_sections` says it exists to prevent, one
+    layer up from where it was fixed.
+    """
+    from app.main import _result_from_rows
+
+    # Pages arrive in one order; the operator put the sections in another.
+    pages = [
+        _Page("https://x.example/a/", "Alpha", 0),
+        _Page("https://x.example/b/", "Beta", 1),
+    ]
+    stored = [_Row("Beta", 0), _Row("Alpha", 1)]
+
+    without = _result_from_rows(_Run(), pages)
+    with_stored = _result_from_rows(_Run(), pages, stored)
+
+    assert [s.name for s in without.sections] == ["Alpha", "Beta"], "page order, as before"
+    assert [s.name for s in with_stored.sections] == ["Beta", "Alpha"], "the stored order"
+
+
+def test_a_section_with_no_stored_row_keeps_its_pages():
+    """A section can only appear because a page names it. Dropping one for having
+    no row would drop its pages out of the file with it."""
+    from app.main import _result_from_rows
+
+    pages = [
+        _Page("https://x.example/a/", "Known", 0),
+        _Page("https://x.example/b/", "Unlisted", 1),
+    ]
+
+    result = _result_from_rows(_Run(), pages, [_Row("Known", 0)])
+
+    assert [s.name for s in result.sections] == ["Known", "Unlisted"]
+    assert sum(len(s.pages) for s in result.sections) == 2
+
+
+def test_a_stored_section_with_no_pages_left_is_dropped():
+    """Unticking the last page in a section should not leave an empty heading."""
+    from app.main import _result_from_rows
+
+    pages = [_Page("https://x.example/a/", "Kept", 0)]
+    stored = [_Row("Kept", 0), _Row("Emptied", 1)]
+
+    result = _result_from_rows(_Run(), pages, stored)
+
+    assert [s.name for s in result.sections] == ["Kept"]
+
+
+def test_every_path_that_stores_a_rebuild_reads_the_stored_sections():
+    """A re-render that does not carry the order forward writes back the order it
+    just re-derived from page order, which is how it was lost."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    handlers = re.split(r"\n(?=@app\.)", source)
+
+    storing = [h for h in handlers if "store_result" in h and "_result_from_rows" in h]
+    assert storing, "the split stopped finding the handlers; fix the test"
+
+    for handler in storing:
+        name = re.search(r"async def (\w+)", handler).group(1)
+        assert "get_sections" in handler, f"{name} re-renders and drops the stored order"

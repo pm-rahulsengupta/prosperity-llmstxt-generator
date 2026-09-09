@@ -1090,6 +1090,7 @@ def _assemble(
     config,
     run,
     pages,
+    sections=None,
 ):
     """Build the document, catalog and bundle. No network, no database.
 
@@ -1170,7 +1171,9 @@ def _assemble(
         llms_txt = rewrite_links(llms_txt, md.paths, normalised)
 
     result = (
-        _result_from_rows(run, [p for p in pages if getattr(p, "included", True)]) if run else None
+        _result_from_rows(run, [p for p in pages if getattr(p, "included", True)], sections)
+        if run
+        else None
     )
     okf = (
         render_okf(
@@ -1346,7 +1349,17 @@ async def _from_snapshot(session: AsyncSession, domain: str):
     pages = await repo.get_pages(session, run.id) if run is not None else []
 
     doc, catalog, bundle = _assemble(
-        normalised, domain, probe, tech, readiness, declared, brief, config, run, pages
+        normalised,
+        domain,
+        probe,
+        tech,
+        readiness,
+        declared,
+        brief,
+        config,
+        run,
+        pages,
+        await repo.get_sections(session, run.id) if run is not None else None,
     )
 
     # Stored refinements, replayed onto the freshly generated document. Operations
@@ -3456,7 +3469,7 @@ async def edit_pages(
         run.pattern = chosen
 
     order = [name for name in form.getlist("section_order") if name]
-    result = _result_from_rows(run, pages)
+    result = _result_from_rows(run, pages, await repo.get_sections(session, run_id))
     rebuilt = rebuild(
         result,
         excluded_urls=excluded,
@@ -3523,7 +3536,8 @@ async def chat_edit(
         raise HTTPException(status.HTTP_409_CONFLICT, "Nothing generated yet.")
 
     pages = await repo.get_pages(session, run_id)
-    before = _result_from_rows(run, pages)
+    sections = await repo.get_sections(session, run_id)
+    before = _result_from_rows(run, pages, sections)
     excluded_urls = [page.url for page in pages if not page.included]
 
     # The same ceiling the refine panel checks, and for the same reason: this is
@@ -3630,7 +3644,7 @@ async def chat_edit(
     run.notes = target.notes
 
     rebuilt = rebuild(
-        _result_from_rows(run, pages),
+        _result_from_rows(run, pages, sections),
         excluded_urls={page.url for page in pages if not page.included},
         site_name=run.site_name,
         site_summary=run.site_summary,
@@ -3780,7 +3794,7 @@ async def undo_edit(
     # Re-render from the restored rows rather than trusting the stored text.
     rows = await repo.get_pages(session, run_id)
     rebuilt = rebuild(
-        _result_from_rows(run, rows),
+        _result_from_rows(run, rows, await repo.get_sections(session, run_id)),
         excluded_urls={page.url for page in rows if not page.included},
         site_name=run.site_name,
         site_summary=run.site_summary,
@@ -3909,8 +3923,27 @@ async def admin_runs(
     return templates.TemplateResponse(request, "admin/runs.html", {"user": user, "rows": rows})
 
 
-def _result_from_rows(run, pages) -> GenerationResult:  # noqa: F821 -- forward ref for brevity
-    """Reconstruct a `GenerationResult` from stored rows, for re-rendering."""
+def _result_from_rows(run, pages, stored=None) -> GenerationResult:  # noqa: F821
+    """Reconstruct a `GenerationResult` from stored rows, for re-rendering.
+
+    `stored` is the run's `SectionRow` list. Without it the section order and
+    description are re-derived from page order and lost respectively, which is
+    the defect `save_sections` says it exists to prevent -- one layer up from
+    where it was fixed:
+
+        "Sections are stored, not recomputed. `_rebuild_llmstxt` in the source
+        re-derived them from URL paths every time, which threw away both the
+        LLM's assignments and anything the user had renamed or reordered."
+
+    They *are* stored. `SectionRow.position` was written on every save and
+    `repo.get_sections` was written to read it, and nothing ever called it -- so
+    a chat turn that reordered sections had its order thrown away by the next
+    re-render, exactly as described.
+
+    Optional and defaulting to the old behaviour, because two of the five callers
+    reconstruct a result for comparison rather than for storage and have no
+    reason to hit the database for it.
+    """
     from app.core.models import GenerationResult, Section
 
     grouped: dict[str, list] = {}
@@ -3922,14 +3955,26 @@ def _result_from_rows(run, pages) -> GenerationResult:  # noqa: F821 -- forward 
         else:
             grouped.setdefault(page.section_name or "Pages", []).append(entry)
 
+    known = {row.name: row for row in (stored or [])}
+    # Stored order first, then anything the rows know about that the section
+    # table does not -- a section can only appear here by a page naming it, and
+    # dropping one because it has no row would drop its pages with it.
+    ordered = [name for name in sorted(known, key=lambda n: known[n].position) if name in grouped]
+    ordered += [name for name in grouped if name not in known]
+
     return GenerationResult(
         site_url=run.site_url,
         site_name=run.site_name,
         site_summary=run.site_summary,
         pattern=run.pattern,
         sections=[
-            Section(name=name, pages=entries, position=position)
-            for position, (name, entries) in enumerate(grouped.items())
+            Section(
+                name=name,
+                description=known[name].description if name in known else "",
+                pages=grouped[name],
+                position=position,
+            )
+            for position, name in enumerate(ordered)
         ],
         optional=optional,
         llmstxt=run.llmstxt,
