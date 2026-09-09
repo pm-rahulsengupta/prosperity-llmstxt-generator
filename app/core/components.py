@@ -196,6 +196,22 @@ class Component:
         return bool(self.artifact)
 
     @property
+    def is_directory(self) -> bool:
+        """A trailing slash on the artifact name is what makes it a set.
+
+        Two components produce directories rather than files, and everything
+        downstream has to tell them apart: a directory has no single serve-at
+        path, its size is a total rather than a length, and "upload this file"
+        is the wrong instruction for 419 of them.
+
+        Keyed on the artifact name because that is the one field every consumer
+        already has. `Artifact.is_directory` answers the same question from the
+        generated side; this answers it from the registry, for the consumers that
+        run before anything has been generated.
+        """
+        return self.artifact.endswith("/")
+
+    @property
     def needs_developer(self) -> bool:
         return self.effort is not Effort.DROP_IN
 
@@ -380,6 +396,22 @@ COMPONENTS: tuple[Component, ...] = (
         why="A curated index beats leaving a model to guess which pages matter.",
     ),
     Component(
+        "md-pages",
+        "Markdown version of each page (page.md)",
+        Family.CONTENT,
+        Priority.SHOULD,
+        2,
+        Effort.DROP_IN,
+        _mix(YES, COND, COND),
+        "curl <site>/<some-page>.md",
+        artifact="md/",
+        expect=TEXT,
+        why=(
+            "What llms.txt v2 says its links should point at. An agent that can "
+            "fetch the markdown never pays to strip the HTML."
+        ),
+    ),
+    Component(
         "llms-full",
         "/llms-full.txt for full page text",
         Family.CONTENT,
@@ -408,6 +440,43 @@ COMPONENTS: tuple[Component, ...] = (
         path="/sitemap.xml",
         expect=XML,
         why="Still the cheapest complete list of what exists.",
+    ),
+    Component(
+        "ai-info",
+        "/ai-info page of brand facts",
+        Family.CONTENT,
+        Priority.SHOULD,
+        2,
+        Effort.DROP_IN,
+        _all(YES),
+        "curl <site>/ai-info",
+        artifact="ai-info.html",
+        path="/ai-info",
+        expect=("text/html",),
+        why=(
+            "The one page a model can cite when asked who this company is. "
+            "Unlike llms.txt it is indexable, so it can be found and quoted."
+        ),
+    ),
+    Component(
+        "okf",
+        "OKF knowledge bundle at /okf/",
+        Family.CONTENT,
+        Priority.OPTIONAL,
+        2,
+        Effort.DROP_IN,
+        _mix(YES, COND, COND),
+        "curl <site>/okf/index.md",
+        artifact="okf/",
+        # An OKF bundle does have one root, unlike the markdown twins, which are
+        # scattered across the site beside the pages they mirror. `md-pages`
+        # leaves `path` empty for that reason rather than by omission.
+        path="/okf/",
+        expect=TEXT,
+        why=(
+            "One file per concept, cross-linked, so an agent walks the site's "
+            "structure instead of inferring it from retrieved fragments."
+        ),
     ),
     # -- Agent instructions --------------------------------------------------
     Component(

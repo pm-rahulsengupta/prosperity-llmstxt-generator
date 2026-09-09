@@ -327,9 +327,27 @@ def _publish_steps(name: str, serve_at: str, site_url: str, note: str, task) -> 
     `bundle.tasks` was generated for every run and rendered by no page. This is
     where it finally reaches a reader.
     """
+    base = site_url.rstrip("/")
+    if name.endswith("/"):
+        # A directory. "Upload it so it answers at /" is wrong for a set whose
+        # members answer at 419 different paths, and it is the instruction a
+        # client would actually follow.
+        steps = [
+            f"Download {name.rstrip('/')}.zip from this document.",
+            f"Unpack it and upload the files keeping the paths exactly as given, "
+            f"so each answers under {base}/.",
+        ]
+        if note:
+            steps.append(note)
+        steps.append(
+            f"Open any one of them in a browser -- {base}{serve_at} if you are "
+            "not sure which -- to confirm the upload kept the paths."
+        )
+        return tuple(steps)
+
     steps = [
         f"Download {name} from this document.",
-        f"Upload it to your site so it answers at {site_url.rstrip('/')}{serve_at}.",
+        f"Upload it to your site so it answers at {base}{serve_at}.",
     ]
     if note:
         steps.append(note)
@@ -386,7 +404,7 @@ def _item(
     elif artifact:
         steps = _publish_steps(
             artifact,
-            component.path or f"/{artifact}",
+            _serve_at(component),
             site_url,
             (notes or {}).get(artifact, ""),
             task,
@@ -511,18 +529,48 @@ def _family(view, status, family: Family, reports, ctx) -> ClientSection:
     )
 
 
-def _size(body: str) -> str:
+def _serve_at(component) -> str:
+    """Where one example of this artifact answers.
+
+    For a file it is the path, which is the whole answer. For a directory it is
+    an example and nothing more -- `md-pages` has no root at all, so the example
+    is the markdown twin of the homepage, which every mirror contains and which
+    is the cheapest thing for a client to check.
+    """
+    if getattr(component, "is_directory", False):
+        return component.path or "/index.md"
+    return component.path or f"/{component.artifact}"
+
+
+def _artifact_serve_at(artifact) -> str:
+    """The `serve_at` of a generated artifact, as the file list shows it.
+
+    A directory's `path` is its root where it has one and empty where it does
+    not, so `md/` shows the site root rather than a filename it does not have.
+    The publish steps say what to do with that; this column only has to stop
+    claiming 419 files answer at one URL.
+    """
+    if getattr(artifact, "is_directory", False):
+        return artifact.path or "/"
+    return artifact.path or f"/{artifact.name}"
+
+
+def _size_label(size: int) -> str:
     """Rounded, and never "0 KB" for a file that exists.
 
     A file the client is about to publish is worth sizing so they can tell a
     two-line stub from a megabyte of full text before they upload it.
+
+    Takes a byte count rather than a string. It previously took the body and
+    measured `len()`, which is characters, and labelled the result "bytes" --
+    wrong by a third on any page carrying an em-dash or a currency symbol, and
+    wrong in the direction that understates the upload.
     """
-    chars = len(body)
-    if chars < 1024:
-        return f"{chars} bytes"
-    if chars < 1024 * 1024:
-        return f"{chars / 1024:.0f} KB"
-    return f"{chars / (1024 * 1024):.1f} MB"
+    if size < 1024:
+        return f"{size} bytes"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
 
 
 def _files(view, status, tasks) -> ClientSection:
@@ -551,8 +599,11 @@ def _files(view, status, tasks) -> ClientSection:
     files = tuple(
         ClientFile(
             name=artifact.name,
-            serve_at=artifact.path or f"/{artifact.name}",
-            size=_size(artifact.body),
+            # `Artifact.size` rather than `len(body)`: a directory carries an
+            # empty body by design, so measuring the body reported `md/` as
+            # `0 bytes` beside its own 419 files.
+            serve_at=_artifact_serve_at(artifact),
+            size=_size_label(artifact.size),
             published=artifact.name in live_artifacts,
             state_label="Published" if artifact.name in live_artifacts else "Not published yet",
             tone="ok" if artifact.name in live_artifacts else "wait",

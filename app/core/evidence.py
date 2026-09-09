@@ -134,6 +134,9 @@ JUDGED_BY: dict[str, str] = {
     "robots.txt": "crawl",
     "_headers": "headers",
     "ai-catalog.json": "catalog",
+    "md/": "markdown",
+    "ai-info.html": "info",
+    "okf/": "okf",
 }
 
 
@@ -149,6 +152,19 @@ def _policy_of(view) -> str | None:
     return getattr(policy, "value", None)
 
 
+def _fact_count(view) -> int:
+    """How many sourced claims the brief holds.
+
+    INF-006 asks whether the AI info page is worth a footer link, and the answer
+    is a property of the brief rather than of the markup. Zero here makes the
+    rule skip, which is correct: a site with no brief has not been asked the
+    question yet.
+    """
+    brief = getattr(view, "brief", None)
+    facts = getattr(brief, "facts", None) or {}
+    return sum(1 for f in facts.values() if str(getattr(f, "value", "")).strip())
+
+
 def reports_for(view) -> dict[str, object]:
     """Audit every generated artifact that has a rule set. Keyed by component.
 
@@ -156,19 +172,43 @@ def reports_for(view) -> dict[str, object]:
     bundle -- so this can run on a GET without the caching the probe needed.
     """
     from app.core.components import COMPONENTS
-    from app.core.rules import audit, audit_agents, audit_catalog, audit_crawl, audit_headers
+    from app.core.rules import (
+        audit,
+        audit_agents,
+        audit_ai_info,
+        audit_catalog,
+        audit_crawl,
+        audit_headers,
+        audit_markdown_pages,
+        audit_okf,
+    )
 
     if view is None:
         return {}
 
     ev = evidence_for(view)
     bodies = {a.name: a.body for a in view.bundle.artifacts}
+    # Directory artifacts carry `files` and an empty `body`, so they need their
+    # own lookup: keying on `body` alone would skip them as ungenerated.
+    dirs = {a.name: a.files for a in view.bundle.artifacts if a.files}
     reports: dict[str, object] = {}
 
     for component in COMPONENTS:
         which = JUDGED_BY.get(component.artifact)
         body = bodies.get(component.artifact, "")
-        if which is None or not body.strip():
+        files = dirs.get(component.artifact, {})
+        if which is None or not (body.strip() or files):
+            continue
+        if which == "markdown":
+            reports[component.key] = audit_markdown_pages(files, site_url=ev.site_url)
+            continue
+        if which == "okf":
+            reports[component.key] = audit_okf(files, site_url=ev.site_url)
+            continue
+        if which == "info":
+            reports[component.key] = audit_ai_info(
+                body, site_url=ev.site_url, facts=_fact_count(view)
+            )
             continue
         if which == "agents":
             reports[component.key] = audit_agents(

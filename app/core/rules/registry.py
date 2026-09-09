@@ -35,6 +35,13 @@ class Category(StrEnum):
     INDEX = "IDX"
     FULL = "FULL"
     CROSS = "XF"
+    # The three artifacts added when this tool caught up with llms.txt v2, OKF
+    # and the AI-info-page convention. Separate categories rather than more IDX
+    # rules because they judge different files: a report that mixes them cannot
+    # say which artifact is failing.
+    MARKDOWN = "MD"
+    INFO = "INF"
+    OKF = "OKF"
 
 
 class Outcome(StrEnum):

@@ -40,6 +40,7 @@ from app.core.components import (
     by_key,
     for_developer,
 )
+from app.core.md_pages import SUFFIX
 from app.core.onboarding import BotPolicy, SiteBrief
 
 # Re-exported, not redefined. `bundle` used to declare its own `Effort` with the
@@ -90,13 +91,35 @@ class DeploymentTask:
 
 @dataclass(frozen=True, slots=True)
 class Artifact:
-    """One generated file, and where it goes."""
+    """One generated file, and where it goes.
+
+    Two of the artifacts this tool now produces are directories rather than
+    files: the markdown page versions and the OKF bundle. They carry `files`
+    instead of `body`, keyed by path relative to `path`, and `body` stays empty.
+
+    The alternative -- a second dataclass for directories -- was tried and
+    abandoned: every consumer would have had to learn which of two types it was
+    holding, and the ones that forgot would have rendered a directory as an
+    empty file. One type with an empty `body` fails visibly instead.
+    """
 
     name: str
     path: str
     body: str
     media_type: str
     note: str = ""
+    files: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def is_directory(self) -> bool:
+        return bool(self.files)
+
+    @property
+    def size(self) -> int:
+        """Bytes, whichever form this artifact takes."""
+        if self.files:
+            return sum(len(b.encode("utf-8")) for b in self.files.values())
+        return len(self.body.encode("utf-8"))
 
 
 @dataclass(slots=True)
@@ -160,14 +183,48 @@ class Bundle:
 # developer list includes the commerce components at all.
 TRANSACTIONAL_SCENARIOS = frozenset({"shop_on_store", "find_local_inventory"})
 
+# `ai-info` is in every goal. It is the only artifact here that answers "who is
+# this company", and that question is asked of a plumber and of a bank alike --
+# whereas `md-pages` and `okf` pay off only where an agent reads the prose, so
+# they are scoped to the goal that is about being read and cited.
 SCENARIO_COMPONENTS: dict[str, tuple[str, ...]] = {
-    "contact_local_business": ("robots", "llms-txt", "agents-md", "link-header"),
-    "contact_agency": ("robots", "llms-txt", "agents-md", "link-header"),
-    "book_appointment": ("robots", "llms-txt", "agents-md", "link-header"),
-    "read_and_cite": ("robots", "llms-txt", "llms-full", "agents-md", "link-header"),
-    "shop_on_store": ("robots", "llms-txt", "agents-md", "link-header", "ai-catalog"),
-    "find_local_inventory": ("robots", "llms-txt", "agents-md", "link-header", "ai-catalog"),
-    "use_the_api": ("robots", "llms-txt", "agents-md", "link-header", "ai-catalog"),
+    "contact_local_business": ("robots", "llms-txt", "agents-md", "link-header", "ai-info"),
+    "contact_agency": ("robots", "llms-txt", "agents-md", "link-header", "ai-info"),
+    "book_appointment": ("robots", "llms-txt", "agents-md", "link-header", "ai-info"),
+    "read_and_cite": (
+        "robots",
+        "llms-txt",
+        "llms-full",
+        "agents-md",
+        "link-header",
+        "ai-info",
+        "md-pages",
+        "okf",
+    ),
+    "shop_on_store": (
+        "robots",
+        "llms-txt",
+        "agents-md",
+        "link-header",
+        "ai-catalog",
+        "ai-info",
+    ),
+    "find_local_inventory": (
+        "robots",
+        "llms-txt",
+        "agents-md",
+        "link-header",
+        "ai-catalog",
+        "ai-info",
+    ),
+    "use_the_api": (
+        "robots",
+        "llms-txt",
+        "agents-md",
+        "link-header",
+        "ai-catalog",
+        "ai-info",
+    ),
 }
 
 
@@ -276,23 +333,70 @@ def render_robots(brief: SiteBrief, sitemap_url: str = "") -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_headers(site_url: str, has_llms: bool, has_catalog: bool, openapi_url: str = "") -> str:
+def render_headers(
+    site_url: str,
+    has_llms: bool,
+    has_catalog: bool,
+    openapi_url: str = "",
+    md_layout: str = "",
+) -> str:
     """A Cloudflare `_headers` file advertising the agent surfaces via Link rels.
 
     Only rels for files that will exist. A `Link` header pointing at a 404 is
     worse than no header: it costs an agent a request and teaches it to distrust
     the rest.
+
+    ## The per-page `alternate` rel, and why most of it is a comment
+
+    llms.txt v2 asks for two rels: `describedby` pointing at the llms.txt that
+    covers a path, and `alternate` with `type="text/markdown"` pointing at *that
+    page's* markdown twin. The first is site-wide and is emitted. The second is
+    per-page, and Cloudflare's `_headers` cannot express it: the file matches
+    paths with placeholders but performs no interpolation into header **values**,
+    so there is no rule that maps `/about/` to `</about/index.md>`.
+
+    Emitting 419 literal blocks was the other option and is worse -- Cloudflare
+    caps the file, so a long site would have the rules silently dropped from the
+    bottom, which is the failure this whole module exists to avoid.
+
+    So the homepage rule is emitted, because that one is expressible and is the
+    page an agent reaches first, and the general rule is written down as an
+    instruction for whoever administers the edge. That is what `templated=True`
+    on this component already means: scaffolding for a developer, not a draft.
     """
     lines = ["# Cloudflare Pages _headers — agent-aware Link rels.", "", "/*"]
     lines.append('  Link: </sitemap.xml>; rel="sitemap"')
     if has_llms:
-        lines.append('  Link: </llms.txt>; rel="describedby"; type="text/markdown"')
+        # `type` belongs on the markdown alternate rather than here, per the v2
+        # example. llms.txt is markdown too, but `describedby` names the document
+        # that describes this page, and typing it invites an agent to treat it as
+        # the page's own markdown form.
+        lines.append('  Link: </llms.txt>; rel="describedby"')
     if has_catalog:
         lines.append('  Link: </.well-known/ai-catalog.json>; rel="ai-catalog"')
     if openapi_url:
         lines.append(
             f'  Link: <{openapi_url}>; rel="service-desc"; type="application/vnd.oai.openapi+json"'
         )
+
+    if md_layout:
+        home = "/index.html.md" if md_layout == SUFFIX else "/index.md"
+        lines += [
+            "",
+            "/",
+            f'  Link: <{home}>; rel="alternate"; type="text/markdown"',
+            "",
+            "# Every other page has a markdown twin at the same path. Cloudflare",
+            "# interpolates placeholders into matched paths but not into header",
+            "# values, so the per-page rule below has to be set at the edge",
+            "# (a Worker, or your CDN's header rules) rather than in this file:",
+            "#",
+            f"#   Link: <{{path}}{'.md' if md_layout == SUFFIX else ''}>; "
+            'rel="alternate"; type="text/markdown"',
+            "#",
+            "# where {path} is the request path rewritten by the same rule the",
+            "# md/ directory was generated with.",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -386,6 +490,10 @@ def build_bundle(
     llms_full: str = "",
     agents_md: str = "",
     ai_catalog: str = "",
+    md_files: dict[str, str] | None = None,
+    md_layout: str = "",
+    ai_info: str = "",
+    okf_files: dict[str, str] | None = None,
     sitemap_url: str = "",
     platform: str = "",
     generated_on: date | None = None,
@@ -453,6 +561,50 @@ def build_bundle(
                 note=_optional_note("ai-catalog.json", wanted),
             )
         )
+    if md_files:
+        bundle.artifacts.append(
+            Artifact(
+                "md/",
+                "/",
+                "",
+                "text/markdown",
+                note=_optional_note(
+                    "md/",
+                    wanted,
+                    "Upload alongside the pages they mirror, keeping the paths as given.",
+                ),
+                files=dict(md_files),
+            )
+        )
+    if ai_info:
+        bundle.artifacts.append(
+            Artifact(
+                "ai-info.html",
+                "/ai-info",
+                ai_info,
+                "text/html",
+                note=_optional_note(
+                    "ai-info.html",
+                    wanted,
+                    "Link it from the footer, and never move the URL.",
+                ),
+            )
+        )
+    if okf_files:
+        bundle.artifacts.append(
+            Artifact(
+                "okf/",
+                "/okf/",
+                "",
+                "text/markdown",
+                note=_optional_note(
+                    "okf/",
+                    wanted,
+                    "Publish the directory whole; the links between the files are the point.",
+                ),
+                files=dict(okf_files),
+            )
+        )
     bundle.artifacts.append(
         Artifact(
             "_headers",
@@ -466,6 +618,9 @@ def build_bundle(
                 # emit, and that is a fact about `ai_catalog`, not about the goal.
                 has_catalog=bool(ai_catalog),
                 openapi_url=openapi,
+                # Same rule again: the alternate rels are advertised only where
+                # the directory they point into was actually produced.
+                md_layout=md_layout if md_files else "",
             ),
             "text/plain",
             note=_optional_note(

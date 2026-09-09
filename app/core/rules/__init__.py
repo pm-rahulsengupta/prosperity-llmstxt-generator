@@ -13,6 +13,15 @@ that work belongs in the QA stage and an unscored advisory list.
 from __future__ import annotations
 
 from app.core.rules.agents_rules import AGENTS_RULES, AgentsContext
+from app.core.rules.artifact_rules import (
+    INFO_BY_ID,
+    INFO_RULES,
+    MARKDOWN_BY_ID,
+    MARKDOWN_RULES,
+    OKF_BY_ID,
+    OKF_RULES,
+    ArtifactContext,
+)
 from app.core.rules.crawl_rules import CRAWL_BY_ID, CRAWL_RULES, CrawlContext
 from app.core.rules.delivery_rules import (
     CATALOG_BY_ID,
@@ -222,6 +231,30 @@ def audit_catalog(text: str, *, artifacts: set[str] | None = None, site_url: str
     """Run the CAT rules over an `ai-catalog.json`."""
     ctx = DeliveryContext(text, artifacts=artifacts, site_url=site_url)
     return score_report([rule.run(ctx) for rule in CATALOG_RULES], CATALOG_BY_ID)
+
+
+def audit_markdown_pages(files: dict[str, str], *, site_url: str = "") -> Report:
+    """Run the MD rules over the generated markdown directory."""
+    ctx = ArtifactContext(files=files, site_url=site_url)
+    return score_report([rule.run(ctx) for rule in MARKDOWN_RULES], MARKDOWN_BY_ID)
+
+
+def audit_ai_info(text: str, *, site_url: str = "", facts: int = 0) -> Report:
+    """Run the INF rules over an `ai-info.html`.
+
+    `facts` is the count of sourced claims the page carries. It is passed rather
+    than counted from the markup because the renderer knows which `<dd>` was a
+    fact and which was a source line, and re-deriving it from HTML would be a
+    second opinion competing with the first.
+    """
+    ctx = ArtifactContext(text, site_url=site_url, facts=facts)
+    return score_report([rule.run(ctx) for rule in INFO_RULES], INFO_BY_ID)
+
+
+def audit_okf(files: dict[str, str], *, site_url: str = "") -> Report:
+    """Run the OKF rules over the generated bundle directory."""
+    ctx = ArtifactContext(files=files, site_url=site_url)
+    return score_report([rule.run(ctx) for rule in OKF_RULES], OKF_BY_ID)
 
 
 def render_text(report: Report, *, verbose: bool = False) -> str:

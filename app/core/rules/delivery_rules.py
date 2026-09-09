@@ -101,6 +101,23 @@ def _advertises_only_what_exists(ctx: DeliveryContext):
         artifact = known.get(path)
         if artifact is not None and artifact not in ctx.artifacts:
             missing.append(f"{path} is advertised and was not generated")
+            continue
+        # The markdown alternate cannot be matched by path: it names a page's
+        # own twin, so the path differs per rule. What it asserts is that the
+        # `md/` directory exists, and that is what has to be checked -- without
+        # this branch a `_headers` advertising markdown for a site that has none
+        # scored 100, which is the exact failure this rule was written for.
+        rel = LINK_REL.search(link)
+        kind = LINK_TYPE.search(link)
+        if (
+            artifact is None
+            and rel is not None
+            and "alternate" in rel.group(1).split()
+            and kind is not None
+            and kind.group(1).strip() == "text/markdown"
+            and "md/" not in ctx.artifacts
+        ):
+            missing.append(f"{path} is advertised as markdown and no md/ was generated")
 
     if not missing:
         return ok("HDR-001", "every advertised surface was generated")

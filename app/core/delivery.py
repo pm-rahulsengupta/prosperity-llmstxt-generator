@@ -138,6 +138,7 @@ def check_delivery(
     llms_full: str = "",
     agents_md: str = "",
     expected_files: dict[str, str] | None = None,
+    directories: dict[str, dict[str, str]] | None = None,
     run_stats: dict | None = None,
     must_appear: set[str] | None = None,
     generate_full: bool = False,
@@ -146,14 +147,22 @@ def check_delivery(
 
     `expected_files` is the bundle as `{name: body}`, so a file that should be
     there and is empty is caught as an absence rather than by whoever opens the zip.
+    `directories` is the same for the artifacts that are directories rather than
+    files -- without it `md/` and `okf/` arrive with an empty body and are read as
+    empty files, which is the misreport this function exists to prevent.
     `run_stats` is `Run.stats` and carries what only the run knows -- which stages
     fell back, which pages needed JavaScript, whether the size check answered.
     """
     report = DeliveryReport()
     files = expected_files or {}
-    report.files = {name: len(body or "") for name, body in files.items()}
+    dirs = directories or {}
+    report.files = {name: len(body or "") for name, body in files.items() if name not in dirs}
+    report.files.update(
+        {name: sum(len(b or "") for b in bodies.values()) for name, bodies in dirs.items()}
+    )
 
     _check_files(report, files, generate_full=generate_full)
+    _check_directories(report, dirs)
     _check_rules(report, llms_txt, llms_full, agents_md)
     _check_run(report, run_stats or {}, llms_txt, must_appear or set())
     return report
@@ -189,6 +198,39 @@ def _check_files(report: DeliveryReport, files: dict[str, str], *, generate_full
                     "A named file with no content reads as delivered and is not.",
                     remedy="Check the stage that writes it; an empty body means it "
                     "returned nothing rather than that the site needs nothing.",
+                )
+            )
+
+
+def _check_directories(report: DeliveryReport, dirs: dict[str, dict[str, str]]) -> None:
+    """A directory artifact that arrived with no files in it.
+
+    The file-level check cannot see this: a directory carries an empty `body` by
+    design, so `md/` with nothing in it and `md/` with 419 files look identical
+    to `_check_files`. An empty directory in a handover is the same failure as an
+    empty file -- it reads as delivered and is not.
+    """
+    for name, bodies in dirs.items():
+        if not bodies:
+            report.items.append(
+                Item(
+                    Kind.DEFECT,
+                    f"{name} is in the handover with no files in it",
+                    "A directory that reads as delivered and contains nothing.",
+                    remedy=f"Check the stage that builds {name}; an empty directory "
+                    "means it produced nothing rather than that the site needs nothing.",
+                )
+            )
+            continue
+        empty = [path for path, body in bodies.items() if not (body or "").strip()]
+        if empty:
+            report.items.append(
+                Item(
+                    Kind.DEFECT,
+                    f"{name} contains {len(empty)} empty files",
+                    "An empty page and a page we failed to read are indistinguishable "
+                    "to whoever fetches it.",
+                    remedy="Drop them from the directory or fill them; do not publish both.",
                 )
             )
 

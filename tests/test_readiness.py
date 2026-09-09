@@ -43,20 +43,31 @@ def test_the_checklist_covers_both_layers():
     assert layers == {1, 2}
 
 
-def test_the_checklist_is_the_sheet_plus_the_two_files_this_tool_generates():
-    """Twenty-one from the published checklist, plus agents.md and ai-catalog.
+def test_the_checklist_is_the_sheet_plus_the_files_this_tool_generates():
+    """Twenty-one from the published checklist, plus what the sheet predates.
 
-    Neither is in the sheet -- it predates Agentic Resource Discovery, and
-    agents.md was a Shopify convention when it was written -- and both are what
-    this tool exists to produce, so auditing a site without them would leave the
-    two most relevant components unexamined.
+    The sheet predates Agentic Resource Discovery, agents.md was a Shopify
+    convention when it was written, and llms.txt was still at v1 -- so markdown
+    page versions, an AI info page and an OKF bundle are all later than the
+    document this checklist started as. Each is what this tool exists to
+    produce, so auditing a site without them would leave the most relevant
+    components unexamined.
     """
     from app.core.components import COMPONENTS
 
-    assert len(CHECKLIST) == len(COMPONENTS) == 26
+    assert len(CHECKLIST) == len(COMPONENTS) == 29
     # Plus the two WCAG rules added after the sheet was written: 4.1.2 on
     # deprecated roles and 4.1.1 on duplicate ids.
-    added = {"agents-md", "ai-catalog", "aria-roles", "unique-ids", "llms-full"}
+    added = {
+        "agents-md",
+        "ai-catalog",
+        "aria-roles",
+        "unique-ids",
+        "llms-full",
+        "md-pages",
+        "ai-info",
+        "okf",
+    }
     assert added <= {c.key for c in CHECKLIST}
 
 

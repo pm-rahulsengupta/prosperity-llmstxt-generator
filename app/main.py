@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import logging
 import mimetypes
 import re
@@ -58,6 +59,7 @@ from app.core.agents_doc import (
 from app.core.agents_render import render_agents_liquid, render_agents_md
 from app.core.ai_catalog import CONTENT_TYPE as CATALOG_TYPE
 from app.core.ai_catalog import build_catalog, render_catalog
+from app.core.ai_info import render_ai_info
 from app.core.audit_link import link_audit
 from app.core.bundle import (
     EFFORT_LABELS,
@@ -78,7 +80,10 @@ from app.core.csv_source import parse_screaming_frog_csv
 from app.core.delivery import DeliveryReport, check_delivery
 from app.core.edits import EditTarget, apply_operations
 from app.core.evidence import JUDGED_BY, reports_for
+from app.core.filesets import LIST_CAP, file_sets_for
+from app.core.md_pages import render_md_pages, rewrite_links
 from app.core.metrics import DateRange
+from app.core.okf import render_okf
 from app.core.onboarding import (
     QUESTIONS,
     SiteBrief,
@@ -1099,14 +1104,67 @@ def _assemble(
     doc.notes.extend(tech.notes)
     catalog = build_catalog(probe, tech, site_name=doc.site_name)
     rendered_catalog = render_catalog(catalog) if catalog.worth_publishing else ""
+
+    # The three v2 artifacts, from the rows this run already stored. No crawl and
+    # no model call: `Page.markdown` is persisted per page, so the markdown twins
+    # and the OKF concepts are a re-projection of what the run already read. That
+    # is what makes them available for a run finished weeks ago.
+    #
+    # Excluded pages are left out. They are absent from llms.txt by the operator's
+    # decision, and a markdown twin of a page the index does not name is a file
+    # nothing links to.
+    included = [p.to_entry() for p in pages if getattr(p, "included", True)]
+    md = render_md_pages(included)
+    llms_txt = run.llmstxt if run else ""
+    if llms_txt and md.files:
+        llms_txt = rewrite_links(llms_txt, md.paths, normalised)
+
+    result = (
+        _result_from_rows(run, [p for p in pages if getattr(p, "included", True)]) if run else None
+    )
+    okf = (
+        render_okf(
+            normalised,
+            result.site_name or domain,
+            result.site_summary,
+            result.sections,
+            result.optional,
+        )
+        if result is not None
+        else None
+    )
+
+    # Assembled before the bundle so the page can state what it links to, and
+    # only what the bundle is about to produce.
+    agents_md = render_agents_md(doc)
+    will_publish = {"/llms.txt"} if llms_txt else set()
+    if agents_md:
+        will_publish.add("/agents.md")
+    if run and run.llms_full:
+        will_publish.add("/llms-full.txt")
+    info = render_ai_info(
+        normalised,
+        (result.site_name if result else "")
+        or (config.label if config and config.label else domain),
+        result.site_summary if result else "",
+        brief,
+        result.sections if result else [],
+        verified_urls=frozenset(p.url for p in included),
+        published=frozenset(will_publish),
+    )
+
     bundle = build_bundle(
         normalised,
         brief,
         declared=declared,
-        llms_txt=(run.llmstxt if run else ""),
+        llms_txt=llms_txt,
         llms_full=(run.llms_full if run else ""),
-        agents_md=render_agents_md(doc),
+        agents_md=agents_md,
         ai_catalog=rendered_catalog,
+        md_files=md.files,
+        md_layout=md.layout,
+        ai_info=info.html,
+        okf_files=(okf.files if okf else {}),
         sitemap_url=f"{normalised}/sitemap.xml",
         platform=tech.platform.value,
     )
@@ -2680,6 +2738,7 @@ async def refine_reset(
 async def agents_download(
     site: str,
     kind: str = "md",
+    file: str = "",
     user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2710,6 +2769,41 @@ async def agents_download(
     # through to the default and returned agents.md instead, which is a download
     # that looks like it worked.
     if (artifact := bundle.get(kind)) is not None:
+        # A directory artefact -- `md/`, `okf/` -- has no single body to serve.
+        # `getattr` because `Artifact.files` is being added in parallel with the
+        # screens that read it; an artefact without the field is a file and takes
+        # the branch below, which is also what an empty mapping means.
+        files = getattr(artifact, "files", None) or {}
+        if files:
+            if file:
+                # One file out of the set, for the reader who opened the
+                # inventory to check a single page. Exact-key lookup rather than
+                # a path join: the mapping *is* the allow-list, so nothing here
+                # can be talked into `../` by a crafted query string.
+                if file not in files:
+                    raise HTTPException(
+                        status.HTTP_404_NOT_FOUND,
+                        f"{artifact.name} has no file called {file}.",
+                    )
+                # Inline, not an attachment. Opening one page.md to read it is
+                # not a download, and prompting a Save dialog for every row in a
+                # 419-item list would make the inventory hostile to use.
+                return PlainTextResponse(files[file], media_type="text/plain; charset=utf-8")
+
+            # Deflated in memory. These are markdown, so they compress to a
+            # fraction, and the alternative -- a temp directory per download --
+            # puts a filesystem in the path of a GET.
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                for path, body in sorted(files.items()):
+                    archive.writestr(path, body)
+            name = f"{artifact.name.rstrip('/')}.zip"
+            return Response(
+                buffer.getvalue(),
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{name}"'},
+            )
+
         return PlainTextResponse(
             artifact.body,
             headers={"Content-Disposition": f'attachment; filename="{artifact.name}"'},
@@ -2820,6 +2914,13 @@ def _component_context(request, user, domain, status, view) -> dict:
         # partial renders as "no checks exist" rather than as a pass.
         "reports": reports_for(view),
         "judged": JUDGED_BY,
+        # The two artefacts that are directories rather than files, reduced to
+        # what a row has to say about them. Alongside `reports` for the same
+        # reason: both are cheap projections of the bundle every
+        # component-bearing page already holds, and a route that forgot one
+        # would render a 419-file set as a broken download link.
+        "file_sets": file_sets_for(view),
+        "list_cap": LIST_CAP,
         # The share control, on every page that has something worth sharing.
         # Added here rather than to four route bodies for the reason `build_nav`
         # is a global: the one route that forgot would render a page whose Share
@@ -2957,6 +3058,7 @@ async def _delivery_report(session: AsyncSession, domain: str, view) -> Delivery
         llms_full=bodies.get("llms-full.txt", ""),
         agents_md=bodies.get("agents.md", ""),
         expected_files=bodies,
+        directories={a.name: a.files for a in view.bundle.artifacts if a.files},
         run_stats=(run.stats if run else {}) or {},
         must_appear=set(brief.must_appear) if brief else set(),
         generate_full=bool(run and run.generate_full),
