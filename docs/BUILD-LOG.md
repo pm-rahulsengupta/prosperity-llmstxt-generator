@@ -198,7 +198,65 @@ dropped, so a `must_appear` URL can be named, found, flagged and still absent �
 which is a design question about what the file should contain, not a bug to fix
 quietly.
 
-**Measured:** 1319 passed, 1 xfailed. ruff clean.
+#### A pre-send check, and the four defects it caught in my own handover
+
+The files above were about to be sent. Running the tool's own rule engine over
+them first — which nothing did — scored them **79/100 with four failures**, and
+three of the four were ours rather than redspot's:
+
+| | | |
+|---|---|---|
+| XF-001 | `llms-full.txt` had no blockquote | `render_llms_full` was never passed `site_summary`. The rule has failed on every full file this tool has produced. |
+| AGT-013 | `agents.md` did not mention `llms.txt` | The pointer only renders when a probe found a *live* file. A site we are about to publish one to never gets it, so the bundle arrives internally inconsistent. |
+| IDX-015 | `licence` x22 / `license` x12 | `copyrules.locale_conflicts` was written, correct, tested, and **called by nothing**. `enforce_copy_rules` — whose entire job is "check every link line, regenerate what fails once" — never consulted it, so IDX-015 caught the mixing at audit time, after assembly, when the only move left is to regenerate the run. |
+| IDX-013 | "Top End" flagged as a superlative | The northern third of the Northern Territory. redspot has a location page for it. The file was refused over a place name. |
+
+The last two share a cause worth naming on its own: **`copyrules` and
+`index_rules` each implemented the same two checks, three files apart, with their
+own `LOCALE_PAIRS`.** Both copies were wrong, in different directions. The audit's
+spelling check matched `\bprogram` with no closing boundary, so every "programme"
+counted as both spellings and a consistently British document reported a conflict
+with itself; the generator's superlative check learned about proper nouns and the
+audit's did not. Both now call the shared function and the duplicate list is gone.
+
+`app/core/delivery.py` is the check itself, and its value is the sort rather than
+the list. Three piles, because the response to each is opposite:
+
+* **Defect** — ours. The file is wrong, not the site. Blocks the send.
+* **Finding** — the client's. Duplicate titles, thin pages, three pages that need
+  JavaScript. This *is* the deliverable; blocking on it would mean refusing to
+  deliver an audit because the audit found something.
+* **Limit** — nobody's. A stage that fell back, 11 of 430 pages that did not
+  fetch, an unavailable index count. Only has to be said out loud, because a gap a
+  client is not told about gets read as one of the first two.
+
+XF-002 turns on disclosure rather than arithmetic. It wants every indexed URL in
+the full file; FULL-009 caps that file at 800,000 characters; past a few hundred
+pages both cannot hold and the cap should win. `render_llms_full` already writes
+the shortfall into its own footer, so a stated truncation is a limit and a silent
+one is a defect — then the file quietly claims to be the whole site.
+
+**Measured, after the fixes, on the same bundle:** 0 defects, 4 findings, 6
+limits. `llms.txt` 79/100 — the remaining points are redspot's seven duplicate
+titles and the size warning. `agents.md` **100/100**. Both files now carry the
+same blockquote, and 419 link lines across 5 sections.
+
+The handover page renders the three lists at `/sites/{domain}/handover`.
+
+#### The stranded runs
+
+Both recovered and parked at the review gate, where a person decides:
+
+- **rentalcover.com** — 15,226 sitemap URLs, tier `huge`. The run warns that it is
+  too large to crawl exhaustively and that an unbounded crawl here is real money.
+  Not approved.
+- **westpac.com.au** — 4,568 URLs. Not approved. Note there are now *two* westpac
+  runs at the gate, `417eb0ca` from 28 August and `784504a9`; one should be
+  cancelled before either is approved.
+
+Neither was blocked, refused or broken. Both had simply never been queued.
+
+**Measured:** 1336 passed, 1 xfailed. ruff clean.
 
 **Deployed:** web and worker, 2026-09-09. `OPENAI_BASE_URL` pointed at OmniRoute
 on both, all five `LLM_MODEL_*` on `kr/claude-sonnet-4.5`.
