@@ -4,10 +4,14 @@
    figures are real but they are not live, and a cached number presented as a
    current one is the one failure the snapshot table could introduce. So the age
    travels with the data and every such page renders this. #}
-<p class="hint checked">
+{# A `div`, not a `p`. A `form` is not phrasing content, so a browser closes an
+   open `p` before it -- which put the Refresh button outside the flex container
+   that `.checked` establishes, on all four pages that include this. The layout
+   only looked right because the button is small and the row wrapped anyway. #}
+<div class="hint checked">
     Checked {{ checked_ago }}{% if is_stale %} &mdash;
     <strong>this is over a day old</strong>, refresh before quoting it to a client{% endif %}.
     <form class="inline-form" method="post" action="/sites/{{ domain }}/refresh">
         <button class="ghost" type="submit">Refresh</button>
     </form>
-</p>
+</div>
