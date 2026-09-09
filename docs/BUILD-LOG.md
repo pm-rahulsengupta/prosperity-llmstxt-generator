@@ -16,6 +16,195 @@ not happened yet when the code was committed.
 
 ---
 
+## 2026-09-09
+
+### Six ways the tool read data that was there, found by finishing one run
+
+The redspot.com.au run had been `pending` since 25 August. `POST /runs/{id}/start`
+existed and was deployed; nobody had pressed it. Starting it and following it to a
+delivered file turned up six defects, none of which the test suite could have
+found, because each is a case of an external source answering in a shape the
+reader did not expect and the reader reporting a confident wrong answer instead of
+no answer.
+
+The run is the finding. Everything below was measured on it.
+
+#### `site:` no longer returns an index estimate, and the tool acted on one
+
+Measured 2026-09-09 against DataForSEO, `serp/google/organic/live/advanced`:
+
+| query | `se_results_count` | organic items |
+|---|---|---|
+| `site:amazon.com` | 25 | 10 |
+| `site:nytimes.com` | 25 | 10 |
+| `site:reddit.com` | 26 | 10 |
+| `site:github.com` | 10 | 10 |
+| `site:wikipedia.org` | 10 | 10 |
+| `site:redspot.com.au` | 10 | 10 |
+
+Raising `depth` from 10 to 100 moved none of them. Those sites do not share an
+index size; the field tracks page one of the SERP. Google has stopped publishing
+an "About N results" line for `site:` queries and DataForSEO passes through what
+is there.
+
+Read as a count it was worse than useless because it is *small*. `assess`
+compares it against the sitemap and warns that "most of what is published is not
+being kept ... **cap the crawl and lean on the exclude rules**" for any site over
+fifty pages. redspot carried that instruction to its review gate on a figure of
+10, against a 442-URL sitemap that is fine. An operator acting on it would have
+excluded real pages on the strength of a number that describes nothing.
+
+`_describes_only_page_one` refuses a count at or below the organic results in the
+same response. The test is the SERP's own shape rather than a tuned floor: an
+estimate of a whole index cannot be smaller than the results on the page
+reporting it. `SMALLEST_CREDIBLE_ESTIMATE = 30` covers the gap above that and
+below 100, where the first tier starts, so no credible estimate is discarded.
+Refusing is the conservative direction — `best_count` takes the larger of the two
+counts, so a missing one cannot shrink a crawl.
+
+The nrma.com.au runs of 23–24 August recorded 924 and 943. Whatever changed,
+changed after that.
+
+#### A gateway can accept `response_format` and drop it
+
+OpenAI's key was out of credit (`insufficient_quota`), so the run went through the
+Prosperity OmniRoute gateway. `strict` json_schema is an OpenAI feature and an
+OpenAI-*compatible* endpoint is free to accept the parameter and ignore it. That
+is not a refusal anyone can see: the request succeeds, the usage is billed, and
+the reply is whatever the model felt like returning.
+
+Three shapes observed from the same model on the same day:
+
+1. Schema-correct JSON inside a ```json fence — `kr/claude-sonnet-4.5`,
+   `kr/glm-5`, `kr/deepseek-3.2`, `kr/qwen3-coder-next`, all four.
+2. An empty string.
+3. Four paragraphs of English opening `**Classification: hub**`, for the
+   group-intent prompt.
+
+One preflight recorded a plan built from a real model answer beside an intent
+stage that had fallen back, from two calls a second apart.
+
+`_unfence` handles (1) and `_system_for` handles (2) and (3) by sending the schema
+in the system prompt whenever `OPENAI_BASE_URL` is set. This module's rule is that
+the request carries the schema and the prompt carries context; where nothing
+carries it, the prompt is the better of the two remaining options. The OpenAI path
+is byte-identical to before.
+
+Two error messages were also lying. An empty body reported as "invalid JSON:
+Expecting value: line 1 column 1 (char 0)", which describes a parse failure that
+did not happen and is why this took a reproduction to find. A prose body reported
+as "invalid JSON" and hid the diagnosis; it now quotes its first eighty
+characters, which *is* the diagnosis.
+
+#### An exclude rule excluded nothing
+
+`select_urls` asked each *template* whether it was included and collected the URLs
+of the ones that were. A URL matches by shape, so it belongs to every template it
+fits — `/customer-service/feedback/` is a member of both `/{slug}/{slug}` and
+`/{slug}/feedback` — and an exclude rule therefore only ever declined to add its
+own list. It never removed what a broader include had already added.
+
+The planner wrote twelve exclude rules for redspot: careers sub-pages, a damage
+report form, a feedback form, a sponsorship page. Each named a real cluster, with
+a reason, at the review gate. **All twelve URLs were selected for the crawl.**
+
+This is the control the gate is built around. `core/metrics.py` opens "curation is
+happening by truncation" and `render_planning_table` says "one line here can
+exclude four thousand URLs before anything is fetched". Neither was true. On
+CarsGuide's 11,909 URLs it is also the bill.
+
+`_excluded` now decides per URL. Precedence is specificity — literal segments,
+then length — not rule order or priority: the planner emits general and specific
+rules together and neither position says which was meant to win, while the rule
+naming a URL most precisely is self-evidently the one written about it. So a
+specific exclude beats a broad include *and* a specific include survives a broad
+exclude. A tie resolves to exclude, the recoverable direction: a page wrongly left
+out shows as a gap at the review gate; a page wrongly fetched has been paid for
+and may already be in the client's file.
+
+**Measured:** 442 sitemap URLs, 430 fetched. Twelve fewer, exactly as written.
+
+#### `must_appear` was absolute everywhere except the crawl
+
+The onboarding form calls it *"Absolute. Joins the identity set, which no traffic
+rule can exclude."* That was true of the group verdict in `_apply_overrides` and
+of nothing else. `select_urls` never saw the brief, so a named URL could be
+excluded by a template rule or fall past `ordered[:page_cap]` — and a page that is
+not fetched cannot appear in any file assembled after it.
+
+redspot named 173 URLs. 171 are in the sitemap, and at the size-derived cap of 400
+over 442, `/vehicles/van-hire/tradies/` fell off the end of the truncation.
+Nothing reported it, because from the crawl's point of view nothing had gone
+wrong.
+
+Named URLs are promoted rather than appended. Appending would change which page is
+dropped for each one added, trading an operator's explicit choice against the
+planner's ordering at the boundary without saying so. Matched against the recon
+inventory, so the two named URLs no sitemap lists add nothing — `must_appear` is a
+claim about priority, not a licence to fetch a URL discovery never found.
+
+#### A rate limit is a request to wait
+
+Four summarise batches ended at `[kiro/claude-sonnet-4.5] [429]: Too many
+requests, please wait before trying again. (reset after 5s)`. There was no retry,
+so **a hundred of the file's 419 link lines took URL-slug descriptions while the
+provider was saying how long to wait**. `319 of 419 link lines written by model`
+is the number that recorded it.
+
+Three attempts, six then twelve seconds. Bounded rather than exponential because
+the worker runs one job at a time and a stage that never gives up blocks the queue
+behind it. `insufficient_quota` and `credit balance` are excluded deliberately: a
+spent account also answers 429, and retrying that spends the same failure three
+times before the fallback the run actually needs.
+
+**Measured after:** 419 of 419.
+
+#### Two headings, one list; and one blockquote too many
+
+`agents.md` printed `read_only_urls` under both "Search and listings" and
+"Read-only browsing", because both headings render the same list and it is the
+only one of its kind on the document. Thirteen links, byte-identical, twice.
+3,876 bytes → 2,632. The second heading now declines through
+`_section_available`, so it lands in `omitted` with a reason rather than
+vanishing.
+
+`llms.txt` shipped `> > Australian car rental company`. The spec allows one
+blockquote and the renderer supplies it, so a model returning a pre-quoted blurb
+produces two. The run's own QA stage reported it — the check caught what the
+renderer had no reason to expect.
+
+#### The delivered run
+
+`68dc7418`, redspot.com.au, complete 2026-09-09.
+
+- 442 sitemap URLs, 430 selected after the twelve excludes, **419 fetched, every
+  one on the cheap HTTP tier — zero browser launches.** 11 failed.
+- 419 pages in 5 sections. `llms.txt` 77,896 chars; `llms-full.txt` 799,802.
+- 29 LLM calls, 430,428 prompt + 46,714 completion tokens, all
+  `kr/claude-sonnet-4.5`. **One fallback** — a triage batch whose JSON broke at
+  char 5,312, leaving 40 of 419 pages placed heuristically.
+- 168 of 173 named URLs are in the file. Of the five absent, two are in no
+  sitemap (`/lidcombe-faqs/`, `/locations/lidcombe/`) and three are the pages the
+  crawl flagged as JavaScript-only.
+- 7 QA issues, and all seven are findings about redspot's own site — duplicate
+  vehicle pages under two URLs, a missing rental-policy page — rather than defects
+  in the file.
+
+Two things worth carrying forward. `llms-full.txt` stops at 82 of 419 page blocks
+because it reaches FULL-009's 800,000-character budget; that is the rule working,
+but it means the full-text file covers a fifth of the site and nothing says so on
+the run page. And the three JavaScript-only pages are detected, counted and then
+dropped, so a `must_appear` URL can be named, found, flagged and still absent —
+which is a design question about what the file should contain, not a bug to fix
+quietly.
+
+**Measured:** 1319 passed, 1 xfailed. ruff clean.
+
+**Deployed:** web and worker, 2026-09-09. `OPENAI_BASE_URL` pointed at OmniRoute
+on both, all five `LLM_MODEL_*` on `kr/claude-sonnet-4.5`.
+
+---
+
 ## 2026-08-26
 
 ### Client share links, an export list, and PDF export
