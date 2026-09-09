@@ -143,6 +143,9 @@ class Bundle:
     not_needed: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     tasks: list[DeploymentTask] = field(default_factory=list)
+    #: Copy problems found in prose we generated, for the pre-send gate.
+    #: `AiInfoPage.copy_issues` was computed and read by nothing.
+    copy_issues: list[str] = field(default_factory=list)
 
     @property
     def verified_endpoints(self) -> list[DeclaredEndpoint]:
@@ -493,6 +496,7 @@ def build_bundle(
     md_files: dict[str, str] | None = None,
     md_layout: str = "",
     ai_info: str = "",
+    ai_info_issues: list[str] | None = None,
     okf_files: dict[str, str] | None = None,
     sitemap_url: str = "",
     platform: str = "",
@@ -631,6 +635,7 @@ def build_bundle(
         )
     )
 
+    bundle.copy_issues = list(ai_info_issues or [])
     bundle.tasks = _deployment_tasks(bundle, brief, platform)
 
     produced = {a.name for a in bundle.artifacts}

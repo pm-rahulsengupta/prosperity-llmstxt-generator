@@ -830,3 +830,62 @@ def test_revoking_a_link_that_does_not_exist_is_not_a_success():
     handler = next(h for h in handlers if "revoke" in h and "link_id" in h)
 
     assert "if link is None:" in handler, "a missing link still falls through to the redirect"
+
+
+def test_an_unbalanced_code_fence_does_not_swallow_the_document():
+    """`_headings` toggled on any fence marker and never re-synced, so one stray
+    ``` in one of 419 concatenated pages hid every H2 after it.
+
+    `doc.pages` stopped there while `source_count` -- which reads the raw text --
+    did not, so the FULL rules reported a page-count discrepancy that was an
+    artefact of the parser. Exactly what `parse_full` says it was written to
+    avoid.
+    """
+    from app.core.rules.document import parse_full
+
+    unbalanced = (
+        "# S\n\n> q\n\n## A\n\nSource: u\n\n```\ncode\n\n## B\n\nSource: v\n\n## C\n\nSource: w\n"
+    )
+    doc = parse_full(unbalanced)
+
+    assert len(doc.pages) == doc.source_count == 3
+
+
+def test_a_balanced_fence_still_hides_a_comment_that_looks_like_a_heading():
+    """The reason fence tracking exists at all: `# comment` on the first line of
+    a shell example is not a document heading."""
+    from app.core.rules.document import parse_full
+
+    doc = parse_full("# S\n\n> q\n\n## A\n\nSource: u\n\n```\n## not a heading\n```\n")
+
+    assert len(doc.pages) == 1
+
+
+def test_a_superlative_we_wrote_blocks_the_send():
+    """`render_ai_info` has run `copyrules` over the page's own claims since it
+    was written and stored the verdict in `copy_issues`, which nothing read. So
+    the check ran, reached a conclusion, and was discarded -- on the one artifact
+    carrying the client's name over prose we wrote."""
+    from app.core.delivery import Kind, check_delivery
+
+    report = check_delivery(
+        llms_txt="# X\n\n> s\n",
+        expected_files={"llms.txt": "# X\n\n> s\n", "agents.md": "# a", "robots.txt": "# r"},
+        copy_issues=["best", "licence"],
+    )
+
+    defects = [i for i in report.items if i.kind is Kind.DEFECT]
+    assert any("unverifiable claim" in i.title for i in defects)
+    assert report.sendable is False
+
+
+def test_clean_copy_adds_no_defect():
+    from app.core.delivery import check_delivery
+
+    report = check_delivery(
+        llms_txt="# X\n\n> s\n",
+        expected_files={"llms.txt": "# X\n\n> s\n", "agents.md": "# a", "robots.txt": "# r"},
+        copy_issues=[],
+    )
+
+    assert not any("unverifiable claim" in i.title for i in report.items)

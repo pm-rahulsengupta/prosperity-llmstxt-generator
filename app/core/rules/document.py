@@ -165,10 +165,25 @@ def _headings(lines: list[str]) -> list[Heading]:
     A fence matters more than it looks: `# comment` on the first line of a shell
     example is not a document heading, and counting it makes H1 rules lie.
     """
+    # An odd number of fence markers means the fences do not close, and following
+    # them then swallows the rest of the document. On an llms-full.txt -- 419
+    # crawled pages concatenated, where one page carrying a stray ``` is
+    # unremarkable -- every H2 after that line vanished, `doc.pages` stopped
+    # there, and `source_count` (which reads the raw text) did not. The FULL rules
+    # then reported a page-count discrepancy that was an artefact of this parser,
+    # which is the failure `parse_full` says it was written to avoid.
+    #
+    # So an unbalanced document is parsed without fence suppression. The cost is
+    # that a `# comment` on the first line of a shell example may be counted as a
+    # heading; the alternative is losing two thirds of the document. One is a
+    # visible over-count, the other is silent.
+    markers = sum(1 for line in lines if line.lstrip().startswith(("```", "~~~")))
+    trust_fences = markers % 2 == 0
+
     found: list[Heading] = []
     fenced = False
     for number, line in enumerate(lines):
-        if line.lstrip().startswith(("```", "~~~")):
+        if trust_fences and line.lstrip().startswith(("```", "~~~")):
             fenced = not fenced
             continue
         if fenced:

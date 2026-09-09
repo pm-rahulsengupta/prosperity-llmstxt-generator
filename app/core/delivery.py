@@ -139,6 +139,7 @@ def check_delivery(
     agents_md: str = "",
     expected_files: dict[str, str] | None = None,
     directories: dict[str, dict[str, str]] | None = None,
+    copy_issues: list[str] | None = None,
     run_stats: dict | None = None,
     must_appear: set[str] | None = None,
     generate_full: bool = False,
@@ -163,6 +164,7 @@ def check_delivery(
 
     _check_files(report, files, generate_full=generate_full)
     _check_directories(report, dirs)
+    _check_copy(report, copy_issues or [])
     _check_rules(report, llms_txt, llms_full, agents_md)
     _check_run(report, run_stats or {}, llms_txt, must_appear or set())
     return report
@@ -233,6 +235,31 @@ def _check_directories(report: DeliveryReport, dirs: dict[str, dict[str, str]]) 
                     remedy="Drop them from the directory or fill them; do not publish both.",
                 )
             )
+
+
+def _check_copy(report: DeliveryReport, issues: list[str]) -> None:
+    """Superlatives and mixed spellings in prose we are about to publish.
+
+    `render_ai_info` has run `copyrules` over the page's own claims since it was
+    written -- its docstring says so -- and stored the result in
+    `AiInfoPage.copy_issues`, which nothing read. So the check ran, reached a
+    verdict, and was discarded, on the one artifact that carries the client's
+    name over prose we wrote.
+
+    A defect rather than a finding: this is our copy on their domain, so it is
+    ours to fix before sending, not theirs to be told about.
+    """
+    if not issues:
+        return
+    report.items.append(
+        Item(
+            Kind.DEFECT,
+            f"ai-info.html carries {len(issues)} unverifiable claim(s)",
+            "Superlatives and mixed spellings in copy we wrote, on a page published "
+            f"under the client's name: {', '.join(sorted(issues)[:5])}.",
+            remedy="Reword the fact in the brief; the page is rendered from it.",
+        )
+    )
 
 
 def _check_rules(report: DeliveryReport, llms_txt: str, llms_full: str, agents_md: str) -> None:
