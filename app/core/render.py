@@ -184,6 +184,7 @@ def render_llmstxt(
     pattern: str = PATTERN_CATALOG,
     generated_on: date | None = None,
     include_full_reference: bool = True,
+    notes: str = "",
 ) -> str:
     """Build the llms.txt body.
 
@@ -196,6 +197,19 @@ def render_llmstxt(
     # The blockquote is required by the spec, so there is always a fallback.
     summary = _unquoted(site_summary)
     lines.append(f"> {summary}\n" if summary else f"> Official website content for {domain}.\n")
+
+    # The prose block the spec allows between the blockquote and the first H2:
+    # "zero or more markdown sections of any type except headings". It is where
+    # disambiguation an agent would otherwise get wrong belongs -- two brands
+    # sharing a name, a product line that was retired.
+    #
+    # `Run.notes` has existed since the schema was written, `edits.set_notes`
+    # validated it and refused headings, and `main` persisted it. Nothing ever
+    # rendered it, so the operation reported success and changed no file. It goes
+    # before the full-file reference because it is about the site and that line is
+    # about this bundle.
+    if notes.strip():
+        lines.append(notes.strip() + "\n")
 
     if include_full_reference:
         base = site_url.rstrip("/")
@@ -328,11 +342,12 @@ def build_result(
     generated_on: date | None = None,
     generate_full: bool = True,
     full_max_chars: int = DEFAULT_FULL_MAX_CHARS,
+    notes: str = "",
 ) -> GenerationResult:
     """Assemble both files into a `GenerationResult`. Validation is applied separately."""
     ordered = order_sections(sections, pattern)
     llmstxt = render_llmstxt(
-        site_url, site_name, site_summary, ordered, optional, pattern, generated_on
+        site_url, site_name, site_summary, ordered, optional, pattern, generated_on, notes=notes
     )
 
     llms_full = ""
@@ -350,4 +365,5 @@ def build_result(
         llmstxt=llmstxt,
         llms_full=llms_full,
         pages_total=pages_total,
+        notes=notes,
     )

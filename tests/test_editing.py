@@ -271,3 +271,144 @@ def test_one_operation_against_pages_changes_all_four_files_it_renders():
         assert "Old wording." in before[name], f"{name} did not carry the description to begin with"
         assert "New wording entirely." in after[name], f"{name} did not follow the page row"
         assert "Old wording." not in after[name], f"{name} kept the old wording"
+
+
+# -- the operation that reported success and changed nothing ---------------------
+
+
+def test_set_notes_reaches_the_file():
+    """`Run.notes` existed in the schema, `edits.set_notes` validated it and
+    refused headings, `main` persisted it -- and `render_llmstxt` took no `notes`
+    parameter, so the operation applied cleanly, reported success to the operator,
+    and changed no byte of the file.
+    """
+    from datetime import date
+
+    from app.core.edits import EditTarget, apply_operations
+    from app.core.models import PageEntry, Section
+    from app.core.render import render_llmstxt
+    from app.llm.prompts.chat import Operation
+
+    target = EditTarget()
+    note = "Redspot is the car rental company, not the photography studio of the same name."
+    report = apply_operations(target, [Operation(op="set_notes", text=note)])
+    assert report.applied and not report.rejected, report.rejected
+
+    sections = [Section(name="S", pages=[PageEntry(url="https://x.example/a/", title="A")])]
+    rendered = render_llmstxt(
+        "https://x.example",
+        "X",
+        "A summary.",
+        sections,
+        [],
+        generated_on=date(2026, 9, 9),
+        notes=target.notes,
+    )
+
+    assert note in rendered
+
+
+def test_the_notes_block_sits_where_the_spec_allows_prose():
+    """Between the blockquote and the first H2. The spec permits any markdown
+    except headings there, which is why `edits.set_notes` refuses a line starting
+    with `#` -- a heading would end the block and make the file invalid."""
+    from datetime import date
+
+    from app.core.models import PageEntry, Section
+    from app.core.render import render_llmstxt
+
+    sections = [Section(name="Services", pages=[PageEntry(url="https://x.example/a/", title="A")])]
+    rendered = render_llmstxt(
+        "https://x.example",
+        "X",
+        "A summary.",
+        sections,
+        [],
+        generated_on=date(2026, 9, 9),
+        notes="A disambiguating sentence.",
+    )
+
+    quote = rendered.index("> A summary.")
+    note = rendered.index("A disambiguating sentence.")
+    first_h2 = rendered.index("## Services")
+
+    assert quote < note < first_h2
+
+
+def test_a_rebuild_does_not_drop_the_notes():
+    """The failure mode the source tool had with section descriptions: an edit to
+    one thing silently discarding another."""
+    from app.core.models import GenerationResult, PageEntry, Section
+    from app.core.pipeline import rebuild
+
+    pages = [PageEntry(url=f"https://x.example/{n}/", title=n.upper()) for n in "ab"]
+    result = GenerationResult(
+        site_url="https://x.example",
+        site_name="X",
+        site_summary="A summary.",
+        pattern="catalog",
+        sections=[Section(name="S", pages=pages)],
+        notes="Carried through.",
+    )
+
+    rebuilt = rebuild(result, excluded_urls={"https://x.example/b/"})
+
+    assert rebuilt.notes == "Carried through."
+    assert "Carried through." in rebuilt.llmstxt
+
+
+# -- what an interactive model call owes ----------------------------------------
+
+
+def test_every_interactive_model_call_consults_the_daily_ceiling():
+    """Three routes build an `LLMClient` outside the job queue and one consulted
+    the cap.
+
+    `repo.spend_today` existed and only the refine panel called it, so a chat
+    session could spend without limit while a refine session on the same client
+    stopped at 120 -- and the brief wizard, which is the most expensive single
+    press in the product, was uncapped from the day it was written.
+
+    Read from the source rather than exercised, because exercising it means
+    spending money with the vendor to prove we would have refused to.
+    """
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+
+    # Each handler runs from its `async def` to the next one at column zero.
+    handlers = re.split(r"\n(?=@app\.|async def |def )", source)
+    interactive = [h for h in handlers if "LLMClient(settings" in h]
+
+    assert len(interactive) >= 3, "the split stopped finding the handlers; fix the test"
+
+    uncapped = [
+        re.search(r"async def (\w+)", h).group(1)
+        for h in interactive
+        if "spend_today" not in h and re.search(r"async def (\w+)", h)
+    ]
+
+    assert uncapped == [], f"interactive model call with no ceiling: {uncapped}"
+
+
+def test_a_refused_turn_still_records_what_it_spent():
+    """`record_spend` ran inside the transaction the gate rolls back, so a refused
+    edit billed a gpt-4o call and reached the costs page as nothing -- which is
+    the defect the comment above that call describes, reintroduced by the gate
+    added after it."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+
+    # Scoped to the chat handler. There is an earlier `rollback()` on an auth
+    # path, and anchoring on the first occurrence tested that one instead --
+    # which is the shape of mistake this whole file exists to catch.
+    handlers = re.split(r"\n(?=@app\.)", source)
+    chat = next(h for h in handlers if 'post("/runs/{run_id}/chat"' in h)
+
+    after_rollback = chat.split("await session.rollback()", 1)
+    assert len(after_rollback) == 2, "the chat gate no longer rolls back; re-read this test"
+
+    assert "record_spend" in after_rollback[1], "a rolled-back turn costs money and records none"

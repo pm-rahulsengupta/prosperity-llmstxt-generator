@@ -43,6 +43,10 @@
     </p>
     {% endif %}
 
+    {# Said out loud rather than presented as "the model had nothing to add",
+       which is the silent cap the conventions forbid. #}
+    {% if capped is defined and capped %}<p class="notice bad">{{ capped }}</p>{% endif %}
+
     <form method="post" action="/sites/{{ domain }}/brief{% if run_id %}?run={{ run_id }}{% endif %}">
         {% for q in questions %}
         <div class="field{% if suggested and q.key in suggested %} suggested{% endif %}">

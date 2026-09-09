@@ -95,6 +95,10 @@ class GenerationResult:
     llms_full: str = ""
     issues: list[ValidationIssue] = field(default_factory=list)
     pages_total: int = 0
+    #: The prose block between the blockquote and the first H2. Carried on the
+    #: result so a rebuild does not silently drop it -- which is how the source
+    #: tool lost every section description on an unrelated edit.
+    notes: str = ""
 
     @property
     def pages_included(self) -> int:

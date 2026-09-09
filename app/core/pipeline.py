@@ -134,6 +134,7 @@ def rebuild(
     site_summary: str | None = None,
     section_order: list[str] | None = None,
     generated_on: date | None = None,
+    notes: str | None = None,
 ) -> GenerationResult:
     """Re-render after user edits, preserving the existing section assignments.
 
@@ -169,6 +170,7 @@ def rebuild(
         pages_total=result.pages_total,
         generated_on=generated_on,
         generate_full=bool(result.llms_full),
+        notes=notes if notes is not None else result.notes,
     )
     included = [p for s in rebuilt.sections for p in s.pages] + rebuilt.optional
     rebuilt.issues = validate(rebuilt.llmstxt, included)

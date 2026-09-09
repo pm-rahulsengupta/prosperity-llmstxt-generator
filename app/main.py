@@ -681,14 +681,14 @@ def _parse_facts(raw: str) -> dict[str, dict[str, str]]:
     return facts
 
 
-@app.get("/sites/{domain}/brief", response_class=HTMLResponse)
-async def brief_form(
-    request: Request,
-    domain: str,
-    run: str | None = None,
-    user: User = Depends(require_user),
-    session: AsyncSession = Depends(get_session),
-):
+async def _brief_form(request: Request, session, domain: str, user, *, capped: str = ""):
+    """The brief form as it stands, with nothing suggested.
+
+    Extracted because two routes render this: the plain GET, and the wizard when
+    it refuses. Both used to build the context inline, and `brief.html` reads
+    fourteen keys under `StrictUndefined` -- so the second copy was one forgotten
+    key away from a 500 on the page an operator lands on first.
+    """
     stored = await repo.load_brief(session, domain)
     return templates.TemplateResponse(
         request,
@@ -698,7 +698,7 @@ async def brief_form(
             "domain": domain,
             "questions": QUESTIONS,
             "answers": _brief_form_values(stored),
-            "run_id": run,
+            "run_id": request.query_params.get("run"),
             "drift_reason": request.query_params.get("drift"),
             "metrics": await repo.metrics_summary(session, domain),
             "imported": request.query_params.get("imported"),
@@ -709,8 +709,20 @@ async def brief_form(
             "llm_used": False,
             "dropped": [],
             "readiness": None,
+            "capped": capped,
         },
     )
+
+
+@app.get("/sites/{domain}/brief", response_class=HTMLResponse)
+async def brief_form(
+    request: Request,
+    domain: str,
+    run: str | None = None,
+    user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _brief_form(request, session, domain, user)
 
 
 @app.post("/sites/{domain}/brief/suggest", response_class=HTMLResponse)
@@ -730,6 +742,26 @@ async def suggest_brief_route(
     """
     settings = get_settings()
     site_url = f"https://{domain}"
+
+    # The third route that builds an `LLMClient` outside the job queue, and the
+    # last one to consult the ceiling the other two do. Checked before the recon
+    # rather than before the model call: the discovery below fetches the sitemap
+    # index, every group in it and the homepage, all of which is wasted once the
+    # answer is going to be a refusal -- and it is the client's server paying for
+    # that, not ours.
+    spent = await repo.spend_today(session, domain)
+    if spent >= settings.max_interactive_calls_per_day:
+        return await _brief_form(
+            request,
+            session,
+            domain,
+            user,
+            capped=(
+                f"Daily limit reached for this client: {spent} interactive calls today, "
+                f"against a ceiling of {settings.max_interactive_calls_per_day}. Nothing "
+                "was sent to the model. The form below is still yours to fill in."
+            ),
+        )
 
     recon = await discover(site_url, settings.crawl_user_agent)
     tech = await probe_tech(site_url, settings.crawl_user_agent)
@@ -814,6 +846,7 @@ async def suggest_brief_route(
             "llm_used": bool(suggestion),
             "dropped": suggestion.get("_dropped", []),
             "readiness": readiness,
+            "capped": "",
         },
     )
 
@@ -3493,6 +3526,35 @@ async def chat_edit(
     before = _result_from_rows(run, pages)
     excluded_urls = [page.url for page in pages if not page.included]
 
+    # The same ceiling the refine panel checks, and for the same reason: this is
+    # the tool's most expensive model on an operator-driven loop with no job
+    # bounding it. `repo.spend_today` existed and only one of the two routes
+    # consulted it, so a chat session could spend without limit while a refine
+    # session on the same client stopped at 120.
+    #
+    # Checked before the call and said out loud when it bites. A cap that
+    # presents as "the model had nothing to add" is the silent failure the
+    # conventions forbid.
+    spent = await repo.spend_today(session, run.domain)
+    if spent >= settings.max_interactive_calls_per_day:
+        session.add(
+            ChatMessage(run_id=run_id, role="user", body=message.strip(), author=user.email)
+        )
+        session.add(
+            ChatMessage(
+                run_id=run_id,
+                role="assistant",
+                body=(
+                    f"Daily limit reached for this client: {spent} interactive calls "
+                    f"today, against a ceiling of {settings.max_interactive_calls_per_day}. "
+                    "Nothing was sent to the model and nothing changed."
+                ),
+                author="model",
+            )
+        )
+        await session.commit()
+        return await _chat_panel(request, session, run_id, user)
+
     usage = LLMUsage()
     turn = await apply_chat_turn(
         LLMClient(settings, usage),
@@ -3573,6 +3635,7 @@ async def chat_edit(
         site_name=run.site_name,
         site_summary=run.site_summary,
         section_order=target.section_order or None,
+        notes=target.notes,
     )
 
     # The gate. A new error-level issue means the edit broke the spec, so nothing
@@ -3582,7 +3645,16 @@ async def chat_edit(
     if now - was:
         await session.rollback()
         broke = ", ".join(sorted(now - was))
+        # The spend is re-recorded here, not just the messages. `record_spend`
+        # above ran inside the transaction this rollback discards, so a refused
+        # turn billed a gpt-4o call and reached the costs page as nothing --
+        # which is the defect that comment describes, reintroduced by the gate
+        # that was added after it. A refusal that cost money is exactly the row
+        # an operator needs when they wonder why a page did not change.
         async with session_scope() as fresh:
+            await repo.record_spend(
+                fresh, usage, domain=run.domain, run_id=run_id, spent_by=user.email
+            )
             fresh.add(
                 ChatMessage(run_id=run_id, role="user", body=message.strip(), author=user.email)
             )
@@ -3770,4 +3842,5 @@ def _result_from_rows(run, pages) -> GenerationResult:  # noqa: F821 -- forward 
         llmstxt=run.llmstxt,
         llms_full=run.llms_full,
         pages_total=len(pages),
+        notes=run.notes,
     )
