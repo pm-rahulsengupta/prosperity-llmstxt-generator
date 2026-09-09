@@ -53,7 +53,7 @@ def test_placeholder_secrets_are_treated_as_absent():
     )
     assert settings.llm_enabled is False
     assert settings.firecrawl_enabled is False
-    assert settings.size_check_enabled is False
+    assert settings.size_check_runnable is False
 
 
 def test_real_secrets_survive_and_enable_their_feature():
@@ -65,7 +65,9 @@ def test_real_secrets_survive_and_enable_their_feature():
     )
     assert settings.llm_enabled
     assert settings.firecrawl_enabled
-    assert settings.size_check_enabled
+    assert settings.size_check_runnable is False, (
+        "credentials alone must not start a paid check; SIZE_CHECK_ENABLED is the decision"
+    )
 
 
 def test_deploy_refuses_to_start_with_a_development_session_secret():
@@ -82,3 +84,52 @@ def test_local_development_is_not_held_to_the_deploy_rules():
 def test_allowed_domains_are_normalised():
     settings = Settings(allowed_email_domains="@Prosperitymedia.com.au, example.com ")
     assert settings.allowed_domains == frozenset({"prosperitymedia.com.au", "example.com"})
+
+
+# -- the paid call that answered a retired question ------------------------------
+
+
+def test_credentials_alone_do_not_start_a_paid_size_check():
+    """`size_check_enabled` returned `bool(login and password)`, so it answered
+    "can we call DataForSEO" and every caller read it as "should we".
+
+    DataForSEO is configured here for keyword and SERP work that has nothing to
+    do with sizing, so every deployment that wanted those paid one SERP call per
+    run for this. Wanting the credentials and wanting this check are different
+    decisions and now take different switches.
+    """
+    from app.config import Settings
+
+    credentialled = Settings(
+        _env_file=None, dataforseo_login="user@example.com", dataforseo_password="hunter2"
+    )
+
+    assert credentialled.size_check_enabled is False, "the decision defaults to off"
+    assert credentialled.size_check_runnable is False, "credentials alone must not spend"
+
+
+def test_the_check_needs_both_the_opt_in_and_the_credentials():
+    from app.config import Settings
+
+    opted_in_only = Settings(_env_file=None, size_check_enabled=True)
+    both = Settings(
+        _env_file=None,
+        size_check_enabled=True,
+        dataforseo_login="user@example.com",
+        dataforseo_password="hunter2",
+    )
+
+    assert opted_in_only.size_check_runnable is False
+    assert both.size_check_runnable is True
+
+
+def test_a_missing_count_names_the_real_reason():
+    """It reported `NO_CREDENTIALS`, which sends an operator to fix a key that is
+    almost always present and was never the cause."""
+    from app.scrape.sizing import CountFailure, IndexedCount
+
+    retired = IndexedCount(reason=CountFailure.RETIRED)
+
+    assert retired.failed
+    assert "no longer returns one" in retired.explain()
+    assert "credentials" not in retired.explain().split("SIZE_CHECK_ENABLED")[0].lower()

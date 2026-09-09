@@ -30,11 +30,15 @@
             </span>
         </label>
         <p class="muted">
-            Reads robots.txt and the sitemaps, checks how many pages Google indexes,
-            and proposes a crawl plan. Nothing is crawled until you approve the plan.
+            Reads robots.txt and the sitemaps, and proposes a crawl plan. Nothing
+            is crawled until you approve the plan.
             {% if not size_check_enabled %}
-            <br>DataForSEO credentials are not configured, so the indexed-page count
-            will be skipped and the sitemap will be the only size signal.
+            {# It used to say the credentials were missing. They usually are not --
+               DataForSEO is configured here for keyword and SERP work -- and
+               naming the wrong cause sends an operator to fix something that is
+               not broken. #}
+            <br>The indexed-page count is off: Google no longer returns one for a
+            <code>site:</code> query, so the sitemap is the size signal.
             {% endif %}
         </p>
     </form>

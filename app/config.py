@@ -128,6 +128,25 @@ class Settings(BaseSettings):
     # --- Size pre-check (DataForSEO `site:` query, one SERP call per site) -
     dataforseo_login: str = ""
     dataforseo_password: str = ""
+    #: Off by default, because the question it asks no longer has an answer.
+    #:
+    #: Google stopped returning an index estimate for a `site:` query. Measured
+    #: against `serp/google/organic/live/advanced` on 2026-09-09:
+    #:
+    #:     site:amazon.com    se_results_count 25    organic items 10
+    #:     site:nytimes.com   se_results_count 25    organic items 10
+    #:     site:reddit.com    se_results_count 26    organic items 10
+    #:
+    #: It is the page size, not the index size, for every domain. The check
+    #: records `NOT_AN_ESTIMATE` and is charged anyway -- one SERP call per run
+    #: to rediscover a permanent fact.
+    #:
+    #: This was previously derived from the credentials being present, which is
+    #: the actual defect: DataForSEO is configured here for keyword and SERP work
+    #: that has nothing to do with sizing, so every deployment that wanted those
+    #: paid for this. Wanting the credentials and wanting this check are
+    #: different decisions and now take different switches.
+    size_check_enabled: bool = False
     size_check_location_code: int = 2036  # Australia
     size_check_language_code: str = "en"
 
@@ -190,8 +209,15 @@ class Settings(BaseSettings):
         return bool(self.pagespeed_api_key)
 
     @property
-    def size_check_enabled(self) -> bool:
-        return bool(self.dataforseo_login and self.dataforseo_password)
+    def size_check_runnable(self) -> bool:
+        """Both the opt-in and the credentials. Either alone is not enough.
+
+        This was `size_check_enabled` and returned `bool(login and password)` --
+        so it answered "can we call DataForSEO", and every caller read it as
+        "should we". The field of that name is now the decision; this is the
+        capability, and the run needs both.
+        """
+        return bool(self.size_check_enabled and self.dataforseo_login and self.dataforseo_password)
 
     @property
     def audit_intake_open(self) -> bool:

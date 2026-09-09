@@ -53,9 +53,13 @@ async def run_preflight(site_url: str, settings: Settings) -> Preflight:
     """Recon plus size check. Never raises for a missing signal; records it instead."""
     recon = await discover(site_url, user_agent=settings.crawl_user_agent)
 
-    indexed = IndexedCount(reason=CountFailure.NO_CREDENTIALS)
+    # `RETIRED` rather than `NO_CREDENTIALS`, because the credentials are almost
+    # always present -- DataForSEO is configured here for keyword and SERP work
+    # that has nothing to do with sizing -- and reporting a missing key would send
+    # an operator to fix something that is not broken.
+    indexed = IndexedCount(reason=CountFailure.RETIRED)
     serp_calls = 0
-    if settings.size_check_enabled:
+    if settings.size_check_runnable:
         indexed = await indexed_page_count(
             recon.site_url,
             login=settings.dataforseo_login,

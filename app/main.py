@@ -362,7 +362,7 @@ templates.env.globals["sso_enabled"] = settings.sso_enabled
 templates.env.globals["allow_anonymous"] = settings.allow_anonymous
 templates.env.globals["llm_enabled"] = settings.llm_enabled
 templates.env.globals["firecrawl_enabled"] = settings.firecrawl_enabled
-templates.env.globals["size_check_enabled"] = settings.size_check_enabled
+templates.env.globals["size_check_enabled"] = settings.size_check_runnable
 
 oauth = build_oauth(settings) if settings.sso_enabled else None
 

@@ -89,6 +89,10 @@ class CountFailure(StrEnum):
     NOT_AN_ESTIMATE = "not_an_estimate"
     API_ERROR = "api_error"
     TRANSPORT = "transport_error"
+    #: The check is switched off because the question no longer has an answer.
+    #: Distinct from `NOT_AN_ESTIMATE`, which is what one paid call reports after
+    #: discovering the same thing: this one costs nothing to say.
+    RETIRED = "retired"
 
 
 # DataForSEO reports task-level refusals in `tasks[0].status_code`, while the
@@ -116,6 +120,14 @@ HTTP_STATUS_REASONS: dict[int, CountFailure] = {
 # What to tell a human. These are read off the run page by someone deciding what to
 # do next, so each one names the fix rather than the symptom.
 FAILURE_MESSAGES: dict[CountFailure, str] = {
+    CountFailure.RETIRED: (
+        "No indexed-page count: Google no longer returns one for a `site:` query. "
+        "Measured against every domain tried, the figure comes back as the size of "
+        "the results page rather than of the index (25, 25, 26 for amazon.com, "
+        "nytimes.com and reddit.com). The check is off because it costs a SERP call "
+        "to rediscover that; the sitemap is the size signal. Set "
+        "SIZE_CHECK_ENABLED=true to turn it back on if the figure returns."
+    ),
     CountFailure.NO_CREDENTIALS: (
         "No indexed-page count: DataForSEO credentials are not configured, so the "
         "sitemap is the only size signal."
