@@ -40,6 +40,7 @@ from app.core.models import PageEntry
 from app.core.text import domain_of
 
 __all__ = [
+    "PAGE_EXTENSIONS",
     "REPLACE",
     "SUFFIX",
     "MarkdownPages",
@@ -59,7 +60,7 @@ SUFFIX = "suffix"
 
 #: Extensions we treat as "this URL names a document", so replacing the extension
 #: is meaningful. Anything else is treated as a directory path.
-_PAGE_EXTENSIONS = (".html", ".htm", ".php", ".aspx", ".asp", ".jsp")
+PAGE_EXTENSIONS = (".html", ".htm", ".php", ".aspx", ".asp", ".jsp")
 
 
 @dataclass(slots=True)
@@ -109,7 +110,7 @@ def md_path_for(url: str, layout: str = REPLACE) -> str:
     if layout == SUFFIX:
         return base + ".md"
 
-    for ext in _PAGE_EXTENSIONS:
+    for ext in PAGE_EXTENSIONS:
         if lowered.endswith(ext) or base.lower().endswith(ext):
             return base[: -len(ext)] + ".md"
     return base + ".md"
@@ -128,7 +129,7 @@ def layout_for(pages: list[PageEntry]) -> str:
     """
     if not pages:
         return REPLACE
-    explicit = sum(1 for p in pages if _path_of(p.url).lower().endswith(_PAGE_EXTENSIONS))
+    explicit = sum(1 for p in pages if _path_of(p.url).lower().endswith(PAGE_EXTENSIONS))
     return SUFFIX if explicit * 2 > len(pages) else REPLACE
 
 

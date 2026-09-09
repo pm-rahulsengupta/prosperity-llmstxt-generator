@@ -30,7 +30,12 @@ import re
 from app.core.rules.registry import Category, Rule, Severity, fail, ok, skip
 from app.core.text import same_site
 
-LINK_LINE = re.compile(r"^\s+Link:\s*(.+?)\s*$", re.M)
+# `\s*`, not `\s+`. Cloudflare indents its header lines, but a hand-edited or
+# non-Cloudflare `_headers` puts them at column 0 -- and those were invisible to
+# every HDR rule, so a file advertising four surfaces that were never generated
+# scored 100: HDR-002 skipped for "no Link headers in this file" and HDR-001,
+# 003 and 004 all passed vacuously.
+LINK_LINE = re.compile(r"^[ 	]*Link:\s*(.+?)\s*$", re.M | re.I)
 LINK_TARGET = re.compile(r"<([^>]+)>")
 LINK_REL = re.compile(r'rel\s*=\s*"([^"]+)"')
 LINK_TYPE = re.compile(r'type\s*=\s*"([^"]+)"')

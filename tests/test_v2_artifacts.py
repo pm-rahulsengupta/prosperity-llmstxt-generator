@@ -443,3 +443,104 @@ def test_a_pre_quoted_summary_does_not_reach_yaml_or_a_meta_description():
     assert ">" not in bundle.files["index.md"].split("---")[1]
     assert 'content="&gt;' not in page.html
     assert "Australian car rental" in page.html
+
+
+# -- rules that flagged correct files ---------------------------------------------
+
+
+def test_an_image_is_not_a_broken_internal_link():
+    """OKF-003 is an ERROR that caps the bundle at 49. `![Fleet](assets/fleet.png)`
+    and `[Home](/index.md "Home page")` were both read as links to files the
+    bundle does not contain, on a bundle that is correct."""
+    from app.core.rules.artifact_rules import _MD_LINK
+
+    assert _MD_LINK.findall("![Fleet](assets/fleet.png)") == []
+    assert _MD_LINK.findall('[Home](/index.md "Home page")') == ["/index.md"]
+    assert _MD_LINK.findall("[Home](/index.md)") == ["/index.md"]
+
+
+def test_the_suffix_endings_match_the_layout_that_produces_them():
+    """MD-004 listed three of the six extensions, so `.aspx.md` landed in the
+    wrong bucket and a site with `/default.aspx` and `/about.html` reported
+    itself as mixing naming conventions.
+
+    A local copy rather than an import, because the rules package is the lowest
+    layer and importing upward makes a cycle. This is what stops it drifting.
+    """
+    from app.core.md_pages import PAGE_EXTENSIONS
+    from app.core.rules import artifact_rules
+
+    assert artifact_rules.PAGE_EXTENSIONS == PAGE_EXTENSIONS
+
+
+def test_a_mixed_directory_is_still_reported():
+    from app.core.rules import audit_markdown_pages
+
+    body = "# A\n\nSource: u\n\n" + "x" * 100
+    mixed = audit_markdown_pages({"a/index.md": body, "b.aspx.md": body})
+
+    assert mixed.by_id("MD-004").outcome.value == "fail"
+
+
+def test_an_aspx_site_is_not_reported_as_mixing_conventions():
+    from app.core.rules import audit_markdown_pages
+
+    body = "# A\n\nSource: u\n\n" + "x" * 100
+    consistent = audit_markdown_pages({"a.aspx.md": body, "b.html.md": body})
+
+    assert consistent.by_id("MD-004").outcome.value == "pass"
+
+
+def test_a_protocol_relative_href_is_not_a_safe_scheme():
+    """`"/"` in the allowlist accepted `//evil.com/x`, which goes off-site, on a
+    rule whose rationale is that the file is published on a client's own domain
+    under their name."""
+    from app.core.rules import audit_ai_info
+
+    page = (
+        '<!doctype html><html><head><title>t</title><meta name="description" content="d">'
+        '<link rel="canonical" href="https://x.example/ai-info"></head>'
+        '<body>2026-09-09 <a href="//evil.example/x">x</a></body></html>'
+    )
+
+    assert audit_ai_info(page, facts=5).by_id("INF-003").outcome.value == "fail"
+
+
+def test_a_single_quoted_href_is_seen_at_all():
+    from app.core.rules import audit_ai_info
+
+    page = (
+        '<!doctype html><html><head><title>t</title><meta name="description" content="d">'
+        '<link rel="canonical" href="https://x.example/ai-info"></head>'
+        "<body>2026-09-09 <a href='javascript:alert(1)'>x</a></body></html>"
+    )
+
+    assert audit_ai_info(page, facts=5).by_id("INF-003").outcome.value == "fail"
+
+
+def test_noindex_is_found_whatever_order_the_attributes_are_in():
+    from app.core.rules.artifact_rules import _NOINDEX
+
+    assert _NOINDEX.search('<meta name="robots" content="noindex">')
+    assert _NOINDEX.search('<meta content="noindex" name="robots">')
+    assert not _NOINDEX.search('<meta name="robots" content="index,follow">')
+
+
+def test_a_link_header_at_column_zero_is_still_a_link_header():
+    """`^\s+Link:` required indentation. A hand-edited `_headers` puts them at
+    column 0, and those were invisible to every HDR rule -- so a file advertising
+    four surfaces that were never generated scored 100."""
+    from app.core.rules import audit_headers
+
+    flat = 'Link: </llms.txt>; rel="describedby"\n'
+
+    assert audit_headers(flat, artifacts=set()).by_id("HDR-001").outcome.value == "fail"
+
+
+def test_an_identity_page_is_matched_on_its_first_path_segment():
+    from app.core.rules.index_rules import IDENTITY_PATTERNS, _is_identity_path
+
+    assert not _is_identity_path("https://about.example.com/pricing", IDENTITY_PATTERNS)
+    assert not _is_identity_path("https://x.com/locations/portfolio-drive", IDENTITY_PATTERNS)
+    assert _is_identity_path("https://x.com/contact-us", IDENTITY_PATTERNS)
+    assert _is_identity_path("https://x.com/case-studies/acme", IDENTITY_PATTERNS)

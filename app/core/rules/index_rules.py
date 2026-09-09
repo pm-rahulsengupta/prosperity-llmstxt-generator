@@ -422,6 +422,30 @@ def idx_016(ctx):
     return ok("IDX-016")
 
 
+def _is_identity_path(url: str, patterns: tuple[str, ...]) -> bool:
+    """Whether a URL is one of the site's own identity pages.
+
+    Matched on the **first path segment**, which is where identity pages live:
+    `/about`, `/contact-us`, `/case-studies/acme`. Two false positives came from
+    not doing that, on a rule severe enough to cap the score at 49.
+
+    * `p in url` searched the whole URL including the scheme's `//`, so
+      `https://about.example.com/pricing` contained `/about` and every host
+      beginning with an identity word was flagged.
+    * Searching the whole path flagged `/locations/portfolio-drive`, which is a
+      street name inside a location page.
+
+    Prefix matching within that first segment is kept deliberately:
+    `/case-stud` has to reach both `case-study` and `case-studies`, and
+    `/contact` has to reach `contact-us`.
+    """
+    path = (urlparse(url).path or "/").lower().strip("/")
+    if not path:
+        return False
+    first = path.split("/", 1)[0]
+    return any(first.startswith(p.lstrip("/")) for p in patterns)
+
+
 def idx_017(ctx):
     doc = _doc(ctx)
     patterns = tuple(ctx.profile.identity_patterns) or IDENTITY_PATTERNS
@@ -429,7 +453,11 @@ def idx_017(ctx):
     if optional is None:
         return ok("IDX-017", "no Optional section")
 
-    stranded = [link.url for link in optional.links if any(p in link.url.lower() for p in patterns)]
+    # Matched against the URL's *path*, not the whole URL. `//about.example.com`
+    # contains `/about` because of the scheme's own double slash, so IDX-017 --
+    # an ERROR that caps the score at 49 -- fired on any host beginning with an
+    # identity word, and on `/locations/portfolio-drive`.
+    stranded = [link.url for link in optional.links if _is_identity_path(link.url, patterns)]
     if stranded:
         return fail(
             "IDX-017",

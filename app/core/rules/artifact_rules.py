@@ -45,9 +45,19 @@ __all__ = [
 _SOURCE_LINE = re.compile(r"^Source:\s*(\S+)", re.M)
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 _TYPE_FIELD = re.compile(r"^type:\s*(\S.*)$", re.M)
-_MD_LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+# `(?<!!)` excludes images, and the target stops at whitespace so a link title is
+# not swallowed into it. Without both, OKF-003 -- an ERROR that caps the bundle at
+# 49 -- reported `![Fleet](assets/fleet.png)` and `[Home](/index.md "Home page")`
+# as internal links the bundle does not contain, on a bundle that is correct.
+#
+# Latent for our own output, which emits neither form. Live for MD-006, which runs
+# the same pattern over the *client's* llms.txt, where both are ordinary markdown.
+_MD_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(\s*([^)\s]+)")
 _SCRIPT = re.compile(r"<\s*script\b", re.I)
-_HREF = re.compile(r'href\s*=\s*"([^"]*)"', re.I)
+# Both quote styles. `href='javascript:alert(1)'` was not seen at all by a
+# double-quote-only pattern, on a rule whose rationale is "this file is published
+# on a client's own domain under their name."
+_HREF = re.compile(r"""href\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 _TITLE = re.compile(r"<title>(.*?)</title>", re.I | re.S)
 _META_DESC = re.compile(r'<meta[^>]+name="description"[^>]*>', re.I)
 _CANONICAL = re.compile(r'<link[^>]+rel="canonical"[^>]*>', re.I)
@@ -56,8 +66,37 @@ _CANONICAL = re.compile(r'<link[^>]+rel="canonical"[^>]*>', re.I)
 #: the exact form `log.md` writes. With `\b` this matched a bare date and missed
 #: every ISO timestamp, so OKF-005 reported a dated log as undated.
 _DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}(?!\d)")
+# Attribute order is not fixed in HTML, so `<meta content="noindex"
+# name="robots">` is the same tag and was missed by a pattern that assumed
+# `name` came first -- on the rule whose whole point is that a page which
+# cannot be indexed cannot be cited.
+_NOINDEX = re.compile(r"""<meta\b(?=[^>]*\bname\s*=\s*["']robots)(?=[^>]*noindex)[^>]*>""", re.I)
 
-SAFE_SCHEMES = ("https:", "http:", "mailto:", "/", "#")
+# `"/"` accepted `//evil.com/x`, which is protocol-relative and goes off-site.
+# A root-relative path is one slash followed by something that is not a slash.
+#: The suffix layout appends `.md` to the whole path, so its filenames end in the
+#: page extension plus `.md`.
+#:
+#: A local copy of `md_pages.PAGE_EXTENSIONS` rather than an import: this package
+#: is the lowest layer and importing upward makes a cycle through `full_text`.
+#: The same arrangement `delivery_rules.EXPECTED_TYPE` uses for the same reason,
+#: and `test_the_suffix_endings_match_the_layout_that_produces_them` is what
+#: stops the two drifting -- which is the whole failure this rule had: three of
+#: the six extensions were listed, so `.aspx.md` landed in the wrong bucket.
+PAGE_EXTENSIONS = (".html", ".htm", ".php", ".aspx", ".asp", ".jsp")
+_SUFFIX_ENDINGS = tuple(f"{ext}.md" for ext in PAGE_EXTENSIONS)
+
+SAFE_SCHEMES = ("https:", "http:", "mailto:", "#")
+
+
+def _href_is_safe(href: str) -> bool:
+    value = (href or "").strip()
+    if not value:
+        return True
+    lowered = value.lower()
+    if lowered.startswith("//"):
+        return False
+    return lowered.startswith(SAFE_SCHEMES) or value.startswith("/")
 
 
 class ArtifactContext:
@@ -138,7 +177,12 @@ def _naming_is_consistent(ctx: ArtifactContext):
     """One convention for the whole directory, or half of it cannot be served."""
     if not ctx.files:
         return skip("MD-004", "no markdown directory was generated")
-    suffix = {n for n in ctx.files if n.endswith((".html.md", ".htm.md", ".php.md"))}
+    # Derived from the layout's own extension list rather than a copy of three of
+    # them. `md_path_for` also produces `.aspx.md`, `.asp.md` and `.jsp.md`, and
+    # those landed in `replace` -- so a site with `/default.aspx` and `/about.html`
+    # picked SUFFIX and then reported itself as mixing conventions, on an ERROR
+    # whose docstring calls it "the one rule that matters most".
+    suffix = {n for n in ctx.files if n.endswith(_SUFFIX_ENDINGS)}
     replace = set(ctx.files) - suffix
     if suffix and replace:
         smaller = suffix if len(suffix) <= len(replace) else replace
@@ -306,8 +350,8 @@ def _hrefs_are_safe(ctx: ArtifactContext):
         return skip("INF-003", "no ai-info page was generated")
     bad = [
         href
-        for href in _HREF.findall(ctx.text)
-        if href and not href.lower().startswith(SAFE_SCHEMES)
+        for double, single in _HREF.findall(ctx.text)
+        if (href := double or single) and not _href_is_safe(href)
     ]
     if bad:
         return fail(
@@ -355,7 +399,10 @@ def _is_indexable(ctx: ArtifactContext):
     """The whole point is that a search index can return it."""
     if not ctx.text.strip():
         return skip("INF-007", "no ai-info page was generated")
-    if re.search(r'name="robots"[^>]*content="[^"]*noindex', ctx.text, re.I):
+    # Attribute order is not fixed in HTML. `<meta content="noindex" name="robots">`
+    # is the same tag and was missed, on a rule whose whole point is that an
+    # AI-info page which cannot be indexed cannot be cited.
+    if _NOINDEX.search(ctx.text):
         return fail("INF-007", "the page is marked noindex, so it can never be cited")
     return ok("INF-007", "indexable")
 
