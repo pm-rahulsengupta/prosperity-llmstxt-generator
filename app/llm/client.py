@@ -21,6 +21,7 @@ guidance only -- the convention geo-tracker uses in
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -140,6 +141,39 @@ def _unfence(content: str) -> str:
     return text[newline + 1 : -3].strip("\r\n").rstrip()
 
 
+#: A rate limit is a request to wait, not a refusal, so it is the one failure worth
+#: asking again about. Three attempts and eight seconds of total sleep: the redspot
+#: run's 429s carried "reset after 5s", and a summarise batch that waits six seconds
+#: is cheaper than 25 pages falling to URL-slug descriptions in a client's file.
+#: Bounded rather than exponential-to-exhaustion because the worker runs one job at
+#: a time and a stuck stage blocks the queue.
+RATE_LIMIT_BACKOFF = (6, 12)
+RATE_LIMIT_ATTEMPTS = len(RATE_LIMIT_BACKOFF) + 1
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    """Whether the provider asked us to slow down, rather than refusing outright.
+
+    Matched on the status code where the SDK exposes one, and on the text where it
+    does not: an OpenAI-compatible gateway may raise its own class, and OmniRoute
+    reports a 429 inside a message body -- "[kiro/claude-sonnet-4.5] [429]: Too
+    many requests, please wait before trying again. (reset after 5s)". Four
+    summarise batches on the redspot run ended there, so a hundred pages took
+    heuristic copy while the provider was telling us exactly how long to wait.
+
+    Deliberately not matched on "quota" or "billing". An exhausted account returns
+    429 too and retrying it three times only spends the same failure three times;
+    that is the `insufficient_quota` case, which must fall back at once.
+    """
+    if getattr(exc, "status_code", None) == 429:
+        text = str(exc).lower()
+        return "insufficient_quota" not in text and "credit balance" not in text
+    text = str(exc).lower()
+    if "insufficient_quota" in text or "credit balance" in text:
+        return False
+    return "429" in text or "rate limit" in text or "too many requests" in text
+
+
 class LLMUnavailable(RuntimeError):
     """Raised only where a caller has asked for a hard failure instead of a fallback."""
 
@@ -240,22 +274,41 @@ class LLMClient:
         budget = BUDGETS[stage]
         client = self._ensure_client()
 
-        try:
-            response = await client.chat.completions.create(
-                model=self.model_for(stage),
-                messages=[
-                    {"role": "system", "content": self._system_for(system, schema, schema_name)},
-                    {"role": "user", "content": user},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {"name": schema_name, "schema": schema, "strict": True},
-                },
-                max_completion_tokens=budget.max_tokens,
-                temperature=budget.temperature,
-            )
-        except Exception as exc:
-            self.usage.record_fallback(stage, f"{type(exc).__name__}: {exc}")
+        request = {
+            "model": self.model_for(stage),
+            "messages": [
+                {"role": "system", "content": self._system_for(system, schema, schema_name)},
+                {"role": "user", "content": user},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+            },
+            "max_completion_tokens": budget.max_tokens,
+            "temperature": budget.temperature,
+        }
+
+        response = None
+        for attempt in range(RATE_LIMIT_ATTEMPTS):
+            try:
+                response = await client.chat.completions.create(**request)
+                break
+            except Exception as exc:
+                last = attempt == RATE_LIMIT_ATTEMPTS - 1
+                if last or not _is_rate_limit(exc):
+                    self.usage.record_fallback(stage, f"{type(exc).__name__}: {exc}")
+                    return None
+                delay = RATE_LIMIT_BACKOFF[attempt]
+                logger.info(
+                    "%s rate-limited, retrying in %ss (attempt %d of %d)",
+                    stage,
+                    delay,
+                    attempt + 2,
+                    RATE_LIMIT_ATTEMPTS,
+                )
+                await asyncio.sleep(delay)
+
+        if response is None:  # pragma: no cover - the loop returns or breaks
             return None
 
         choice = response.choices[0]

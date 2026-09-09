@@ -15,8 +15,17 @@ import json
 from app.config import get_settings
 from app.core import text
 from app.core.onboarding import SiteBrief
+from app.core.render import _unquoted
 from app.db import repo
-from app.llm.client import LLMClient, LLMUsage, Stage, _unfence
+from app.llm.client import (
+    RATE_LIMIT_ATTEMPTS,
+    RATE_LIMIT_BACKOFF,
+    LLMClient,
+    LLMUsage,
+    Stage,
+    _is_rate_limit,
+    _unfence,
+)
 from app.llm.prompts.plan import CrawlPlan, TemplateRule
 from app.llm.stages import select_urls
 from app.scrape.recon import PathTemplate, RobotsInfo, SiteRecon, cluster_urls
@@ -444,3 +453,73 @@ def test_a_plan_with_no_excludes_is_untouched():
 
     # 21, not 20: the homepage is always added.
     assert len(select_urls(recon, plan, page_cap=100)) == 21
+
+
+# -- 7. a rate limit is a request to wait, not a refusal ----------------------
+
+
+class _Rate(Exception):
+    status_code = 429
+
+    def __str__(self) -> str:
+        return (
+            "Error code: 429 - {'error': {'message': '[kiro/claude-sonnet-4.5] [429]: "
+            "Too many requests, please wait before trying again. (reset after 5s)'}}"
+        )
+
+
+class _Quota(Exception):
+    status_code = 429
+
+    def __str__(self) -> str:
+        return (
+            "Error code: 429 - {'error': {'message': 'You have no credits remaining.', "
+            "'type': 'insufficient_quota', 'code': 'credit_balance_exhausted'}}"
+        )
+
+
+def test_a_gateway_rate_limit_is_retried():
+    """Four summarise batches on the redspot run ended at a 429 that named its own
+    reset window, and a hundred pages took URL-slug descriptions instead."""
+    assert _is_rate_limit(_Rate())
+
+
+def test_an_exhausted_account_is_not_retried():
+    """429 is also how a spent account answers. Retrying it three times spends the
+    same failure three times and delays the fallback the run needs."""
+    assert not _is_rate_limit(_Quota())
+
+
+def test_a_gateway_that_raises_its_own_class_is_still_recognised():
+    """An OpenAI-compatible endpoint need not raise `openai.RateLimitError`."""
+
+    class _Bare(Exception):
+        pass
+
+    assert _is_rate_limit(_Bare("429 Too Many Requests"))
+    assert not _is_rate_limit(_Bare("400 Invalid model"))
+
+
+def test_the_retry_is_bounded():
+    """The worker runs one job at a time, so a stage that never gives up blocks
+    the queue behind it."""
+    assert len(RATE_LIMIT_BACKOFF) + 1 == RATE_LIMIT_ATTEMPTS
+    assert sum(RATE_LIMIT_BACKOFF) <= 30
+
+
+# -- 8. one blockquote, as the spec requires ----------------------------------
+
+
+def test_a_pre_quoted_summary_does_not_produce_a_double_blockquote():
+    """Measured on the redspot run: the model returned its blurb already carrying
+    `>`, the renderer added its own, and the file shipped `> > ...` -- reported by
+    the run's own QA stage as a spec violation."""
+    assert _unquoted("> Australian car rental company.") == "Australian car rental company."
+    assert _unquoted(">> Twice.") == "Twice."
+    assert _unquoted("> > Spaced.") == "Spaced."
+
+
+def test_an_unquoted_summary_is_unchanged():
+    assert _unquoted("Australian car rental company.") == "Australian car rental company."
+    assert _unquoted("") == ""
+    assert _unquoted("   ") == ""

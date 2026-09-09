@@ -154,6 +154,26 @@ def apply_manual_order(sections: list[Section], order: list[str]) -> list[Sectio
     return ordered
 
 
+def _unquoted(summary: str) -> str:
+    """The summary without a blockquote marker it arrived carrying.
+
+    The spec allows exactly one `>` on the summary and this renderer supplies it,
+    so a summary that already begins with one produces `> > ...`. Measured on the
+    redspot.com.au run: the model returned its blurb pre-quoted, the file shipped
+    with a double-nested blockquote, and the run's own QA stage reported it as a
+    spec violation -- the check caught what the renderer had no reason to expect.
+
+    It is fixed here rather than in the summarise stage because the renderer is
+    where the invariant lives, and a summary can also be typed by hand in the run
+    form. Every leading marker is removed, not just one: `>>` and `> > ` are both
+    a person or a model saying "this is the quote", twice.
+    """
+    text = (summary or "").strip()
+    while text.startswith(">"):
+        text = text[1:].lstrip()
+    return text
+
+
 def _link_line(page: PageEntry) -> str:
     return f"- [{page.display_title}]({page.url}): {page.description}"
 
@@ -177,9 +197,8 @@ def render_llmstxt(
     lines: list[str] = [f"# {site_name}\n"]
 
     # The blockquote is required by the spec, so there is always a fallback.
-    lines.append(
-        f"> {site_summary}\n" if site_summary else f"> Official website content for {domain}.\n"
-    )
+    summary = _unquoted(site_summary)
+    lines.append(f"> {summary}\n" if summary else f"> Official website content for {domain}.\n")
 
     if include_full_reference:
         base = site_url.rstrip("/")
