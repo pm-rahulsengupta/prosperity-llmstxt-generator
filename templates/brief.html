@@ -209,15 +209,54 @@
         </p>
     </form>
 
-    <p class="muted">
-        {% if gsc_enabled %}
-        A service account is configured, so properties it has been granted access to
-        are read directly and need no upload.
-        {% else %}
-        No service account is configured, so uploading is currently the only way to
-        give this tool search data.
-        {% endif %}
+    {# What this panel is allowed to claim.
+
+       It used to say, whenever a service-account credential was present, that
+       "properties it has been granted access to are read directly and need no
+       upload". Nothing reads them: `gsc_credentials()` parses the document and
+       is called by nothing, and `MetricsProvider` is a Protocol with no
+       implementation. So the one sentence that stops an operator uploading was
+       shown to exactly the operators whose deployment looked most capable, and
+       the run then proceeded with no click data at all.
+
+       Uploading is the only way to give this tool search data. The panel says so
+       in both cases, and says what a configured credential does and does not
+       buy. #}
+    {% if gsc_direct_read %}
+    <p class="hint">
+        Read directly from the properties this service account can see.
     </p>
+    {% elif gsc_credential_configured %}
+    <p class="notice bad">
+        A service account is configured, but this tool cannot read Search Console
+        directly yet &mdash; the credential is parsed and nothing uses it.
+        <strong>Uploading the export above is still the only way to give this run
+        search data.</strong>
+    </p>
+    {% else %}
+    <p class="hint">
+        No service account is configured, so uploading is the only way to give this
+        tool search data.
+    </p>
+    {% endif %}
+
+    {# If it cannot be provided, say what happens instead and ask.
+
+       A run without click data is a supported mode, not a failure -- but it is a
+       different measurement, and an operator who is not told reads the resulting
+       ranking as though traffic informed it. #}
+    {% if not metrics %}
+    <p class="hint">
+        <strong>If you cannot get an export</strong>, the run still works: pages are
+        ranked on crawl depth, internal links and content signals instead, and the
+        brief's own answers carry more weight because nothing else says what a page
+        is for. Two things follow, and they are worth deciding now rather than at
+        the review gate &mdash; a page that earns traffic and looks unremarkable
+        will not be promoted, and a retired campaign directory will not be demoted.
+        Name those pages under <em>Pages that must appear</em> and
+        <em>Low-value patterns</em> above, and the plan will respect them.
+    </p>
+    {% endif %}
 </div>
 
 <div class="panel">

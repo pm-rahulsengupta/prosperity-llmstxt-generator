@@ -424,7 +424,8 @@ def test_the_brief_form_renders_every_question_with_its_consequence():
             metrics={},
             imported=None,
             import_notes=None,
-            gsc_enabled=False,
+            gsc_credential_configured=False,
+            gsc_direct_read=False,
             suggested=[],
             reasoning="",
             llm_used=False,
@@ -701,3 +702,48 @@ def test_the_action_round_trips_through_storage():
 
     brief = SiteBrief(primary_action=PrimaryAction.FIND_LOCAL_INVENTORY)
     assert SiteBrief.from_dict(brief.to_dict()).primary_action is PrimaryAction.FIND_LOCAL_INVENTORY
+
+
+# -- the capability the page claimed and the code did not have -------------------
+
+
+def test_a_configured_credential_does_not_claim_search_console_is_read():
+    """`gsc_enabled` was `bool(json or file)` -- a fact about the credential --
+    and the panel rendered it as "read directly and need no upload".
+
+    `gsc_credentials()` parses the document and is called by nothing;
+    `MetricsProvider` is a Protocol with no implementation. So the one sentence
+    that stops an operator uploading was shown to exactly the deployments that
+    looked most capable, and the run then proceeded with no click data.
+    """
+    from app.config import Settings
+
+    configured = Settings(_env_file=None, gsc_service_account_json='{"type":"service_account"}')
+
+    assert configured.gsc_credential_configured is True
+    assert configured.gsc_direct_read is False, "nothing implements the direct read"
+
+
+def test_the_panel_asks_for_the_upload_whichever_way_it_is_configured():
+    from pathlib import Path
+
+    markup = (Path(__file__).resolve().parents[1] / "templates" / "brief.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "need no upload" not in markup, "the panel still tells an operator not to upload"
+    assert "only way to give this" in markup
+
+
+def test_the_panel_says_what_happens_when_no_export_can_be_provided():
+    """A run without click data is supported, not a failure -- but it is a
+    different measurement, and an operator who is not told reads the ranking as
+    though traffic informed it."""
+    from pathlib import Path
+
+    markup = (Path(__file__).resolve().parents[1] / "templates" / "brief.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "If you cannot get an export" in markup
+    assert "crawl depth" in markup

@@ -226,8 +226,32 @@ class Settings(BaseSettings):
         return CanonicalPolicy(canonical_host=wanted)
 
     @property
-    def gsc_enabled(self) -> bool:
+    def gsc_credential_configured(self) -> bool:
+        """A service-account document is present in the environment.
+
+        What `gsc_enabled` actually measured. It was named for the capability and
+        computed from the credential, and the brief page rendered the difference
+        as "properties are read directly and need no upload" -- which is the one
+        sentence that stops an operator uploading.
+        """
         return bool(self.gsc_service_account_json or self.gsc_service_account_file)
+
+    @property
+    def gsc_direct_read(self) -> bool:
+        """Whether this tool can read Search Console itself. It cannot.
+
+        `gsc_credentials()` parses the document and is called by nothing.
+        `MetricsProvider` is a `Protocol` in `metrics.__all__` with no
+        implementation anywhere, and its `fetch()` does not use any of its three
+        parameters. So a configured credential buys nothing today.
+
+        A property returning a constant rather than a constant, because this is
+        the single place that changes on the day someone writes the provider --
+        and because a hard `False` at the call site would be a fact about the
+        deployment rather than about the code, which is what went wrong here the
+        first time.
+        """
+        return False
 
     def gsc_credentials(self) -> dict | None:
         """The service-account document, from whichever source is configured.
