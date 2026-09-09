@@ -326,7 +326,7 @@ def test_a_pillar_the_export_did_not_score_is_not_a_zero():
     nobody scored must not read as a pillar that scored nothing."""
     from app.core.audit_link import link_audit
 
-    view = link_audit({"pillar_scores": {"robots_crawl": 61}})
+    view = link_audit({"rubric_version": 5, "pillar_scores": {"robots_crawl": 61}})
     unscored = next(p for p in view.pillars() if p.slug == "js_rendering")
 
     assert unscored.score is None
@@ -334,28 +334,34 @@ def test_a_pillar_the_export_did_not_score_is_not_a_zero():
 
 
 def test_the_whole_rubric_is_shown_even_when_half_of_it_is_unscored():
-    """Two of six rows reads as a two-row rubric, which understates what the
-    Checker measures and what the client is being graded on."""
-    from app.core.audit_link import PILLARS, link_audit
+    """Two of sixteen rows reads as a two-pillar rubric, which understates what
+    the client is being graded on. The missing ones render as "not scored"."""
+    from app.core.audit_link import PILLAR_WEIGHTS, link_audit
 
-    view = link_audit({"pillar_scores": {"robots_crawl": 61}})
+    view = link_audit({"rubric_version": 5, "pillar_scores": {"robots_crawl": 61}})
 
-    assert len(view.pillars()) == len(PILLARS) == 6
+    assert len(view.pillars()) == len(PILLAR_WEIGHTS[5]) == 16
+    assert sum(1 for p in view.pillars() if p.measured) == 1
 
 
-def test_the_generated_share_is_stated_rather_than_implied():
+def test_the_generated_share_is_stated_per_version():
     """The integration's whole risk is reading as though this tool fixes
-    everything the Checker measures. 35 of 100 is the honest number, and it is
-    the one the module docstring has carried in prose since it was written."""
+    everything the Checker measures.
+
+    It is 35 under v2 and about 22 under v5, because v5 split the content pillar
+    five ways and none of the pieces is a file we produce. One number for both
+    would be wrong for one of them.
+    """
     from app.core.audit_link import link_audit
 
-    assert link_audit({}).generated_weight == 35
+    assert link_audit({"rubric_version": 2}).generated_weight == 35
+    assert link_audit({"rubric_version": 5}).generated_weight == 22
 
 
-def test_the_weights_are_a_whole_rubric():
-    from app.core.audit_link import PILLARS
+def test_the_v2_weights_are_a_whole_rubric():
+    from app.core.audit_link import PILLAR_WEIGHTS
 
-    assert sum(weight for _, _, weight in PILLARS) == 100
+    assert sum(PILLAR_WEIGHTS[2].values()) == 100
 
 
 def test_the_panel_renders_the_breakdown():
@@ -367,3 +373,83 @@ def test_the_panel_renders_the_breakdown():
 
     assert "audit.pillars()" in markup, "the breakdown is computed and not shown"
     assert "generated_weight" in markup
+
+
+# -- the rubric moves, and a hardcoded copy of it goes stale ----------------------
+
+
+V5_GLASSONS = {
+    "overall_score": 50,
+    "overall_grade": "C",
+    "rubric_version": 5,
+    "pillar_scores": {
+        "robots_crawl": 81,
+        "js_rendering": 34,
+        "performance_crawlability": 86,
+        "ai_discoverability": 13,
+        "schema_entity": 59,
+        "machine_readability": None,
+    },
+}
+
+
+def test_a_v5_audit_renders_its_own_pillars():
+    """The first version of this table hardcoded v2's six flat pillars and was
+    two releases out of date when it shipped. Production runs v5 -- sixteen
+    pillars under Crawl, Comprehend, Convince and Convert -- so every row would
+    have rendered "not scored" against a live audit.
+
+    Pillars are read from the payload now. A version we have never seen still
+    renders.
+    """
+    from app.core.audit_link import link_audit
+
+    labels = {p.label for p in link_audit(V5_GLASSONS).pillars()}
+
+    assert "Performance & Crawlability" in labels, "a v5-only pillar was dropped"
+    assert "Machine Readability" in labels
+
+
+def test_the_heaviest_pillar_comes_first_where_we_know_the_weights():
+    """The order is the order the work matters in."""
+    from app.core.audit_link import link_audit
+
+    pillars = link_audit(V5_GLASSONS).pillars()
+    weights = [p.weight for p in pillars]
+
+    assert weights == sorted(weights, reverse=True)
+    assert pillars[0].label in {"Robots & Crawl", "JS Rendering"}
+
+
+def test_an_unknown_rubric_version_shows_scores_without_inventing_weights():
+    """A weight we have not got is not a weight of zero, and borrowing one from a
+    different version is how the first table came to describe the wrong rubric."""
+    from app.core.audit_link import link_audit
+
+    future = link_audit({"rubric_version": 9, "pillar_scores": {"something_new": 42}})
+    pillar = future.pillars()[0]
+
+    assert pillar.score == 42
+    assert pillar.weight is None
+    assert pillar.label == "Something New", "an unmet pillar is humanised, not dropped"
+    assert future.generated_weight is None
+
+
+def test_markdown_serving_is_a_pillar_we_can_now_answer():
+    """v5 scores it separately, and `md/` and `okf/` produce exactly that."""
+    from app.core.audit_link import GENERATED_PILLARS, link_audit
+
+    assert "machine_readability" in GENERATED_PILLARS
+
+    ours = {p.label for p in link_audit(V5_GLASSONS).pillars() if p.generated}
+    assert "Machine Readability" in ours
+
+
+def test_the_weights_we_hold_are_per_version():
+    from app.core.audit_link import PILLAR_WEIGHTS
+
+    assert sum(PILLAR_WEIGHTS[2].values()) == 100
+    # v5's are the stage share times the pillar share, rounded, so they land near
+    # 100 rather than on it. Inventing precision the Checker does not claim would
+    # be the same error as the version this replaced.
+    assert 95 <= sum(PILLAR_WEIGHTS[5].values()) <= 105

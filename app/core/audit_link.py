@@ -2,18 +2,21 @@
 
 The Checker is the diagnosis; this tool is the remediation. Its rubric is far
 wider than anything here can generate, and the join has to make that visible
-rather than imply the tool fixes everything:
+rather than imply the tool fixes everything.
 
-    Schema & Entity        25%   no file we can produce
-    Robots & Crawl         20%   robots.txt, Content-Signal
-    JS Rendering           15%   no file we can produce
-    AI Discoverability     15%   llms.txt, agents.md, .well-known/*
-    AI Interactivity       15%   the templates, not the implementation
-    Content & Citability   10%   no file we can produce
+**Its rubric moves, and ours must not pretend otherwise.** Production runs v5:
+sixteen pillars under Crawl (35%), Comprehend (26%), Convince (28%) and Convert
+(11%), with Security scored and deliberately left out of the average. The prose
+that used to sit here described v2's six flat pillars and was two releases out
+of date -- which is exactly the failure this module exists to prevent, committed
+in its own docstring. The rubric now lives in `PILLAR_WEIGHTS`, keyed by version,
+and the pillars themselves are read from the payload so a version we have never
+seen still renders.
 
-**35% of the weighted score maps onto files we generate; 65% does not.** The
-second group is not dropped -- it becomes developer-handover work carrying the
-Checker's own recommendation text, attributed to it.
+Of v5, roughly **22% maps onto files we generate** -- Robots & Crawl, AI
+Discoverability, and Machine Readability, which `md/` and `okf/` answer directly.
+The rest does not. That second group is not dropped: it becomes developer-handover
+work carrying the Checker's own recommendation text, attributed to it.
 
 **Attribution is absolute.** Nothing in here may render as something this tool
 measured. That is the `probe_decided` rule from `site_state.py` applied to a
@@ -33,7 +36,8 @@ __all__ = [
     "AUDIT_PATHS",
     "GENERATED_PILLARS",
     "PATH_DISAGREEMENTS",
-    "PILLARS",
+    "PILLAR_LABELS",
+    "PILLAR_WEIGHTS",
     "AuditFinding",
     "AuditView",
     "PillarScore",
@@ -74,26 +78,89 @@ PATH_DISAGREEMENTS: dict[str, tuple[str, str]] = {
 
 #: Pillars whose findings this tool can answer with a generated file. Everything
 #: else is developer work, and saying so is the point.
-GENERATED_PILLARS: frozenset[str] = frozenset({"robots_crawl", "ai_discoverability"})
-
-#: The Checker's rubric: slug -> (display name, weight as a percentage).
-#:
-#: Written down here because the weights are the whole point of showing the
-#: breakdown. An operator reading one overall score of 61 cannot tell whether the
-#: site is strong where we can help and weak where we cannot, or the reverse --
-#: and those are opposite conversations to have with a client. The module
-#: docstring above has carried this table in prose since the integration was
-#: written, while the panel showed one number.
-#:
-#: Ordered by weight, because that is the order the work matters in.
-PILLARS: tuple[tuple[str, str, int], ...] = (
-    ("schema_entity", "Schema & Entity", 25),
-    ("robots_crawl", "Robots & Crawl", 20),
-    ("js_rendering", "JS Rendering", 15),
-    ("ai_discoverability", "AI Discoverability", 15),
-    ("ai_interactivity", "AI Interactivity", 15),
-    ("content_citability", "Content & Citability", 10),
+#: `machine_readability` joined this when `md/` and `okf/` were added -- v5 scores
+#: markdown serving as its own pillar, and it is the one glassons.com currently
+#: reports as unmeasured. `content_citability` is the v2 name for a pillar v5
+#: split five ways, none of which we generate.
+GENERATED_PILLARS: frozenset[str] = frozenset(
+    {"robots_crawl", "ai_discoverability", "machine_readability"}
 )
+
+#: Weights per rubric version, because the Checker reweights between them and
+#: says so: "Scores from different versions are different measurements wearing
+#: the same unit, so the tool refuses to trend them together."
+#:
+#: The first version of this table hardcoded v2 and was already two rubrics out
+#: of date when it shipped -- production runs **v5**, whose pillars are grouped
+#: under Crawl, Comprehend, Convince and Convert with Security reported outside
+#: the average. Every row would have rendered "not scored" against a live audit.
+#:
+#: So weights are keyed by version and everything else is read from the payload.
+#: A rubric we have no weights for still renders its scores; it just does not
+#: claim to know what they are worth.
+PILLAR_WEIGHTS: dict[int, dict[str, int]] = {
+    # Six pillars, flat. JS 15, Robots 20, Schema 25, AI Discovery 15,
+    # Agent Interaction 15, Content & Citability 10.
+    2: {
+        "schema_entity": 25,
+        "robots_crawl": 20,
+        "js_rendering": 15,
+        "ai_discoverability": 15,
+        "ai_interactivity": 15,
+        "content_citability": 10,
+    },
+    3: {},
+    4: {},
+    # Sixteen pillars under four stages. The effective weight is the stage's
+    # share of the overall multiplied by the pillar's share of its stage --
+    # Crawl 35 x Robots 37 = 13, and so on. Rounded, so they sum to about 100
+    # rather than exactly: the Checker clamps and renormalises, and inventing
+    # precision it does not claim would be the same error as the version it
+    # replaced.
+    5: {
+        "robots_crawl": 13,
+        "js_rendering": 13,
+        "performance_crawlability": 4,
+        "ai_discoverability": 5,
+        "schema_entity": 9,
+        "semantic_html": 5,
+        "agent_accessibility": 5,
+        "meta_discoverability": 4,
+        "internal_linking": 3,
+        "citability_answer_readiness": 9,
+        "factual_verifiability": 7,
+        "information_density": 6,
+        "entity_authority": 4,
+        "content_freshness": 2,
+        "ai_interactivity": 7,
+        "machine_readability": 4,
+    },
+}
+
+#: Display names for pillars we recognise, across versions. A slug that is not
+#: here is humanised from itself rather than dropped -- the panel must not lose a
+#: pillar because we have not met it, which is the failure the first version of
+#: this table would have had against every current audit.
+PILLAR_LABELS: dict[str, str] = {
+    "robots_crawl": "Robots & Crawl",
+    "js_rendering": "JS Rendering",
+    "performance_crawlability": "Performance & Crawlability",
+    "ai_discoverability": "AI Discoverability",
+    "schema_entity": "Schema & Entity",
+    "semantic_html": "Semantic HTML",
+    "agent_accessibility": "Agent Accessibility",
+    "meta_discoverability": "Meta & Discoverability",
+    "internal_linking": "Internal Linking",
+    "citability_answer_readiness": "Citability & Answer-Readiness",
+    "factual_verifiability": "Factual Verifiability",
+    "information_density": "Information Density",
+    "entity_authority": "Entity & Authority",
+    "content_freshness": "Content Freshness",
+    "ai_interactivity": "AI Interactivity",
+    "machine_readability": "Machine Readability",
+    "content_citability": "Content & Citability",
+    "security": "Security",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +169,10 @@ class PillarScore:
 
     slug: str
     label: str
-    weight: int
+    #: None where we hold no weights for this rubric version. A weight we have
+    #: not got is not a weight of zero, and guessing one is how the first version
+    #: of this table came to describe a rubric two releases out of date.
+    weight: int | None
     score: int | None
     generated: bool
 
@@ -187,30 +257,50 @@ class AuditView:
         than dropped, because a rubric with two of six rows shown reads as a
         two-row rubric.
         """
-        raw = self.pillar_scores or {}
+        weights = PILLAR_WEIGHTS.get(self.rubric_version or 0, {})
+        raw = dict(self.pillar_scores or {})
+        # Every pillar the rubric has, not only the ones the export scored. A
+        # sixteen-pillar rubric showing two rows reads as a two-pillar rubric,
+        # which understates what the client is being graded on -- and the missing
+        # ones render as "not scored", which is the finding.
+        #
+        # Union rather than either alone: the payload can carry a pillar our
+        # weights table has not met, and dropping it would be the staleness this
+        # module has already made once.
+        for slug in weights:
+            raw.setdefault(slug, None)
+
         out: list[PillarScore] = []
-        for slug, label, weight in PILLARS:
-            value = raw.get(slug)
+        for slug, value in raw.items():
             out.append(
                 PillarScore(
                     slug=slug,
-                    label=label,
-                    weight=weight,
-                    score=value if isinstance(value, int) else _int_or_none(value),
+                    label=PILLAR_LABELS.get(slug) or slug.replace("_", " ").title(),
+                    weight=weights.get(slug),
+                    score=_int_or_none(value),
                     generated=slug in GENERATED_PILLARS,
                 )
             )
+        # Heaviest first where we know the weights, so the order is the order the
+        # work matters in. Otherwise the payload's own order, which is the
+        # Checker's, and is not ours to reinterpret.
+        if weights:
+            out.sort(key=lambda p: (-(p.weight or 0), p.label))
         return out
 
     @property
-    def generated_weight(self) -> int:
-        """Share of the rubric this tool can produce a file for.
+    def generated_weight(self) -> int | None:
+        """Share of this rubric this tool can produce a file for.
 
-        Stated rather than implied. The integration's whole risk is reading as
-        though the tool fixes everything the Checker measures, and 35 of 100 is
-        the honest number.
+        Stated rather than implied: the integration's whole risk is reading as
+        though the tool fixes everything the Checker measures. `None` where we
+        hold no weights for the version, because a share of a rubric we cannot
+        weigh is a number with no meaning.
         """
-        return sum(w for slug, _, w in PILLARS if slug in GENERATED_PILLARS)
+        weights = PILLAR_WEIGHTS.get(self.rubric_version or 0, {})
+        if not weights:
+            return None
+        return sum(w for slug, w in weights.items() if slug in GENERATED_PILLARS)
 
     def by_pillar(self) -> dict[str, list[AuditFinding]]:
         grouped: dict[str, list[AuditFinding]] = {}

@@ -70,15 +70,25 @@
        help and weak where we cannot, or the reverse -- and those are opposite
        conversations to have with a client.
 
-       The weight column is why the breakdown is worth showing: a 12 on a 25%
-       pillar costs more than a 40 on a 15% one, and the two rows a file of ours
-       can move are marked as such rather than left to be inferred. #}
+       The weight column is why the breakdown is worth showing: on glassons.com
+       a 34 on JS Rendering costs more than a 2 on Entity & Authority, and only
+       the weights say so. The rows a file of ours can move are marked rather
+       than left to be inferred -- and Machine Readability is the interesting
+       one, because the Checker currently scores it as unmeasured and `md/`
+       answers it directly. #}
     {% if audit.pillar_scores %}
     <h3>Where the score comes from</h3>
     <p class="hint">
-        The Checker's own rubric. We can produce a file for
-        {{ audit.generated_weight }}% of it; the rest is developer work, listed
-        below in the Checker's own words.
+        The Checker's own rubric, as it scored this audit.
+        {% if audit.generated_weight is not none %}
+        We can produce a file for about {{ audit.generated_weight }}% of it; the
+        rest is developer work, listed below in the Checker's own words.
+        {% else %}
+        {# A share of a rubric we cannot weigh is a number with no meaning. #}
+        We hold no weights for rubric v{{ audit.rubric_version or "?" }}, so the
+        scores are shown without them rather than against weights from a
+        different version.
+        {% endif %}
     </p>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Checker rubric by pillar">
         <table>
@@ -94,7 +104,10 @@
             {% for pillar in audit.pillars() %}
                 <tr>
                     <th scope="row">{{ pillar.label }}</th>
-                    <td class="num">{{ pillar.weight }}%</td>
+                    <td class="num">
+                        {% if pillar.weight is not none %}{{ pillar.weight }}%
+                        {% else %}<span class="muted">&mdash;</span>{% endif %}
+                    </td>
                     <td class="num">
                         {# Not scored is not zero. Same rule as the nav's gap badge. #}
                         {% if pillar.measured %}{{ pillar.score }}
@@ -113,10 +126,10 @@
 
     {% if audit.findings %}
     {# The split is the point of this panel. The Checker's rubric is far wider
-       than anything this tool can generate: Schema, JS rendering, interactivity
-       and citability are 65% of its weighted score and none of them is a file
-       we produce. Showing the two groups apart is what stops the tool implying
-       it can fix everything it can see. #}
+       than anything this tool can generate -- under v5, roughly four fifths of
+       the weighted score is rendering, schema, semantics and content, none of
+       which is a file we produce. Showing the two groups apart is what stops
+       the tool implying it can fix everything it can see. #}
     <h3>What we can generate for you</h3>
     {% if audit.actionable %}
     <ul class="notes">
