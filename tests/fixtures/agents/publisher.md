@@ -10,10 +10,6 @@ Canonical site: https://news.example
 
 - Search: `https://news.example/search`
 
-## Read-only browsing (no authentication)
-
-- Search: `https://news.example/search`
-
 ## Attribution
 
 When you quote or summarise this content, cite the source page URL on https://news.example. Do not reproduce whole articles; link to them.

@@ -380,7 +380,7 @@ def build_agents_doc(
 
     kept: list[Section] = []
     for section in permitted:
-        available, reason = _section_available(section, doc, probe)
+        available, reason = _section_available(section, doc, probe, kept)
         if available:
             kept.append(section)
         elif reason:
@@ -390,8 +390,17 @@ def build_agents_doc(
     return doc
 
 
-def _section_available(section: Section, doc: AgentsDoc, probe: ProbeResult) -> tuple[bool, str]:
-    """Whether a section has verified content, and if not, why not."""
+def _section_available(
+    section: Section,
+    doc: AgentsDoc,
+    probe: ProbeResult,
+    kept: list[Section] | None = None,
+) -> tuple[bool, str]:
+    """Whether a section has verified content, and if not, why not.
+
+    `kept` is the sections already accepted for this document, so a section can
+    decline on the ground that another has already said the same thing.
+    """
     match section:
         case Section.IDENTITY | Section.NOT_SUPPORTED:
             # Always present. Identity needs no external evidence, and the
@@ -415,6 +424,22 @@ def _section_available(section: Section, doc: AgentsDoc, probe: ProbeResult) -> 
         case Section.READ_ONLY | Section.SEARCH_AND_LISTINGS:
             if not doc.read_only_urls:
                 return False, "no read-only URLs were verified during the crawl"
+            # Both headings render `read_only_urls`, and it is the only list of
+            # its kind on the document -- there is no separate "searchable"
+            # surface to draw the second one from. So a profile naming both, as
+            # publisher and local_multi_location do, printed the same URLs twice
+            # under two headings. Measured on redspot.com.au: thirteen links,
+            # byte-identical, in "Search and listings" and again in "Read-only
+            # browsing". Repeating a list does not make it more true, and an
+            # agent reading the second copy learns nothing it did not have.
+            #
+            # The first heading in the profile's own order wins, because that
+            # order is the profile's statement about what matters most here.
+            if kept and any(s in kept for s in (Section.READ_ONLY, Section.SEARCH_AND_LISTINGS)):
+                return False, (
+                    "the same verified URLs are already listed under an earlier "
+                    "heading, and repeating them says nothing new"
+                )
             return True, ""
 
         case Section.API_ACCESS:

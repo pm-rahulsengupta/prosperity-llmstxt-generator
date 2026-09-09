@@ -14,7 +14,10 @@ import json
 
 from app.config import get_settings
 from app.core import text
+from app.core.agents_doc import Capability, build_agents_doc
+from app.core.agents_render import render_agents_md
 from app.core.onboarding import SiteBrief
+from app.core.ranking import PATTERN_AGENCY, PATTERN_PUBLISHER
 from app.core.render import _unquoted
 from app.db import repo
 from app.llm.client import (
@@ -28,6 +31,7 @@ from app.llm.client import (
 )
 from app.llm.prompts.plan import CrawlPlan, TemplateRule
 from app.llm.stages import select_urls
+from app.scrape.agents_probe import ProbeResult
 from app.scrape.recon import PathTemplate, RobotsInfo, SiteRecon, cluster_urls
 from app.scrape.sizing import CountFailure, assess, parse_results_count
 
@@ -523,3 +527,56 @@ def test_an_unquoted_summary_is_unchanged():
     assert _unquoted("Australian car rental company.") == "Australian car rental company."
     assert _unquoted("") == ""
     assert _unquoted("   ") == ""
+
+
+# -- 9. the same list, printed twice ------------------------------------------
+
+
+def test_a_profile_naming_both_read_only_sections_prints_the_list_once():
+    """Both headings render `read_only_urls`, and it is the only list of its kind
+    on the document. Measured on redspot.com.au: thirteen links, byte-identical,
+    under "Search and listings" and again under "Read-only browsing"."""
+    probe = ProbeResult(site_url="https://news.example", platform="wordpress")
+    doc = build_agents_doc(
+        probe,
+        PATTERN_PUBLISHER,
+        site_name="News",
+        read_only=[Capability(label="Search", url="https://news.example/search", evidence="200")],
+    )
+
+    rendered = render_agents_md(doc)
+    headings = [line for line in rendered.splitlines() if line.startswith("## ")]
+
+    assert headings.count("## Search and listings") <= 1
+    assert not (
+        "## Search and listings" in headings
+        and "## Read-only browsing (no authentication)" in headings
+    )
+    assert rendered.count("https://news.example/search") == 1
+
+
+def test_the_dropped_heading_says_why():
+    """A section removed without a reason is indistinguishable from one that was
+    never built, which is the distinction `omitted` exists to keep."""
+    probe = ProbeResult(site_url="https://news.example", platform="wordpress")
+    doc = build_agents_doc(
+        probe,
+        PATTERN_PUBLISHER,
+        site_name="News",
+        read_only=[Capability(label="Search", url="https://news.example/search", evidence="200")],
+    )
+
+    reasons = [o.reason for o in doc.omitted]
+    assert any("already listed under an earlier heading" in r for r in reasons)
+
+
+def test_a_profile_with_one_read_only_heading_is_unaffected():
+    probe = ProbeResult(site_url="https://agency.example", platform="wordpress")
+    doc = build_agents_doc(
+        probe,
+        PATTERN_AGENCY,
+        site_name="Agency",
+        read_only=[Capability(label="About", url="https://agency.example/about", evidence="200")],
+    )
+
+    assert "## Read-only browsing (no authentication)" in render_agents_md(doc)
