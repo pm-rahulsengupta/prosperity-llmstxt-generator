@@ -140,11 +140,39 @@ def check_copy(
     if opener := next((w for w in banned_openers if lowered.startswith(w)), None):
         verdict.problems.append(f"opens with {opener!r}, which describes the reader not the page")
 
-    if found := _superlative_pattern(banned_superlatives).findall(description):
-        unique = sorted({f.lower() for f in found})
-        verdict.problems.append("unverifiable superlative(s): " + ", ".join(unique))
+    if found := _real_superlatives(description, banned_superlatives):
+        verdict.problems.append("unverifiable superlative(s): " + ", ".join(found))
 
     return verdict
+
+
+def _real_superlatives(description: str, banned: tuple[str, ...]) -> list[str]:
+    """Banned words, minus the ones that are half of a name.
+
+    "Top" is a superlative and "Top End" is the northern third of the Northern
+    Territory. redspot.com.au has a location page for it, the model wrote an
+    accurate description mentioning it twice, and IDX-013 refused the file --
+    which then blocked delivery on a place name.
+
+    The test is capitalisation in company. A superlative used as a claim is
+    lower-case in running text ("the best rates") or, at the start of a sentence,
+    capitalised and followed by an ordinary word ("Best rates in Sydney"). A
+    superlative inside a proper noun is capitalised *and* followed by another
+    capitalised word: Top End, Best Western, Premier Inn. That is decidable from
+    the string, needs no gazetteer, and fails in the safe direction -- a genuine
+    claim written in Title Case survives, which is a missed flag rather than a
+    file we refused to ship over the name of a place.
+    """
+    out: list[str] = []
+    for match in _superlative_pattern(banned).finditer(description):
+        word = match.group(0)
+        if word[:1].isupper():
+            after = description[match.end() :].lstrip()
+            following = after.split(" ", 1)[0].strip(".,;:!?)")
+            if following[:1].isupper():
+                continue
+        out.append(word.lower())
+    return sorted(set(out))
 
 
 def check_all(entries: list) -> list[CopyVerdict]:
@@ -166,7 +194,46 @@ def check_all(entries: list) -> list[CopyVerdict]:
         else:
             seen[key] = entry.url
 
+    _flag_locale_conflicts(entries, by_url)
     return verdicts
+
+
+def _flag_locale_conflicts(entries: list, by_url: dict[str, CopyVerdict]) -> None:
+    """Attribute a mixed spelling to the lines that hold the minority form.
+
+    `locale_conflicts` was written, tested, and called by nothing. IDX-015 caught
+    the mixing at audit time -- after the file was assembled, when the only
+    remaining move is to regenerate the whole run -- while `enforce_copy_rules`,
+    whose entire job is "check every link line, regenerate what fails once", never
+    consulted it. redspot shipped `licence` 22 times and `license` 12 times in one
+    file for an Australian client.
+
+    The minority is flagged because the majority is the document's own evidence of
+    which spelling it meant, which keeps this dialect-neutral: the module reports
+    mixing, not dialect, and picking the more common form imposes no view about
+    which is correct. On an exact tie there is no evidence either way, so nothing
+    is flagged and IDX-015 reports the conflict rather than this guessing at it.
+    """
+    text = " ".join(f"{e.title or ''} {e.description or ''}" for e in entries)
+    if not (conflicts := locale_conflicts(text)):
+        return
+
+    lowered = text.lower()
+    for american, british in LOCALE_PAIRS:
+        if not any(c.startswith(f"{american} x") for c in conflicts):
+            continue
+        a = len(re.findall(rf"\b{american}\b", lowered))
+        b = len(re.findall(rf"\b{british}\b", lowered))
+        if a == b:
+            continue
+        minority = american if a < b else british
+        majority = british if a < b else american
+        for entry in entries:
+            body = f"{entry.title or ''} {entry.description or ''}".lower()
+            if re.search(rf"\b{minority}\b", body):
+                by_url[entry.url].problems.append(
+                    f"spells {minority!r} where the rest of the file uses {majority!r}"
+                )
 
 
 def locale_conflicts(text: str) -> list[str]:

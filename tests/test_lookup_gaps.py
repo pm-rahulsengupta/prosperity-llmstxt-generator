@@ -580,3 +580,69 @@ def test_a_profile_with_one_read_only_heading_is_unaffected():
     )
 
     assert "## Read-only browsing (no authentication)" in render_agents_md(doc)
+
+
+# -- 10. a check that was written and never called ----------------------------
+
+
+def _entry(url: str, description: str):
+    from app.core.models import PageEntry
+
+    return PageEntry(url=url, title="Title", description=description)
+
+
+def test_a_mixed_spelling_reaches_the_stage_that_can_fix_it():
+    """`locale_conflicts` was written, tested, and called by nothing.
+
+    IDX-015 caught the mixing at audit time -- after assembly, when the only move
+    left is to regenerate the whole run -- while `enforce_copy_rules`, whose job is
+    "check every link line, regenerate what fails once", never consulted it.
+    redspot shipped 'licence' 22 times and 'license' 12 times in one file for an
+    Australian client.
+    """
+    from app.core.copyrules import check_all
+
+    entries = [_entry("u1", "Drivers need a full license before collecting a vehicle")]
+    entries += [
+        _entry(f"v{i}", f"Drivers need a full licence before collecting vehicle {i}")
+        for i in range(3)
+    ]
+
+    problems = {v.url: v.problems for v in check_all(entries)}
+    assert any("license" in p for p in problems["u1"])
+    assert not problems["v0"], "the majority spelling is the file's own convention"
+
+
+def test_an_even_split_flags_nobody():
+    """The module reports mixing, not dialect. With no majority there is no
+    evidence of intent, so IDX-015 reports the conflict rather than this guessing."""
+    from app.core.copyrules import check_all
+
+    entries = [
+        _entry("u1", "Drivers need a full license before collecting a vehicle here"),
+        _entry("v1", "Drivers need a full licence before collecting a vehicle here"),
+    ]
+
+    assert all(not v.problems for v in check_all(entries))
+
+
+def test_a_superlative_inside_a_place_name_is_not_a_claim():
+    """ "Top End" is the northern third of the Northern Territory. redspot has a
+    location page for it, and IDX-013 refused the file over a place name."""
+    from app.core.copyrules import check_copy
+
+    assert not check_copy(
+        "u", "T", "Airport, city and Holtze locations serving Northern Territory and Top End"
+    ).problems
+    assert not check_copy(
+        "u", "T", "Pickup located beside the Best Western hotel on Parramatta Road"
+    ).problems
+
+
+def test_a_superlative_used_as_a_claim_still_fails():
+    """The guard must fail in the safe direction: missing a flag is better than
+    refusing a file over a name, but it must not disarm the rule."""
+    from app.core.copyrules import check_copy
+
+    assert check_copy("u", "T", "We offer the best rates for hire in every city").problems
+    assert check_copy("u", "T", "Best rates for car hire across every Australian city").problems
