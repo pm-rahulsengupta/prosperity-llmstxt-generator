@@ -9,12 +9,14 @@ was found on the stranded redspot.com.au run, and each is measured in
 
 from __future__ import annotations
 
+import asyncio
 import json
 
+from app.config import get_settings
 from app.core import text
 from app.core.onboarding import SiteBrief
 from app.db import repo
-from app.llm.client import _unfence
+from app.llm.client import LLMClient, LLMUsage, Stage, _unfence
 from app.llm.prompts.plan import CrawlPlan, TemplateRule
 from app.llm.stages import select_urls
 from app.scrape.recon import RobotsInfo, SiteRecon, cluster_urls
@@ -227,3 +229,101 @@ def test_www_is_stripped_as_a_prefix_not_as_a_substring():
     to a domain that is not the client's."""
     assert text.domain_of("https://shop.www.example.com/") == "shop.www.example.com"
     assert text.domain_of("https://WWW.NRMA.COM.AU/") == "nrma.com.au"
+
+
+class _Message:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.refusal = None
+
+
+class _Choice:
+    def __init__(self, content: str, finish_reason: str) -> None:
+        self.message = _Message(content)
+        self.finish_reason = finish_reason
+
+
+class _Response:
+    def __init__(self, content: str, finish_reason: str) -> None:
+        self.choices = [_Choice(content, finish_reason)]
+        self.usage = None
+        self.model = "gateway/model"
+
+
+def _decode(
+    client: LLMClient,
+    usage: LLMUsage,
+    content: str,
+    finish_reason: str = "stop",
+) -> dict | None:
+    """Drive `structured` over a canned reply, so the decode path is exercised
+    without a network call. Patching the transport rather than reimplementing the
+    branch keeps the test honest about what the caller actually runs."""
+
+    class _Completions:
+        async def create(self, **_: object) -> _Response:
+            return _Response(content, finish_reason)
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Fake:
+        chat = _Chat()
+
+    client._client = _Fake()
+    return asyncio.run(client.structured(Stage.PLAN, "SYSTEM", "USER", {"type": "object"}, "thing"))
+
+
+# -- 5. a gateway that accepts `response_format` and drops it ------------------
+
+
+def _client(base_url: str) -> tuple[LLMClient, LLMUsage]:
+    settings = get_settings().model_copy(
+        update={"openai_api_key": "sk-test", "openai_base_url": base_url}
+    )
+    usage = LLMUsage()
+    return LLMClient(settings, usage), usage
+
+
+def test_openai_itself_is_trusted_to_enforce_the_schema():
+    client, _ = _client("")
+    assert client.schema_is_enforced
+    assert client._system_for("SYSTEM", {"type": "object"}, "thing") == "SYSTEM"
+
+
+def test_a_compatible_gateway_is_told_the_schema_in_the_prompt():
+    """OmniRoute accepted `strict` json_schema and returned four paragraphs of
+    English. The parameter is not a contract off OpenAI's own endpoint."""
+    client, _ = _client("https://omniroute.prosperitymedia.co/v1")
+    assert not client.schema_is_enforced
+
+    schema = {"type": "object", "required": ["groups"]}
+    prompt = client._system_for("SYSTEM", schema, "intents")
+
+    assert prompt.startswith("SYSTEM")
+    assert "single JSON object and nothing else" in prompt
+    assert "no markdown code fence" in prompt
+    assert "intents" in prompt
+    assert json.dumps(schema) in prompt
+
+
+def test_an_empty_response_is_not_reported_as_malformed_json():
+    """One of the redspot preflight's two calls came back empty and was recorded
+    as "invalid JSON: Expecting value: line 1 column 1 (char 0)", which describes
+    a parse failure that never happened."""
+    client, usage = _client("https://gateway.example/v1")
+    result = _decode(client, usage, content="   ", finish_reason="stop")
+
+    assert result is None
+    assert len(usage.fallbacks) == 1
+    assert "empty response" in usage.fallbacks[0]
+    assert "Expecting value" not in usage.fallbacks[0]
+
+
+def test_a_prose_response_says_what_it_actually_said():
+    """ "invalid JSON" hides the diagnosis. The opening words are the diagnosis."""
+    client, usage = _client("https://gateway.example/v1")
+    result = _decode(client, usage, content="**Classification: hub**\n\nThis is a small set")
+
+    assert result is None
+    assert "Classification: hub" in usage.fallbacks[0]

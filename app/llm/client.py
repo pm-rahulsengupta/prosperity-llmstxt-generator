@@ -179,6 +179,51 @@ class LLMClient:
             self._client = AsyncOpenAI(**kwargs)
         return self._client
 
+    @property
+    def schema_is_enforced(self) -> bool:
+        """Whether `response_format` can be relied on to shape the reply.
+
+        True only against OpenAI itself. Strict `json_schema` is OpenAI's feature
+        and an OpenAI-*compatible* endpoint is free to accept the parameter and
+        drop it, which is not a refusal anyone can see: the request succeeds, the
+        usage is billed, and the reply is whatever the model felt like returning.
+
+        Measured 2026-09-09 through the Prosperity OmniRoute gateway, same model,
+        same call, three different shapes -- fenced JSON, an empty string, and, for
+        the group-intent prompt, four paragraphs of English beginning
+        "**Classification: hub**". One preflight recorded a plan built from a real
+        model answer and an intent stage that had fallen back, from two calls a
+        second apart.
+
+        `openai_base_url` is the only signal available at this layer, and it is a
+        sound one: it is unset for OpenAI and set for everything else.
+        """
+        return not self.settings.openai_base_url
+
+    def _system_for(self, system: str, schema: dict[str, Any], schema_name: str) -> str:
+        """The system prompt, plus the schema when the endpoint will not enforce it.
+
+        This module's rule is that "structured outputs carry the schema, so the
+        prompt carries context and quality guidance only". That rule assumes the
+        schema is carried by something. Where it is not, the choice is between
+        putting it in the prompt and losing every stage to the heuristic path, and
+        the prompt is plainly the better of the two.
+
+        Left untouched on the OpenAI path, so the calls this tool was measured
+        against go out byte-for-byte as before and keep the guarantee that makes
+        the extra instruction unnecessary there.
+        """
+        if self.schema_is_enforced:
+            return system
+        return (
+            f"{system}\n\n"
+            "---\n\n"
+            "Reply with a single JSON object and nothing else. No prose before or "
+            "after it, no markdown code fence, no explanation of your reasoning. "
+            f"It must validate against this JSON Schema named {schema_name!r}:\n\n"
+            f"{json.dumps(schema)}"
+        )
+
     async def structured(
         self,
         stage: Stage,
@@ -199,7 +244,7 @@ class LLMClient:
             response = await client.chat.completions.create(
                 model=self.model_for(stage),
                 messages=[
-                    {"role": "system", "content": system},
+                    {"role": "system", "content": self._system_for(system, schema, schema_name)},
                     {"role": "user", "content": user},
                 ],
                 response_format={
@@ -238,10 +283,28 @@ class LLMClient:
             return None
 
         content = _unfence(choice.message.content or "")
+
+        # An empty body is not a parse failure and must not be reported as one. It
+        # reads as "invalid JSON: Expecting value: line 1 column 1 (char 0)", which
+        # sends a reader looking for malformed JSON that was never there -- one of
+        # the redspot preflight's two calls returned exactly this, and the message
+        # is why it took a reproduction to find out what had happened.
+        if not content.strip():
+            self.usage.record_fallback(
+                stage,
+                f"{self.model_for(stage)} returned an empty response "
+                f"(finish_reason={choice.finish_reason!r})",
+            )
+            return None
+
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError as exc:
-            self.usage.record_fallback(stage, f"invalid JSON: {exc}")
+            # The prose case, distinguished from a truncated or malformed object.
+            # A gateway that drops `response_format` answers the question in
+            # English, and "invalid JSON" describes that badly enough to hide it.
+            opener = content.strip()[:80].replace("\n", " ")
+            self.usage.record_fallback(stage, f"invalid JSON: {exc} -- response began {opener!r}")
             return None
 
         if not isinstance(parsed, dict):
