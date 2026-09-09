@@ -191,9 +191,26 @@ def test_a_wide_template_scrolls_inside_its_own_container():
 
 
 def test_the_template_body_is_wrapped_in_it():
+    """The `pre` sits inside the scroll container, and the container takes focus.
+
+    Asserted on the relationship rather than on the two elements being adjacent
+    in the source. The literal form of this test was `'doc-scroll"><pre class=
+    "doc template"' in markup`, which passed only while nothing was ever added
+    to the opening tag -- so adding the `tabindex` that makes the region
+    keyboard-scrollable broke a test about overflow.
+    """
     markup = (ROOT / "templates" / "partials" / "component.html").read_text(encoding="utf-8")
 
-    assert 'doc-scroll"><pre class="doc template"' in markup
+    opening = re.search(r'<div class="doc-scroll"[^>]*>', markup)
+    assert opening is not None, "the scroll container is gone"
+
+    after = markup[opening.end() :]
+    assert after.lstrip().startswith('<pre class="doc template"'), (
+        "the template body is no longer the first thing inside the scroll container"
+    )
+    assert 'tabindex="0"' in opening.group(0), (
+        "the scroll container cannot take focus, so it cannot be scrolled by keyboard"
+    )
 
 
 # -- the vanishing score --------------------------------------------------------------

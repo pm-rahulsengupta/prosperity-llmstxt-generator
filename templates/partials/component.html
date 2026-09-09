@@ -67,8 +67,14 @@
         file once it verifies.
     </p>
     {# Its own scroll container. This block is routinely wider than the card, and
-       with `overflow-x: visible` it pushed the whole page sideways. #}
-    <div class="doc-scroll"><pre class="doc template">{{ status.template_body }}</pre></div>
+       with `overflow-x: visible` it pushed the whole page sideways.
+
+       `tabindex="0"` goes on the container that actually scrolls, not on the
+       `pre` inside it: a scroll container that cannot take focus cannot be
+       scrolled from the keyboard, so without it the right-hand end of every
+       template body was mouse-only. #}
+    <div class="doc-scroll" tabindex="0" role="region"
+         aria-label="{{ status.component.title }} template, not for publication"><pre class="doc template">{{ status.template_body }}</pre></div>
     {% endif %}
 
     {% if status.publishable %}

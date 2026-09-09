@@ -86,3 +86,34 @@ def test_no_paragraph_contains_flow_content(path: Path):
                 offenders.append(f"<{tag}> inside {opening.group(0)}")
 
     assert offenders == [], f"{path.name}: {offenders}"
+
+
+#: Classes whose CSS makes them a scroll container. A container that scrolls and
+#: cannot take focus cannot be scrolled from the keyboard at all -- SC 2.1.1, and
+#: not a theoretical one: `pre.output` on a redspot run showed 512px of a
+#: 12,727px region, so 96% of the file the page exists to show was mouse-only.
+_SCROLLERS = ("output", "doc-scroll")
+
+
+@pytest.mark.parametrize("path", _templates(), ids=lambda p: str(p.name))
+def test_every_scroll_container_can_take_focus(path: Path):
+    """Whatever scrolls must be reachable by keyboard.
+
+    Checked against the class list rather than by parsing the stylesheet, because
+    the failure is a property of the pairing: the CSS says `overflow: auto` and
+    the markup has to say `tabindex`. A test on either half alone passes while
+    the page stays broken.
+    """
+    text = _stripped(path.read_text(encoding="utf-8"))
+
+    missing: list[str] = []
+    for element in re.finditer(r"<(?:pre|div)\s[^>]*>", text):
+        tag = element.group(0)
+        classes = re.search(r'class="([^"]*)"', tag)
+        if classes is None:
+            continue
+        names = classes.group(1).split()
+        if any(scroller in names for scroller in _SCROLLERS) and 'tabindex="0"' not in tag:
+            missing.append(tag[:90])
+
+    assert missing == [], f"{path.name}: scroll container not focusable: {missing}"

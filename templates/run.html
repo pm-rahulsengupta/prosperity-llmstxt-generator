@@ -112,7 +112,14 @@
         {% endfor %}
     </ul>
     {% endif %}
-    <pre class="output">{{ run.llmstxt }}</pre>
+    {# `tabindex="0"` is what makes this reachable at all. `pre.output` is
+       `max-height: 32rem; overflow: auto`, and a scroll container that cannot
+       take focus cannot be scrolled from the keyboard -- measured on a redspot
+       run, 512px of a 12,727px region, so 96% of the file this page exists to
+       show was unreachable without a mouse. The role and the name are what stop
+       it being announced as an unlabelled scrollable box once it is focusable. #}
+    <pre class="output" tabindex="0" role="region"
+         aria-label="Generated llms.txt for {{ run.domain }}">{{ run.llmstxt }}</pre>
 </div>
 
 <div class="panel" id="chat"
