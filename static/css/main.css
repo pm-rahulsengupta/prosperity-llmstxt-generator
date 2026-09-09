@@ -132,6 +132,81 @@
 
     --pm-radius:    10px;
     --pm-radius-sm:  6px;
+
+    /* ── Spacing ────────────────────────────────────────────────────────
+       rem, not px, and this is the one place the px-for-type rule above does
+       not carry over. That rule warns against a *reference* mismatch -- 15px
+       body sized in rem resolving against a 16px root. A distance has no such
+       reference: 0.5rem is 8px, always. Keeping spacing in rem also leaves it
+       the only thing on the page that answers a raised browser font size, now
+       that type is pinned, and the ~200 values already in this sheet are rem,
+       so adopting these is a token swap rather than a unit conversion.
+
+       Eleven steps for thirty observed literals, and every step IS one of them,
+       so the common cases move by nothing. Step 5 exists because the 0.6rem
+       cluster is fifteen declarations and is the sheet's real "snug control"
+       tier -- the sidebar link, the skip link, the progress-bar margin. A clean
+       4px grid would fold it into 8 or 12 and retune the rail. */
+    --pm-space-0:   0;
+    --pm-space-1:   0.125rem;  /*  2px — inline chip and code padding */
+    --pm-space-2:   0.25rem;   /*  4px — a gap inside one line of text */
+    --pm-space-3:   0.375rem;  /*  6px — label to field, hint to thing hinted */
+    --pm-space-4:   0.5rem;    /*  8px — the default gap between siblings */
+    --pm-space-5:   0.625rem;  /* 10px — snug control padding */
+    --pm-space-6:   0.75rem;   /* 12px — a control's own padding, list rhythm */
+    --pm-space-7:   1rem;      /* 16px — block padding, paragraph separation */
+    --pm-space-8:   1.5rem;    /* 24px — between blocks inside a panel */
+    --pm-space-9:   2rem;      /* 32px — page padding, between panels */
+    --pm-space-10:  3rem;      /* 48px — between sections of a document */
+    --pm-space-11:  4rem;      /* 64px — the air around the auth card */
+
+    /* ── Measures ───────────────────────────────────────────────────────
+       Not spacing. These are the widths that carry a reason, and 46rem is the
+       reason four separate rules quote one number: it is the client document
+       measure, and `.fileset`, `.fileset-list` and `.chat-turn` match it on
+       purpose so a callout never sets a longer line than the document it sits
+       beside. Named so the next rule that needs to match it can. */
+    --pm-measure-doc:   46rem;
+    --pm-measure-prose: 75ch;
+    --pm-rail:          14rem;
+
+    /* ── Motion ─────────────────────────────────────────────────────────
+       Three durations, because this UI has three kinds of change. 400ms is not
+       a new number -- it is the progress bar's existing value, kept because its
+       width arrives in discrete htmx swaps and anything shorter makes the bar
+       stutter between polls. `prefers-reduced-motion` is already handled
+       globally with `!important`, so none of these needs its own guard. */
+    --pm-dur-echo:    90ms;   /* a control answering a pointer already on it */
+    --pm-dur-reveal: 160ms;   /* a disclosure, a chip changing state */
+    --pm-dur-report: 400ms;   /* progress arriving from the server */
+    --pm-ease-out:  cubic-bezier(0.2, 0, 0, 1);
+    --pm-ease-move: cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* ── The one shadow ─────────────────────────────────────────────────
+       There is no elevation scale and there should not be one. `box-shadow` is
+       reserved entirely for focus, which is what makes a focus ring
+       unambiguous on every surface in the app; depth here is fill plus
+       hairline, the only kind of boundary WCAG 1.4.11 can measure. Naming the
+       ring is what stops it drifting. */
+    --pm-focus-ring: 0 0 0 5px rgba(1, 208, 129, 0.45);
+
+    /* ── Derived: the red that MAY be text ──────────────────────────────
+       `--pm-red` on white is 4.09:1 and fails AA for normal text; the comment
+       on the token above is right that Imperial Red as specified has no
+       accessible text pairing. This is derived for exactly the reason
+       `--pm-teal-deep` is, and it does have one:
+
+         #d9102c on white .............. 5.17:1
+         #d9102c on --pm-emerald-wash .. 4.68:1  the `a:hover` case, where
+                                                 #f71735 was 3.71:1 -- worse
+                                                 than its resting state, and
+                                                 nobody had measured it
+         white on #d9102c .............. 5.17:1  the destructive button
+
+       Imperial Red keeps every stroke: on --pm-red-wash it is 3.50:1, so
+       `.pill.bad`, `.notes li.error` and `.danger-zone`'s border are unchanged
+       and still clear 1.4.11. */
+    --pm-red-deep: #d9102c;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -208,7 +283,7 @@ main:focus { outline: none; }
 :focus-visible {
     outline: 2px solid var(--pm-gunmetal);
     outline-offset: 2px;
-    box-shadow: 0 0 0 5px rgba(1, 208, 129, 0.45);
+    box-shadow: var(--pm-focus-ring);
     border-radius: 2px;
 }
 
@@ -421,7 +496,7 @@ td code, .url {
    matches .pill.run — and teal reads at 2.6:1 against the track versus
    emerald's 1.5:1. The count printed underneath is the accessible carrier. */
 .bar { height: 8px; background: var(--pm-rule); border-radius: 999px; overflow: hidden; margin: 0.6rem 0; }
-.bar > span { display: block; height: 100%; background: var(--pm-teal); transition: width 0.4s ease; }
+.bar > span { display: block; height: 100%; background: var(--pm-teal); transition: width var(--pm-dur-report) var(--pm-ease-move); }
 
 .log {
     font-family: var(--pm-mono);
@@ -530,7 +605,7 @@ pre.output {
    and which this is. The border, not a fill: red has no accessible text pairing,
    so it is a stroke here as everywhere else in the sheet. */
 .danger-zone { border: 2px solid var(--pm-red); }
-.danger-zone h2 { color: var(--pm-red); }
+.danger-zone h2 { color: var(--pm-red-deep); }  /* 20px/500 is not WCAG large text */
 
 /* -- onboarding brief -------------------------------------------------------
    A form whose fields each carry a consequence. The `.effect` line is not
@@ -553,11 +628,37 @@ pre.output {
 .field { margin-bottom: 1.5rem; }
 .field textarea { min-height: 5.5rem; }
 
-.field .hint {
-    margin: 0.35rem 0 0;
-    font-size: var(--pm-xs);
-    color: var(--pm-ink-muted);
+/* The base rule `.hint` never had.
+
+   There were six rules and all six were descendant-scoped, so 31 of 46 usages
+   inherited body type -- 15px, the same size as the `h4` they explain. The worst
+   case is the component card, which carries nine of them: "What we found:",
+   "Verify:", and the two-line caveat that qualifies an emerald Published chip on
+   a directory. On a family tab there were two type sizes on the entire page.
+
+   13px and `--pm-ink-soft`, not 12px and `--pm-ink-muted`. A hint here is not
+   chrome; it is the sentence that qualifies the claim above it, and the sampling
+   caveat exists precisely so an operator does not over-claim to a client. 13px is
+   already this sheet's secondary-prose tier -- `.notice`, `.holding`,
+   `.chat-turn` -- and `.holding` sits directly beside a hint inside the same
+   card, so the two should not differ.
+
+   Chosen so the two already-sized cases render exactly as they do today:
+   `.fact-value .hint` and `.check .hint` both already inherit 13px. Only the 31
+   unscoped hints move (15px to 13px), and the form hints go 12px to 13px, which
+   also takes them from 5.27:1 to 6.22:1. */
+.hint {
+    margin: var(--pm-space-3) 0 0;
+    font-size: var(--pm-sm);
+    line-height: 1.5;
+    color: var(--pm-ink-soft);
 }
+
+/* `class="hint checked"` is a stale-data warning wearing a hint's class: it
+   contains a `strong` and a Refresh button, so it carries a notice's weight.
+   `.checked` is declared earlier and sets no size, so without this the base rule
+   above would shrink it. */
+.hint.checked { font-size: var(--pm-base); color: var(--pm-ink); }
 
 .field .hint code {
     background: var(--pm-sunken);
@@ -583,6 +684,26 @@ pre.output {
 
 .notice.wait { background: var(--pm-lime); color: var(--pm-gunmetal); }
 .notice.ok { background: var(--pm-emerald); color: var(--pm-gunmetal); }
+/* Neither of these existed. `.notice.bad` carries the strongest sentence in a
+   component card -- "Not for publication. This names something that does not
+   answer yet." -- and fell through to bare `.notice`: 13px prose, no fill, no
+   stroke. The most severe message on the card was the quietest thing on it.
+   `.notice.error` was unstyled across three create/delete screens.
+
+   Red as a stroke and gunmetal as the text, the same shape as `.pill.bad` and
+   `.notes li.error`. Gunmetal on the wash is 12.01:1. */
+.notice.bad,
+.notice.error {
+    background: var(--pm-red-wash);
+    border-left: 4px solid var(--pm-red);
+    color: var(--pm-gunmetal);
+}
+/* Completes the set, and matches `.notes li.info`. */
+.notice.info {
+    background: var(--pm-teal-wash);
+    border-left: 4px solid var(--pm-teal);
+    color: var(--pm-gunmetal);
+}
 input[type="file"] { font-size: var(--pm-sm); padding: 0.4rem 0; }
 input[type="date"] { font-family: inherit; }
 
@@ -597,12 +718,7 @@ input[type="date"] { font-family: inherit; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
 .actions form { flex: 1 1 18rem; }
-.actions .hint {
-    display: block;
-    margin-top: 0.4rem;
-    font-size: var(--pm-xs);
-    color: var(--pm-ink-muted);
-}
+.actions .hint { display: block; margin-top: var(--pm-space-2); }
 
 details.danger {
     margin-top: 1.5rem;
@@ -702,7 +818,9 @@ details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
 /* A link to a destructive confirmation is not itself destructive, so it does not
    wear the solid red a button does -- but it must not read as an ordinary
    sibling of "Settings" either. */
-.destructive-link { color: var(--pm-red); }
+/* 5.17:1, and 4.68:1 against the emerald wash `a:hover` paints underneath --
+   which the undeepened red failed at 3.71:1, i.e. worse than at rest. */
+.destructive-link { color: var(--pm-red-deep); }
 
 /* One row per crawl that has to be stopped before a client can go. A list, not
    a table: it is a work queue you empty, and every row disappears as you do. */
@@ -718,9 +836,12 @@ details.danger[open] summary { margin-bottom: 0.75rem; color: var(--pm-ink); }
 
 button.destructive,
 a.button.destructive {
-    background: var(--pm-red);
+    /* White on this is 5.17:1. On `--pm-red` it was 4.09:1 -- the one place in
+       the sheet where white was painted on a red fill, which is the pairing the
+       token's own comment rules out. */
+    background: var(--pm-red-deep);
     color: var(--pm-white);
-    border-color: var(--pm-red);
+    border-color: var(--pm-red-deep);
 }
 
 /* -- left-hand navigation ---------------------------------------------------
@@ -923,6 +1044,10 @@ a.button.destructive {
 .component.ready { border-left: 3px solid var(--pm-lime); padding-left: 0.8rem; }
 .component.template { border-left: 3px solid var(--pm-teal); padding-left: 0.8rem; }
 .component.missing { border-left: 3px solid var(--pm-red); padding-left: 0.8rem; }
+/* The fifth state had no rule, so it fell through to a bare `.component` and was
+   the only one of five with no rail at all. Grey: `NOT_APPLICABLE` implies no
+   action, so it must not borrow a colour from a state that wants one. */
+.component.not_applicable { border-left: 3px solid var(--pm-rule); padding-left: 0.8rem; }
 
 /* Visibly not a finished file. A template that looks like an artefact is a
    template somebody uploads. */
@@ -1500,6 +1625,24 @@ pre.doc.template {
 /* A footnote about the list, not about the component, so it sits below the
    card's other hints rather than level with them. */
 .fileset-note { font-size: var(--pm-sm); color: var(--pm-ink-muted); }
+
+/* `<details class="spec">` renders on eight pages with no rule of its own, so
+   "What fails" was body-size text with no pointer and no marker, while the
+   sheet's three other disclosures all mark themselves. It sits under a score
+   chip inside a hint, so it takes the lighter treatment -- `.fileset-all`'s
+   rather than `.share-open`'s box, because a second bordered control beside the
+   score would ask the reader to choose between them. */
+details.spec { margin-top: var(--pm-space-2); }
+details.spec > summary {
+    display: list-item;
+    list-style-position: inside;
+    width: fit-content;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink-soft);
+    cursor: pointer;
+    padding: var(--pm-space-1) 0;
+}
+details.spec > summary:hover { color: var(--pm-ink); }
 
 @media (max-width: 720px) {
     .fileset-shape { width: 100%; max-width: none; min-width: 0; }
