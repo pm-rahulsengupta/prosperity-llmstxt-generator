@@ -270,8 +270,45 @@ def locale_conflicts(text: str) -> list[str]:
     lowered = text.lower()
     conflicts = []
     for american, british in LOCALE_PAIRS:
-        a = len(re.findall(rf"\b{american}\b", lowered))
-        b = len(re.findall(rf"\b{british}\b", lowered))
+        a = _count_inflected(american, lowered)
+        b = _count_inflected(british, lowered)
         if a and b:
             conflicts.append(f"{american} x{a} / {british} x{b}")
     return conflicts
+
+
+#: Pairs where the two spellings are different *words*, not different spellings
+#: of one word, so their inflections do not follow the pair.
+#:
+#: In British English the noun is `licence` and the verb is `license`, which
+#: makes "licences ... licensed ... licensing" correct rather than mixed. Same
+#: for `practice`/`practise` and `advice`/`advise`. Counting inflections across
+#: these reported a correctly written British file as inconsistent -- a false
+#: positive introduced by the fix for the false negative, which is the trade this
+#: whole sweep is supposed to avoid.
+#:
+#: `program`/`programme` is here for a different reason: a programme of works and
+#: a computer program are both correct in British English, and `programming` and
+#: `programmer` belong to the second whatever the document does elsewhere.
+AMBIGUOUS_PAIRS: frozenset[str] = frozenset({"license", "practice", "advice", "program"})
+
+
+def _count_inflected(word: str, lowered: str) -> int:
+    """Occurrences of a word, and of its inflections where they are safe to count.
+
+    `\\b{word}\\b` counted only the exact base form, so a file using `licensed`
+    twenty times beside `licence` once reported nothing: the American count was
+    zero and a conflict needs both sides. `optimize`/`optimised` and
+    `analyze`/`analysing` failed the same way.
+
+    The redspot case in the module docstring -- `licence` 22 times against
+    `license` 12 -- was caught only because that pair happens to appear in its
+    base form. The next one would not have been.
+
+    Inflections are skipped for `AMBIGUOUS_PAIRS`, where the two spellings are
+    different words rather than different spellings.
+    """
+    if word in AMBIGUOUS_PAIRS:
+        return len(re.findall(rf"\b{re.escape(word)}s?\b", lowered))
+    stem = word.removesuffix("e")
+    return len(re.findall(rf"\b{re.escape(stem)}(?:e|ed|es|ing|ation|ations)?\b", lowered))

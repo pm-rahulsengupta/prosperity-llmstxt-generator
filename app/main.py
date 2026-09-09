@@ -1977,10 +1977,31 @@ async def import_screaming_frog(
             f"different site. First was {off_site[0]}.",
         )
 
-    run = await repo.create_run(session, normalised, created_by=user.email, source=SOURCE_IMPORT)
-    run.max_pages = len(entries)
     brief = await repo.load_brief(session, domain)
     config = await repo.load_site_config(session, domain)
+
+    # Embargo applies to an import exactly as it does to a crawl. The patterns
+    # exist so certain pages are never stored, and an upload is a way for them to
+    # arrive that skips the fetch-time filter entirely.
+    #
+    # Filtered **before** the run is created, for two reasons. The counts below
+    # were taken from `entries` while it still held the embargoed rows, so a
+    # 500-row export with 50 embargoed showed "0 of 500" on a run that could only
+    # ever reach 450. And a refusal after `create_run` left the row behind:
+    # `session_scope` commits on success and `_import_error` returns a response
+    # rather than raising, so a rejected upload wrote a run that showed as pending
+    # forever and that `pending_run_for_domain` would later hand back as the
+    # existing run for this domain.
+    kept, suppressed = split_embargoed([e.url for e in entries], brief)
+    allowed = set(kept)
+    entries = [e for e in entries if e.url in allowed]
+    if not entries:
+        return _import_error(
+            request, user, "Every row in that export matches an embargo pattern for this client."
+        )
+
+    run = await repo.create_run(session, normalised, created_by=user.email, source=SOURCE_IMPORT)
+    run.max_pages = len(entries)
 
     plan = CrawlPlan(
         site_name=(config.label if config and config.label else domain),
@@ -1993,17 +2014,6 @@ async def import_screaming_frog(
     run.plan_source = SOURCE_IMPORT
     run.pattern = plan.site_pattern
     run.site_name = plan.site_name
-
-    # Embargo applies to an import exactly as it does to a crawl. The patterns
-    # exist so certain pages are never stored, and an upload is a way for them to
-    # arrive that skips the fetch-time filter entirely.
-    kept, suppressed = split_embargoed([e.url for e in entries], brief)
-    allowed = set(kept)
-    entries = [e for e in entries if e.url in allowed]
-    if not entries:
-        return _import_error(
-            request, user, "Every row in that export matches an embargo pattern for this client."
-        )
 
     await repo.replace_pages(session, run.id, entries)
     await repo.set_status(session, run, RunStatus.CRAWLING)
@@ -2264,6 +2274,12 @@ async def create_share(
         return _share_panel(request, domain, error="Unknown section.")
 
     wanted = days or settings.share_link_default_days
+    if wanted < 1:
+        # `days or default` guards 0 and nothing else, so -1 minted a link that
+        # was already expired. The client then gets the same "gone" page a revoked
+        # link produces, and the operator has no way to tell the two apart --
+        # which is worse than the refusal, because it looks like it worked.
+        return _share_panel(request, domain, error="A link has to last at least a day.")
     if wanted > settings.share_link_max_days:
         # Refused, never silently clamped: a link the operator believes lasts a
         # year and which dies in ninety days is the silent-cap failure the
@@ -2310,7 +2326,13 @@ async def revoke_share(
     """Not admin-only. Revoking is the safe direction, and needing an admin is how
     a link stays live over a weekend."""
     link = await repo.revoke_share_link(session, link_id, by=user.email, now=datetime.now(UTC))
-    if link is not None and link.domain != domain:
+    if link is None:
+        # It fell through to the redirect, so a revoke of a link that does not
+        # exist looked exactly like a successful one. The link is dead either
+        # way, but the operator could not tell a genuine 404 from a success --
+        # and the sibling branch below already answers this case with a 404.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such link.")
+    if link.domain != domain:
         # The id is a UUID and the domain is in the path; they must agree, or the
         # revoke button on one client's page could act on another's row.
         await session.rollback()

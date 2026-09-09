@@ -762,3 +762,71 @@ def test_no_rule_compares_hosts_by_substring_any_more():
             offenders.append(path.name)
 
     assert offenders == [], f"host compared by substring in: {offenders}"
+
+
+# -- state that outlived a refusal ------------------------------------------------
+
+
+def test_a_rejected_import_creates_no_run():
+    """`session_scope` commits on success and `_import_error` returns a response
+    rather than raising, so a refused upload wrote a run row that showed as
+    pending forever -- and `pending_run_for_domain` would later hand it back as
+    the existing run for that domain.
+
+    Asserted on the ordering rather than by driving the route, because the
+    failure is that the row exists at all: the filter has to run before
+    `create_run`, not after it.
+    """
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    handlers = re.split(r"\n(?=@app\.)", source)
+    handler = next(h for h in handlers if 'post("/imports/screaming-frog"' in h)
+
+    created = handler.index("repo.create_run(")
+    refusals = [m.start() for m in re.finditer(r"return _import_error\(", handler)]
+
+    assert refusals, "the handler no longer refuses anything; re-read this test"
+    assert all(at < created for at in refusals), (
+        "an import can still be refused after the run row is written"
+    )
+
+
+def test_the_page_cap_counts_what_survived_the_embargo():
+    """`run.max_pages` was taken from `entries` while it still held the embargoed
+    rows, so a 500-row export with 50 embargoed read "0 of 500" on a run that
+    could only ever reach 450. Same shape as the OkfBundle count."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    handlers = re.split(r"\n(?=@app\.)", source)
+    handler = next(h for h in handlers if 'post("/imports/screaming-frog"' in h)
+
+    filtered = handler.index("split_embargoed(")
+    counted = handler.index("run.max_pages = len(entries)")
+
+    assert filtered < counted, "the cap is counted before the filter that shrinks it"
+
+
+def test_a_share_link_cannot_be_minted_already_expired():
+    """`days or default` guards 0 and nothing else, so -1 minted a link that was
+    already dead -- and the client got the same "gone" page a revoked link
+    produces, which the operator could not tell apart."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+
+    assert "if wanted < 1:" in source, "only the upper bound on a link's life is checked"
+
+
+def test_revoking_a_link_that_does_not_exist_is_not_a_success():
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
+    handlers = re.split(r"\n(?=@app\.)", source)
+    handler = next(h for h in handlers if "revoke" in h and "link_id" in h)
+
+    assert "if link is None:" in handler, "a missing link still falls through to the redirect"
