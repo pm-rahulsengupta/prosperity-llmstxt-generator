@@ -36,7 +36,7 @@ from app.core.rules.full_rules import (
     DEFAULT_MAX_TOKENS,
     REPEAT_THRESHOLD,
 )
-from app.core.text import domain_of
+from app.core.text import domain_of, unquoted
 
 # Default ceiling for llms-full.txt. Roughly 1M characters ~ 250k tokens.
 # Derived from the budget FULL-009 enforces rather than written out, because the
@@ -168,10 +168,7 @@ def _unquoted(summary: str) -> str:
     form. Every leading marker is removed, not just one: `>>` and `> > ` are both
     a person or a model saying "this is the quote", twice.
     """
-    text = (summary or "").strip()
-    while text.startswith(">"):
-        text = text[1:].lstrip()
-    return text
+    return unquoted(summary)
 
 
 def _link_line(page: PageEntry) -> str:

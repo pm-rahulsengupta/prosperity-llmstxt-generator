@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
 from app.core.models import PageEntry, Section
-from app.core.text import domain_of
+from app.core.text import domain_of, unquoted
 
 __all__ = [
     "OKF_VERSION",
@@ -154,6 +154,9 @@ def render_okf(
     bundle = OkfBundle()
     timestamp = _stamp(generated_on)
     domain = domain_of(site_url)
+    # The stored summary arrives pre-quoted on some runs; YAML is not the place
+    # for a markdown blockquote marker.
+    site_summary = unquoted(site_summary)
     optional = optional or []
 
     # Slugs are assigned once, up front, so that a link written into a section

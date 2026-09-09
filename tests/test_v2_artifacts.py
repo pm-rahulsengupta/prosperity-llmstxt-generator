@@ -427,3 +427,19 @@ def test_md_006_skips_rather_than_passes_when_it_was_given_no_index():
     out = render_md_pages([_page("https://x.example/a/")], REPLACE)
 
     assert audit_markdown_pages(out.files).by_id("MD-006").outcome.value == "skipped"
+
+
+def test_a_pre_quoted_summary_does_not_reach_yaml_or_a_meta_description():
+    """The stored summary arrives carrying its own `>` on some runs. llms.txt
+    stripped it and shipped clean; okf wrote it into frontmatter and ai-info into
+    a published meta description, both with a literal `>` on the client's domain."""
+    quoted = "> Australian car rental company operating from airports."
+
+    bundle = render_okf(
+        "https://x.example", "X", quoted, [Section(name="S", pages=[_page("https://x.example/a/")])]
+    )
+    page = _render(site_summary=quoted)
+
+    assert ">" not in bundle.files["index.md"].split("---")[1]
+    assert 'content="&gt;' not in page.html
+    assert "Australian car rental" in page.html

@@ -22,6 +22,26 @@ _TITLE_SEPARATORS = (" | ", " - ", " \u2013 ", " \u2014 ", " : ")
 _MIN_KEEP_RATIO = 0.4
 
 
+def unquoted(summary: str) -> str:
+    """A site summary without a blockquote marker it arrived carrying.
+
+    Lives here rather than in `render` because three artifacts now consume the
+    stored summary and only one of them was stripping the marker. The llms.txt
+    renderer supplies its own `>`, so it removed any leading one and shipped a
+    clean file; `okf` wrote the raw value into YAML frontmatter and `ai_info`
+    into a `<meta name="description">`, so both published a literal `>` on a
+    client's domain -- measured on redspot, where the model returned its blurb
+    pre-quoted and the summary has been stored that way ever since.
+
+    Every leading marker is removed, not just one: `>>` and `> > ` are both a
+    person or a model saying "this is the quote", twice.
+    """
+    text = (summary or "").strip()
+    while text.startswith(">"):
+        text = text[1:].lstrip()
+    return text
+
+
 def safe_int(val: object) -> int:
     try:
         return int(float(str(val).strip()))

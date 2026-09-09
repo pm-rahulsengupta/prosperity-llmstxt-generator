@@ -39,7 +39,7 @@ from datetime import date
 from app.core.copyrules import locale_conflicts, superlatives_in
 from app.core.info_render import Html, el, join, safe_url, text
 from app.core.models import Section
-from app.core.text import domain_of
+from app.core.text import domain_of, unquoted
 
 __all__ = ["PAGE_PATH", "AiInfoPage", "render_ai_info"]
 
@@ -156,6 +156,8 @@ def render_ai_info(
     sections = sections or []
     domain = domain_of(site_url)
     stamp = (generated_on or date.today()).isoformat()
+    # A leading ">" belongs to llms.txt syntax, not to a published meta description.
+    site_summary = unquoted(site_summary)
 
     allowed = frozenset(u.rstrip("/") for u in (verified_urls or frozenset()))
     if site_url:
