@@ -41,11 +41,16 @@ from app.core.components import ComponentState
 
 __all__ = [
     "RUN_LOOK",
+    "SHARE_LOOK",
     "SURFACE_LOOK",
     "Look",
     "Tone",
+    "delivery_look",
     "look_for",
+    "priority_look",
     "run_look",
+    "score_look",
+    "share_look",
     "surface_look",
 ]
 
@@ -143,6 +148,66 @@ SURFACE_LOOK: dict[str, Look] = {
 def surface_look(surface) -> Look:
     value = getattr(getattr(surface, "state", None), "value", "") or ""
     return SURFACE_LOOK.get(value, Look(value.replace("_", " ") or "unknown", Tone.BUSY))
+
+
+#: A share link's own state. `live` is the only one that is a *claim about now*;
+#: the other two are history, and neither is a fault. Painting an expired link red
+#: put the colour that means "someone has to act" on a link that did exactly what
+#: it was minted to do.
+SHARE_LOOK: dict[str, Look] = {
+    "live": Look("live", Tone.GOOD),
+    "expired": Look("expired", Tone.QUIET, "It ran out; mint another if they still need it."),
+    "revoked": Look("revoked", Tone.QUIET, "Someone withdrew it."),
+}
+
+
+def share_look(state: str) -> Look:
+    return SHARE_LOOK.get(state, Look(state or "unknown", Tone.BUSY))
+
+
+def priority_look(priority) -> Look:
+    """How a Must / Should / Optional grade reads.
+
+    `Tone.BAD` on a Must is the same meaning it carries everywhere else -- someone
+    has to act -- so it does not collide. What did collide was the `wait` class
+    these tables reached for on a Should: lime is not in `Tone` at all, it survives
+    only for the "no LLM key" banner, and using it here gave one colour two jobs.
+
+    A Should and an Optional are graded, not faulted, so both are quiet. That the
+    grade deciding which of twenty-three components you must do is currently the
+    quietest thing on the card is a real problem, and it is a layout problem
+    rather than a colour one.
+    """
+    value = getattr(priority, "value", priority) or ""
+    return Look(str(value), Tone.BAD if str(value) == "Must" else Tone.QUIET)
+
+
+def delivery_look(report) -> Look:
+    """Whether a handover can go to a client as it stands.
+
+    `sendable` is `not defects` -- findings and limits do not block, because the
+    first is the deliverable and the second is a fact about it. So the chip has
+    two states and the red one means what red means everywhere else: someone has
+    to act, and it is us.
+    """
+    if getattr(report, "sendable", False):
+        return Look("Ready to send", Tone.GOOD)
+    return Look("Not ready", Tone.BAD, "There is a defect to fix before this goes out.")
+
+
+def score_look(report) -> Look:
+    """How a spec-check score reads.
+
+    Three outcomes, and the middle one is the reason this is a function. A file
+    with warnings and no errors is not failing and is not clean: painting it red
+    tells an operator to fix something that does not block a send, and painting it
+    green hides that the report has findings at all.
+    """
+    if getattr(report, "capped_by", "") == "error":
+        return Look("error", Tone.BAD, "A spec error. Do not send this file as it stands.")
+    if getattr(report, "failures", None):
+        return Look("findings", Tone.QUIET, "Nothing blocking; worth reading.")
+    return Look("clean", Tone.GOOD)
 
 
 #: What a crawl run is doing, in words rather than in the enum's own spelling.

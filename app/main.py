@@ -91,7 +91,15 @@ from app.core.onboarding import (
     split_embargoed,
 )
 from app.core.pipeline import rebuild
-from app.core.presentation import look_for, run_look, surface_look
+from app.core.presentation import (
+    delivery_look,
+    look_for,
+    priority_look,
+    run_look,
+    score_look,
+    share_look,
+    surface_look,
+)
 from app.core.pricing import SERP_CALL_USD, cost_of, rate_for, totals_of, usd
 from app.core.ranking import (
     PATTERN_AGENCY,
@@ -315,6 +323,15 @@ templates.env.globals["surface_look"] = surface_look
 # A run's status was spelled out inline in three templates, each deriving its
 # own pill colour, and one of them showed the enum's own wording.
 templates.env.globals["run_look"] = run_look
+# Three more that were still deriving colour inline. The guard that was meant to
+# catch them matched `pill {% if <word>.state`, and none of the four live
+# derivations were of that shape, so the test passed while the vocabulary drifted:
+# `bad` was carrying both "not published" and "Must", and `wait` -- which is not
+# in `Tone` at all -- was carrying "Should" and "has findings".
+templates.env.globals["score_look"] = score_look
+templates.env.globals["priority_look"] = priority_look
+templates.env.globals["share_look"] = share_look
+templates.env.globals["delivery_look"] = delivery_look
 
 
 def _asset_version(name: str) -> str:

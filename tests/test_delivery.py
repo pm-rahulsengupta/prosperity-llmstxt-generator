@@ -203,7 +203,7 @@ def test_the_summary_says_what_each_pile_is_for():
 def test_the_section_renders_all_three_lists():
     """The split has to survive into the page, not just the dataclass. An operator
     reading one merged list cannot tell what blocks the send."""
-    from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    from jinja2 import StrictUndefined
 
     report = check_delivery(
         llms_txt=GOOD_INDEX,
@@ -216,8 +216,21 @@ def test_the_section_renders_all_three_lists():
         },
     )
 
-    env = Environment(loader=FileSystemLoader("templates"), undefined=StrictUndefined)
-    html = env.get_template("partials/delivery.html").render(delivery=report, domain="example.com")
+    # The app's own environment, not a fresh one. `delivery.html` reads globals
+    # registered on it -- `delivery_look` decides the chip -- and a bare
+    # `Environment` renders a template that does not exist in production, which
+    # is the same trap `test_nav._render` documents. Strict undefined still
+    # applies, so a context key the route forgets fails here rather than in a 500.
+    from app.main import templates as app_templates
+
+    env = app_templates.env
+    previous, env.undefined = env.undefined, StrictUndefined
+    try:
+        html = env.get_template("partials/delivery.html").render(
+            delivery=report, domain="example.com"
+        )
+    finally:
+        env.undefined = previous
 
     assert "Fix before sending" in html
     assert "Report to the client" in html

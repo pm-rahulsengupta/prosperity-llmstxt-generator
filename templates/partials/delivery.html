@@ -7,9 +7,8 @@
 <div class="panel">
     <div class="spread">
         <h2>Before you send this</h2>
-        <span class="pill {{ 'ok' if delivery.sendable else 'bad' }}">
-            {{ 'Ready to send' if delivery.sendable else 'Not ready' }}
-        </span>
+        {% set verdict = delivery_look(delivery) %}
+        <span class="{{ verdict.css }}">{{ verdict.headline }}</span>
     </div>
 
     <p class="muted">{{ delivery.summary() }}</p>

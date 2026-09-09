@@ -115,7 +115,7 @@
         {% if report %}
         <p class="hint">
             Spec check:
-            <span class="pill {% if report.capped_by == 'error' %}bad{% elif report.failures %}wait{% else %}ok{% endif %}">
+            <span class="{{ score_look(report).css }}">
                 {{ report.score }}/100
             </span>
             {% if report.failures %}{{ report.failures|length }} to fix{% endif %}

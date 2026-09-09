@@ -6,7 +6,7 @@
    is the same one shown here. #}
 <div class="spread">
     <h2>Refine agents.md</h2>
-    <span class="pill {% if report.capped_by == 'error' %}bad{% elif report.failures %}wait{% else %}ok{% endif %}">
+    <span class="{{ score_look(report).css }}">
         {{ report.score }}/100
     </span>
 </div>

@@ -163,13 +163,31 @@ def test_no_template_derives_a_pill_class_inline():
 
     Every inline `{% if state == 'live' %}ok{% elif ... %}` was a place the
     mapping could drift, and two of them had already drifted from each other.
+
+    This matched `pill \\{%\\s*if\\s+\\w+\\.state` and therefore caught **none** of
+    the four derivations that were live when it was written: two keyed on
+    `report.capped_by`, one on `r.item.priority.value`, one on a bare `state`.
+    The test passed for weeks while the vocabulary drifted exactly as predicted --
+    `bad` came to carry both "not published" and "Must", and `wait`, which is not
+    in `Tone` at all, carried both "Should" and "has findings".
+
+    So it now matches the shape of the defect rather than one spelling of it: a
+    `class` attribute that opens with `pill` and contains a Jinja conditional,
+    whatever that conditional tests and whichever delimiter it uses. Both are
+    needed -- `delivery.html` derived its colour with the *expression* form,
+    `{{ 'ok' if delivery.sendable else 'bad' }}`, which a `{%`-only pattern walks
+    past just as readily.
+
+    A conditional *around* a whole pill (`{% if counts.live %}<span class="pill
+    ok">`) is not the defect: the colour there is a literal, decided once.
     """
+    inline_pill = re.compile(r'class="pill[^"]*\{[{%][^"]*\bif\b', re.S)
+
     offenders = []
     for path in (ROOT / "templates").rglob("*.html"):
         if "client/" in path.as_posix():
             continue  # the client report has its own vocabulary, tested separately
-        text = path.read_text(encoding="utf-8")
-        if re.search(r"pill \{%\s*if\s+\w+\.state", text):
+        if inline_pill.search(path.read_text(encoding="utf-8")):
             offenders.append(path.name)
 
     assert offenders == [], f"pill colour derived inline in: {offenders}"
@@ -303,3 +321,78 @@ def test_the_sidebar_emits_no_duplicate_ids():
     repeated = [value for value, count in Counter(ids).items() if count > 1]
 
     assert repeated == [], f"duplicate ids: {repeated}"
+
+
+# -- the four looks that were being derived in templates ------------------------------
+
+
+def test_a_must_is_the_only_priority_that_wears_a_colour():
+    """`Must` takes BAD for the reason BAD exists: someone has to act.
+
+    The collision was never `Must`; it was `Should` reaching for `wait`, which is
+    not in `Tone` at all and was simultaneously carrying "has findings" two
+    templates away.
+    """
+    from app.core.components import Priority
+    from app.core.presentation import Tone, priority_look
+
+    assert priority_look(Priority.MUST).tone is Tone.BAD
+    assert priority_look(Priority.SHOULD).tone is Tone.QUIET
+    assert priority_look(Priority.OPTIONAL).tone is Tone.QUIET
+    assert priority_look(Priority.MUST).headline == "Must"
+
+
+def test_a_file_with_findings_and_no_errors_is_neither_red_nor_green():
+    """The middle outcome is why this is a function rather than a ternary.
+
+    Red tells an operator to fix something that does not block a send; green
+    hides that the report has findings at all.
+    """
+
+    class _Report:
+        def __init__(self, capped_by="", failures=()):
+            self.capped_by = capped_by
+            self.failures = list(failures)
+
+    from app.core.presentation import Tone, score_look
+
+    assert score_look(_Report(capped_by="error", failures=["x"])).tone is Tone.BAD
+    assert score_look(_Report(failures=["x"])).tone is Tone.QUIET
+    assert score_look(_Report()).tone is Tone.GOOD
+
+
+def test_an_expired_share_link_is_not_a_fault():
+    """It did exactly what it was minted to do, so it does not wear red."""
+    from app.core.presentation import Tone, share_look
+
+    assert share_look("live").tone is Tone.GOOD
+    assert share_look("expired").tone is Tone.QUIET
+    assert share_look("revoked").tone is Tone.QUIET
+    assert share_look("something-new").tone is Tone.BUSY, "an unknown state is not a pass"
+
+
+def test_a_handover_with_a_defect_is_not_ready_to_send():
+    from app.core.presentation import Tone, delivery_look
+
+    class _Delivery:
+        def __init__(self, sendable):
+            self.sendable = sendable
+
+    assert delivery_look(_Delivery(True)).tone is Tone.GOOD
+    assert delivery_look(_Delivery(False)).tone is Tone.BAD
+
+
+def test_every_look_returns_a_class_the_stylesheet_defines():
+    """A `Look` whose tone has no rule renders as an unstyled span.
+
+    `.pill.quiet` is deliberately declared even though bare `.pill` is already
+    that, so QUIET is included here rather than special-cased.
+    """
+    from app.core.presentation import Tone
+
+    css = (ROOT / "static" / "css" / "main.css").read_text(encoding="utf-8")
+
+    for tone in Tone:
+        if tone is Tone.QUIET:
+            continue
+        assert f".pill.{tone.value}" in css, f"no rule for .pill.{tone.value}"

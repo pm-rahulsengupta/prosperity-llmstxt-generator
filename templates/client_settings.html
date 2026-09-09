@@ -199,7 +199,7 @@
                 <td>{{ link.section }}</td>
                 <td class="muted">{{ link.label or "—" }}</td>
                 <td>
-                    <span class="pill {% if state == 'live' %}ok{% else %}bad{% endif %}">{{ state }}</span>
+                    <span class="{{ share_look(state).css }}">{{ state }}</span>
                     {% if state == 'live' %}<span class="hint">until {{ link.expires_at.date() }}</span>{% endif %}
                 </td>
                 <td>

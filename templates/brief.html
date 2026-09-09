@@ -102,7 +102,7 @@
         <tbody>
         {% for r in readiness.failures %}
         <tr>
-            <td><span class="pill {% if r.item.priority.value == 'Must' %}bad{% else %}wait{% endif %}">{{ r.item.priority.value }}</span></td>
+            <td><span class="{{ priority_look(r.item.priority).css }}">{{ r.item.priority.value }}</span></td>
             <td>{{ r.item.component }}</td>
             <td class="muted">{{ r.detail }}</td>
         </tr>
