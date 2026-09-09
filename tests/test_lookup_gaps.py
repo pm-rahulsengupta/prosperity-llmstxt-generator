@@ -646,3 +646,53 @@ def test_a_superlative_used_as_a_claim_still_fails():
 
     assert check_copy("u", "T", "We offer the best rates for hire in every city").problems
     assert check_copy("u", "T", "Best rates for car hire across every Australian city").problems
+
+
+# -- 11. the same check, implemented twice, one of them wrong -----------------
+
+
+def _index(descriptions: list[str]) -> str:
+    body = "\n".join(
+        f"- [Page {i}](https://example.com/p{i}): {d}" for i, d in enumerate(descriptions)
+    )
+    return f"# Example\n\n> An example company.\n\n## Pages\n\n{body}\n"
+
+
+def test_the_audit_and_the_generator_now_agree_about_a_place_name():
+    """Two checks of the same thing that disagree are worse than either alone: the
+    operator is told to correct something the generator will not stop producing."""
+    from app.core.copyrules import check_copy
+    from app.core.rules import audit
+
+    line = "Airport, city and Holtze locations serving Northern Territory and Top End"
+
+    assert not check_copy("u", "T", line).problems
+    report = audit(_index([line]))
+    assert not any(f.rule_id == "IDX-013" and f.outcome.name == "FAIL" for f in report.findings)
+
+
+def test_a_consistently_british_file_no_longer_conflicts_with_itself():
+    """The audit's copy matched `\bprogram` with no closing boundary, so every
+    "programme" counted as both spellings."""
+    from app.core.rules import audit
+
+    report = audit(_index(["Our programme covers every programme run across the state each year"]))
+
+    failed = [f for f in report.findings if f.rule_id == "IDX-015" and f.outcome.name == "FAIL"]
+    assert not failed, failed and failed[0].examples
+
+
+def test_a_genuinely_mixed_file_still_fails_the_audit():
+    """Delegating must not disarm the rule."""
+    from app.core.rules import audit
+
+    report = audit(
+        _index(
+            [
+                "Drivers need a full license before collecting any vehicle from us",
+                "Drivers need a full licence before collecting any vehicle from us",
+            ]
+        )
+    )
+
+    assert any(f.rule_id == "IDX-015" and f.outcome.name == "FAIL" for f in report.findings)

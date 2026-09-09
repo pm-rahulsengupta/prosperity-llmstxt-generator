@@ -140,13 +140,13 @@ def check_copy(
     if opener := next((w for w in banned_openers if lowered.startswith(w)), None):
         verdict.problems.append(f"opens with {opener!r}, which describes the reader not the page")
 
-    if found := _real_superlatives(description, banned_superlatives):
+    if found := superlatives_in(description, banned_superlatives):
         verdict.problems.append("unverifiable superlative(s): " + ", ".join(found))
 
     return verdict
 
 
-def _real_superlatives(description: str, banned: tuple[str, ...]) -> list[str]:
+def superlatives_in(description: str, banned: tuple[str, ...] = BANNED_SUPERLATIVES) -> list[str]:
     """Banned words, minus the ones that are half of a name.
 
     "Top" is a superlative and "Top End" is the northern third of the Northern

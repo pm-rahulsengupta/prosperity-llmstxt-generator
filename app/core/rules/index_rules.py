@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from app.core.copyrules import locale_conflicts, superlatives_in
 from app.core.rules.document import ANY_MD_LINK, IndexDoc
 from app.core.rules.registry import Category, Rule, RuleContext, Severity, fail, ok, skip
 
@@ -46,24 +47,6 @@ DEFAULT_BANNED_SUPERLATIVES = (
     "cutting-edge",
     "proven",
     "expert",
-)
-# Curated pairs, not an -ize/-ise regex: the general pattern counts "enterprise",
-# "expertise", "advise" and "size", and reports nonsense.
-LOCALE_PAIRS = (
-    ("optimize", "optimise"),
-    ("analyze", "analyse"),
-    ("organize", "organise"),
-    ("recognize", "recognise"),
-    ("prioritize", "prioritise"),
-    ("specialize", "specialise"),
-    ("customize", "customise"),
-    ("maximize", "maximise"),
-    ("color", "colour"),
-    ("center", "centre"),
-    ("catalog", "catalogue"),
-    ("license", "licence"),
-    ("behavior", "behaviour"),
-    ("favorite", "favourite"),
 )
 IDENTITY_PATTERNS = (
     "/about",
@@ -338,13 +321,23 @@ def idx_012(ctx):
 
 
 def idx_013(ctx):
+    """Delegated to `copyrules.superlatives_in`, which the generator also uses.
+
+    This rule kept its own copy of the pattern and the two drifted. The generator
+    learned that "Top End" is the northern third of the Northern Territory and
+    this did not, so a file the generator considered clean was refused here over a
+    location page redspot.com.au actually has.
+
+    One implementation is the fix. Two checks of the same thing that disagree are
+    worse than either alone, because the operator is told to correct something the
+    generator will not stop producing.
+    """
     doc = _doc(ctx)
     banned = _superlatives(ctx)
-    pattern = re.compile(r"\b(" + "|".join(re.escape(w) for w in banned) + r")\b", re.I)
     hits = [
-        f"{m.group(0)} — {link.description[:70]}"
+        f"{word} — {link.description[:70]}"
         for link in doc.links
-        for m in pattern.finditer(link.description)
+        for word in superlatives_in(link.description, banned)
     ]
     if hits:
         return fail(
@@ -377,14 +370,19 @@ def idx_014(ctx):
 
 
 def idx_015(ctx):
+    """Delegated to `copyrules.locale_conflicts`, which the generator also uses.
+
+    The copy that lived here matched `\\bprogram` with no closing boundary, so
+    every "programme" counted as both spellings and a document written
+    consistently in British English reported a conflict with itself. The shared
+    function has anchored both ends since it was written.
+
+    This module also kept a second `LOCALE_PAIRS` of its own, three files from the
+    first, free to drift from it in either direction. Now there is one list and
+    one comparison.
+    """
     doc = _doc(ctx)
-    body = doc.text.lower()
-    mixed = []
-    for american, british in LOCALE_PAIRS:
-        a = len(re.findall(rf"\b{american}", body))
-        b = len(re.findall(rf"\b{british}", body))
-        if a and b:
-            mixed.append(f"{american} x{a} / {british} x{b}")
+    mixed = locale_conflicts(doc.text)
     if mixed:
         return fail(
             "IDX-015",
