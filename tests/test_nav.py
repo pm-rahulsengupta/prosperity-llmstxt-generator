@@ -392,6 +392,9 @@ def _render_context(**extra) -> dict:
             audits=0,
             config=0,
         ),
+        # None is a real value here, not a stub: the handover renders before any
+        # run has produced a bundle, and the section is absent rather than empty.
+        "delivery": None,
         **extra,
     }
     return context
@@ -547,6 +550,9 @@ def _overview_context(**extra):
         "dev_count": len(status.for_developer()),
         "bundle": None,
         "rendered": "",
+        # None is a real value here, not a stub: the handover renders before any
+        # run has produced a bundle, and the section is absent rather than empty.
+        "delivery": None,
         **extra,
     }
     return context

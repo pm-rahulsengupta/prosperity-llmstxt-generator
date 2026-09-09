@@ -225,11 +225,20 @@ def render_llms_full(
     site_name: str,
     pages: list[PageEntry],
     max_chars: int = DEFAULT_FULL_MAX_CHARS,
+    site_summary: str = "",
 ) -> str:
     """Build llms-full.txt, most important page first, within a character budget.
 
     Pages are emitted in importance order so that a truncated file keeps the pages
     that matter. Truncation is stated in the file rather than left silent.
+
+    `site_summary` is the same blockquote the index carries, and XF-001 exists to
+    check that the two agree: they are one claim about one organisation, and two
+    different ones mean one file was regenerated and the other was not, with no way
+    for a reader to tell which is current. It was never passed, so the full file
+    had no blockquote at all and XF-001 failed on every one this tool has produced
+    -- reported as "the full file has no blockquote summary" against redspot's
+    otherwise clean pair.
     """
     with_content = [p for p in pages if p.markdown]
     if not with_content:
@@ -243,6 +252,10 @@ def render_llms_full(
     shared, bodies = hoist_repeated(bodies)
 
     parts = [f"# {site_name}\n"]
+    # Counted against the budget like everything else, and placed before the shared
+    # section so the file opens the way the index does.
+    if summary := _unquoted(site_summary):
+        parts.append(f"\n> {summary}\n")
     if shared:
         parts.append(_shared_section(shared))
     used = sum(len(part) for part in parts)
@@ -328,7 +341,7 @@ def build_result(
     llms_full = ""
     if generate_full:
         included = [p for s in ordered for p in s.pages] + list(optional)
-        llms_full = render_llms_full(site_name, included, full_max_chars)
+        llms_full = render_llms_full(site_name, included, full_max_chars, site_summary=site_summary)
 
     return GenerationResult(
         site_url=site_url,

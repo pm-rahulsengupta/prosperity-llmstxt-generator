@@ -22,6 +22,8 @@
     {% endwith %}
 </div>
 
+{% if delivery %}{% include "partials/delivery.html" %}{% endif %}
+
 {% for effort, statuses in grouped.items() %}
 <div class="panel">
     <h3>{{ effort_labels[effort] }}</h3>

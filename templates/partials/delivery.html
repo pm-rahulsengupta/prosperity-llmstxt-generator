@@ -1,0 +1,98 @@
+{# Before you send this: what is wrong, and whose it is to fix.
+
+   Three lists rather than one, because the action on each is opposite. A defect
+   is ours and blocks the send; a finding is the client's and *is* the
+   deliverable; a limit is nobody's and only has to be said out loud, because a
+   gap a client is not told about gets read as one of the first two. #}
+<div class="panel">
+    <div class="spread">
+        <h2>Before you send this</h2>
+        <span class="pill {{ 'ok' if delivery.sendable else 'bad' }}">
+            {{ 'Ready to send' if delivery.sendable else 'Not ready' }}
+        </span>
+    </div>
+
+    <p class="muted">{{ delivery.summary() }}</p>
+
+    {% if delivery.index_score is not none or delivery.agents_score is not none %}
+    <p class="muted">
+        {% if delivery.index_score is not none %}
+        llms.txt scores <strong>{{ delivery.index_score }}/100</strong> against the
+        IDX, FULL and XF rules.
+        {% endif %}
+        {% if delivery.agents_score is not none %}
+        agents.md scores <strong>{{ delivery.agents_score }}/100</strong> against AGT.
+        {% endif %}
+        A score is not a verdict on whether to send — read the three lists below,
+        which say who each item belongs to.
+    </p>
+    {% endif %}
+
+    {% if delivery.files %}
+    <table>
+        <thead>
+            <tr><th scope="col">File</th><th scope="col">Size</th></tr>
+        </thead>
+        <tbody>
+            {% for name, size in delivery.files.items() %}
+            <tr>
+                <td><code>{{ name }}</code></td>
+                {# An empty file is the absence nobody notices: the name is in the
+                   list, so it reads as delivered. #}
+                <td>{{ '{:,}'.format(size) }} bytes{% if not size %} — empty{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+{% if delivery.defects %}
+<div class="panel">
+    <h3>Fix before sending — {{ delivery.defects | length }}</h3>
+    <p class="muted">
+        These are ours. The file is wrong rather than the site, so sending it
+        spends the client's trust on something we already know about.
+    </p>
+    {% for item in delivery.defects %}
+    <div class="finding">
+        <p><strong>{{ item.title }}</strong></p>
+        {% if item.detail %}<p class="muted">{{ item.detail }}</p>{% endif %}
+        {% if item.remedy %}<p class="hint">{{ item.remedy }}</p>{% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if delivery.findings %}
+<div class="panel">
+    <h3>Report to the client — {{ delivery.findings | length }}</h3>
+    <p class="muted">
+        These are about {{ domain }}, not about our files. They are what the audit
+        is for, so they belong in the deliverable rather than in the way of it.
+    </p>
+    {% for item in delivery.findings %}
+    <div class="finding">
+        <p><strong>{{ item.title }}</strong></p>
+        {% if item.detail %}<p class="muted">{{ item.detail }}</p>{% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if delivery.limits %}
+<div class="panel">
+    <h3>State in the handover — {{ delivery.limits | length }}</h3>
+    <p class="muted">
+        Nobody is at fault and nothing is broken. Each is a gap in what this run
+        could see, and a client who is not told will read it as a mistake — ours
+        or theirs.
+    </p>
+    {% for item in delivery.limits %}
+    <div class="finding">
+        <p><strong>{{ item.title }}</strong></p>
+        {% if item.detail %}<p class="muted">{{ item.detail }}</p>{% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

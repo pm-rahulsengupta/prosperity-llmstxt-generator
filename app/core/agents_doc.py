@@ -281,6 +281,14 @@ class AgentsDoc:
     rate_limit_note: str = ""
     contact_url: str = ""
     llms_txt_url: str = ""
+    #: Where llms.txt *will* be once this handover is published, for a site that
+    #: does not serve one yet. Kept apart from `llms_txt_url`, which means "a probe
+    #: fetched this and it was usable", because the two carry different warranties
+    #: and collapsing them would let an unverified URL inherit a verified one's
+    #: standing. It is deliberately absent from `claimed_urls` for the same reason:
+    #: the file does not assert the site has this, it tells the reader what ships
+    #: beside it.
+    llms_txt_pending: str = ""
 
     ucp_version: str = ""
     ucp_supported: tuple[str, ...] = ()

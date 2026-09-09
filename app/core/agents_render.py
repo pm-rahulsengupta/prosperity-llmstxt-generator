@@ -116,6 +116,20 @@ def _identity(doc: AgentsDoc) -> list[str]:
     if doc.llms_txt_url and not doc.has(Section.API_ACCESS):
         lines.append("")
         lines.append(f"Content overview for language models: {doc.llms_txt_url}")
+    elif doc.llms_txt_pending:
+        # The site does not serve one yet; this handover contains it. AGT-013 asks
+        # for the pointer because the two files are siblings and each helps a
+        # reader find the other -- and a bundle whose agents.md does not mention
+        # the llms.txt shipping beside it is internally inconsistent on arrival.
+        #
+        # Worded so it cannot be read as a probe result. Everything else in this
+        # file is something we fetched and saw; this is the one line that describes
+        # an intention, so it says so.
+        lines.append("")
+        lines.append(
+            f"Content overview for language models: {doc.llms_txt_pending} "
+            "(ships with this handover; publish both together)"
+        )
     return lines
 
 

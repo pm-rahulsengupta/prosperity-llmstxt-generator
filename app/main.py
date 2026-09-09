@@ -75,6 +75,7 @@ from app.core.components import (
     by_key,
 )
 from app.core.csv_source import parse_screaming_frog_csv
+from app.core.delivery import DeliveryReport, check_delivery
 from app.core.edits import EditTarget, apply_operations
 from app.core.evidence import JUDGED_BY, reports_for
 from app.core.metrics import DateRange
@@ -1087,6 +1088,13 @@ def _assemble(
     )
     doc.summary = f"> {brief.found_for}" if brief.found_for else ""
     doc.agent_guidance = f"Canonical site: {normalised}"
+    # A site that already serves llms.txt has `llms_txt_url` from the probe. One
+    # that does not, but whose handover contains a generated llms.txt, gets the
+    # path that file will occupy -- otherwise the bundle arrives with an agents.md
+    # that does not mention its own sibling, which is what AGT-013 caught on
+    # redspot. `_assemble` knows both facts and is the only place that does.
+    if not doc.llms_txt_url and run is not None and run.llmstxt:
+        doc.llms_txt_pending = f"{normalised.rstrip('/')}/llms.txt"
     doc.platform = tech.platform.value
     doc.notes.extend(tech.notes)
     catalog = build_catalog(probe, tech, site_name=doc.site_name)
@@ -2924,7 +2932,34 @@ async def developer_handover(
             **_component_context(request, user, domain, site_status, view),
             "grouped": site_status.by_effort(),
             "total": len(site_status.for_developer()),
+            "delivery": await _delivery_report(session, domain, view),
         },
+    )
+
+
+async def _delivery_report(session: AsyncSession, domain: str, view) -> DeliveryReport | None:
+    """The pre-send check for this domain's handover, or None when there is nothing
+    to send yet.
+
+    Assembled here rather than in `_assemble` because it needs the run's `stats`
+    and the operator's brief, and `_assemble` is deliberately a pure function of
+    the probe. Every input already existed and none of them were in one place.
+    """
+    if view is None or not view.bundle.artifacts:
+        return None
+
+    bodies = {a.name: (a.body or "") for a in view.bundle.artifacts}
+    run = await repo.latest_complete_run(session, domain)
+    brief = await repo.load_brief(session, domain)
+
+    return check_delivery(
+        llms_txt=bodies.get("llms.txt", ""),
+        llms_full=bodies.get("llms-full.txt", ""),
+        agents_md=bodies.get("agents.md", ""),
+        expected_files=bodies,
+        run_stats=(run.stats if run else {}) or {},
+        must_appear=set(brief.must_appear) if brief else set(),
+        generate_full=bool(run and run.generate_full),
     )
 
 
