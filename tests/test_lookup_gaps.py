@@ -19,7 +19,7 @@ from app.db import repo
 from app.llm.client import LLMClient, LLMUsage, Stage, _unfence
 from app.llm.prompts.plan import CrawlPlan, TemplateRule
 from app.llm.stages import select_urls
-from app.scrape.recon import RobotsInfo, SiteRecon, cluster_urls
+from app.scrape.recon import PathTemplate, RobotsInfo, SiteRecon, cluster_urls
 from app.scrape.sizing import CountFailure, assess, parse_results_count
 
 # -- 1. `site:` no longer returns an index estimate ---------------------------
@@ -327,3 +327,120 @@ def test_a_prose_response_says_what_it_actually_said():
 
     assert result is None
     assert "Classification: hub" in usage.fallbacks[0]
+
+
+# -- 6. an exclude rule that excluded nothing ---------------------------------
+
+
+def _shaped(paths: list[str], templates: list[str]) -> SiteRecon:
+    """A recon whose templates are the ones the plan names.
+
+    `cluster_urls` needs siblings before it will collapse a segment, so a handful
+    of URLs clusters to literal paths and a plan written against `/{slug}/{slug}`
+    would match nothing. A real run is not in that position: the plan is written
+    from the recon's own templates.
+    """
+    site = "https://www.redspot.com.au"
+    urls = [f"{site}{path}" for path in paths]
+    return SiteRecon(
+        site_url=site,
+        robots=RobotsInfo(fetched=True),
+        urls=urls,
+        templates=[
+            PathTemplate(
+                template=template,
+                count=len(urls),
+                examples=urls,
+            )
+            for template in templates
+        ],
+    )
+
+
+def test_a_specific_exclude_beats_a_broad_include():
+    """The redspot case: twelve exclude rules, twelve URLs crawled anyway.
+
+    `/customer-service/feedback/` is a member of both `/{slug}/{slug}` and
+    `/{slug}/feedback`. The loop asks each template whether it is included and
+    collects the URLs of the ones that are, so the exclude only ever declined to
+    add its own list -- it never removed what the broader include had added.
+    """
+    recon = _shaped(
+        ["/customer-service/feedback", "/about-us/careers", "/locations/hobart"],
+        ["/{slug}/{slug}", "/{slug}/feedback"],
+    )
+    plan = CrawlPlan(
+        rules=[
+            TemplateRule(template="/{slug}/{slug}", action="include", priority=1),
+            TemplateRule(template="/{slug}/feedback", action="exclude", priority=1),
+        ]
+    )
+
+    selected = select_urls(recon, plan, page_cap=100)
+
+    assert "https://www.redspot.com.au/customer-service/feedback" not in selected
+    assert "https://www.redspot.com.au/about-us/careers" in selected
+    assert "https://www.redspot.com.au/locations/hobart" in selected
+
+
+def test_a_specific_include_survives_a_broad_exclude():
+    """Precedence is specificity, not action. The narrower rule is the one that
+    was written about the URL, whichever way it points."""
+    recon = _shaped(
+        ["/deals/pricing", "/deals/boxing-day-sale"],
+        ["/{slug}/{slug}", "/{slug}/pricing"],
+    )
+    plan = CrawlPlan(
+        rules=[
+            TemplateRule(template="/{slug}/{slug}", action="exclude", priority=1),
+            TemplateRule(template="/{slug}/pricing", action="include", priority=1),
+        ]
+    )
+
+    selected = select_urls(recon, plan, page_cap=100)
+
+    assert "https://www.redspot.com.au/deals/pricing" in selected
+    assert "https://www.redspot.com.au/deals/boxing-day-sale" not in selected
+
+
+def test_templates_at_different_depths_do_not_compete():
+    """A one-segment rule says nothing about a two-segment URL."""
+    recon = _shaped(["/offers", "/offers/summer"], ["/{slug}", "/{slug}/{slug}"])
+    plan = CrawlPlan(
+        rules=[
+            TemplateRule(template="/{slug}", action="exclude", priority=1),
+            TemplateRule(template="/{slug}/{slug}", action="include", priority=1),
+        ]
+    )
+
+    selected = select_urls(recon, plan, page_cap=100)
+
+    assert "https://www.redspot.com.au/offers/summer" in selected
+    assert "https://www.redspot.com.au/offers" not in selected
+
+
+def test_an_operator_named_url_still_outranks_an_exclude():
+    """`must_appear` is the operator's own answer and beats a template rule."""
+    recon = _shaped(["/customer-service/feedback"], ["/{slug}/{slug}", "/{slug}/feedback"])
+    plan = CrawlPlan(
+        rules=[
+            TemplateRule(template="/{slug}/{slug}", action="include", priority=1),
+            TemplateRule(template="/{slug}/feedback", action="exclude", priority=1),
+        ]
+    )
+    brief = SiteBrief(
+        must_appear=frozenset({"https://www.redspot.com.au/customer-service/feedback"})
+    )
+
+    assert "https://www.redspot.com.au/customer-service/feedback" in select_urls(
+        recon, plan, 100, brief=brief
+    )
+
+
+def test_a_plan_with_no_excludes_is_untouched():
+    """The common shape must not pay for the fix, in behaviour or in work."""
+    recon = _recon([f"/p{i}" for i in range(20)])
+    plan = CrawlPlan(rules=[TemplateRule(template="/{slug}", action="include", priority=1)])
+
+    # 21, not 20: the homepage is always added.
+    assert len(select_urls(recon, plan, page_cap=100)) == 21

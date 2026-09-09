@@ -304,6 +304,7 @@ def select_urls(
 
     selected.sort(key=lambda pair: pair[0])
     ordered = list(dict.fromkeys(url for _, url in selected))
+    ordered = [url for url in ordered if url not in _excluded(ordered, plan)]
 
     # The homepage is the single most useful page in the file and can be excluded by
     # an over-eager rule. It is always crawled.
@@ -312,6 +313,75 @@ def select_urls(
         ordered.insert(0, home)
 
     return _with_required(ordered, recon, brief, page_cap)
+
+
+def _specificity(template: str) -> tuple[int, int]:
+    """How precisely a template names a URL. Higher is more specific.
+
+    Literal segments first, then length. `/{slug}/feedback` names one page;
+    `/{slug}/{slug}` names every two-segment path on the site. Both match
+    `/customer-service/feedback/`, and only one of them was written about it.
+    """
+    parts = [p for p in template.strip("/").split("/") if p]
+    return (sum(1 for p in parts if "{" not in p), len(template))
+
+
+def _excluded(urls: list[str], plan: CrawlPlan) -> set[str]:
+    """URLs an exclude rule names more precisely than any include rule does.
+
+    The loop above asks each *template* whether it is included and collects the
+    URLs of the ones that are. A URL matches by shape, so it belongs to every
+    template it fits -- `/customer-service/feedback/` is a member of both
+    `/{slug}/{slug}` and `/{slug}/feedback` -- and an exclude rule therefore only
+    ever declined to add its own list. It never removed what a broader include had
+    already added. Excluding was a no-op wherever a wider include existed, which on
+    any real plan is everywhere.
+
+    Measured on redspot.com.au: the planner wrote twelve exclude rules -- careers
+    sub-pages, a damage report form, a feedback form, a sponsorship page -- every
+    one of them naming a real cluster, and all twelve URLs were selected for the
+    crawl. Nothing reported it. This is the control the review gate is built
+    around: "one line here can exclude four thousand URLs before anything is
+    fetched", and on a site the size of CarsGuide it is also the bill.
+
+    Precedence is by specificity rather than by rule order, because the planner
+    emits general and specific rules together and neither position nor priority
+    says which was meant to win. The rule that names a URL most precisely is the
+    one written about it. A tie -- two templates equally specific, one including
+    and one excluding -- resolves to exclude, which is the recoverable direction:
+    a page wrongly left out is visible as a gap at the review gate, and a page
+    wrongly fetched has already been paid for and may already be in the file.
+
+    `must_appear` still overrides this. An operator naming a URL outranks a
+    template rule, and `_with_required` runs after.
+    """
+    rules = [(rule, _specificity(rule.template)) for rule in plan.rules]
+    if not any(not rule.includes for rule, _ in rules):
+        return set()
+
+    # Grouped by segment count so each URL is tested only against the templates it
+    # could possibly match. Without it this is every URL against every rule, which
+    # on CarsGuide's 11,909 URLs and 397 templates is 4.7M shape comparisons.
+    by_depth: dict[int, list] = {}
+    for rule, weight in rules:
+        depth = len([p for p in rule.template.strip("/").split("/") if p])
+        by_depth.setdefault(depth, []).append((rule, weight))
+
+    excluded: set[str] = set()
+    for url in urls:
+        segments = [s for s in urlparse(url).path.strip("/").split("/") if s]
+        matches = [
+            (weight, rule)
+            for rule, weight in by_depth.get(len(segments), ())
+            if _matches(url, rule.template)
+        ]
+        if not matches:
+            continue
+        best = max(weight for weight, _ in matches)
+        # Exclude wins a tie: see the docstring on which direction is recoverable.
+        if any(not rule.includes for weight, rule in matches if weight == best):
+            excluded.add(url)
+    return excluded
 
 
 def _with_required(
