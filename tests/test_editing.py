@@ -701,3 +701,64 @@ def test_a_service_page_is_not_crawl_junk():
 
     for junk in ("/search", "/cart?x=1", "/checkout", "/account/settings", "/login", "/feed"):
         assert _JUNK.search(junk), junk
+
+
+# -- one definition of "is this the same site" ------------------------------------
+
+
+def test_a_lookalike_domain_is_not_this_site():
+    """Three rules judged this with `host in url`, which is wrong in the
+    direction that matters.
+
+    AGT-009 exists because "a file quietly directing agents elsewhere is how a
+    hijack looks", and `"redspot.com.au" in "redspot.com.au.attacker.net"` is
+    True, so it passed the hijack. CAT-001 searched the whole URL rather than the
+    host, on a file whose own failure message is "Software will connect to it."
+    """
+    from app.core.text import same_site
+
+    for hostile in (
+        "https://redspot.com.au.attacker.net/x",
+        "https://myredspot.com.au/x",
+        "https://evil.example/?ref=redspot.com.au",
+        "https://redspot.com.au.evil.example/",
+    ):
+        assert not same_site(hostile, "https://redspot.com.au"), hostile
+
+
+def test_a_subdomain_is_this_site_and_www_is_not_a_different_one():
+    """The other direction of the same bug: a client filed with `www.` matched
+    nothing, so every same-site URL read as cross-origin. That is the
+    `rewrite_links` defect, which was live in three more places."""
+    from app.core.text import same_site
+
+    assert same_site("https://shop.redspot.com.au/x", "https://redspot.com.au")
+    assert same_site("https://www.redspot.com.au/x", "https://redspot.com.au")
+    assert same_site("https://redspot.com.au/x", "https://www.redspot.com.au")
+
+
+def test_it_accepts_a_bare_host_as_well_as_a_url():
+    """AGT-009's trusted set is built from bare hostnames. `urlparse` puts a
+    scheme-less string in `path` and leaves `netloc` empty, so the first version
+    compared every one of them as ""."""
+    from app.core.text import same_site
+
+    assert same_site("https://ucp.dev/profile", "ucp.dev")
+    assert same_site("https://x.myshopify.com/a", "x.myshopify.com")
+    assert not same_site("https://ucp.dev.evil.example/", "ucp.dev")
+
+
+def test_no_rule_compares_hosts_by_substring_any_more():
+    """The pattern, not the four instances. `host in value` on a URL is the shape
+    of the defect and it read as reasonable at every one of them."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "app" / "core"
+    offenders = []
+    for path in (root / "rules").glob("*.py"):
+        source = re.sub(r"#.*", "", path.read_text(encoding="utf-8"))
+        if re.search(r"host\s+(?:not\s+)?in\s+\w*(?:url|value|\.lower\(\))", source):
+            offenders.append(path.name)
+
+    assert offenders == [], f"host compared by substring in: {offenders}"

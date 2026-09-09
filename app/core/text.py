@@ -22,6 +22,50 @@ _TITLE_SEPARATORS = (" | ", " - ", " \u2013 ", " \u2014 ", " : ")
 _MIN_KEEP_RATIO = 0.4
 
 
+def same_site(url: str, site: str) -> bool:
+    """Whether `url` is on `site`, or on a subdomain of it.
+
+    Three rules judged this with `host in url`, which is wrong in both
+    directions and wrong in the direction that matters:
+
+    * `"redspot.com.au" in "redspot.com.au.attacker.net"` is **True**, so a
+      suffix-extended lookalike passed as the site's own. AGT-009 exists because
+      "a file quietly directing agents elsewhere is how a hijack looks", and it
+      passed the hijack. CAT-001 searched the whole URL rather than the host, so
+      `https://evil.example/?ref=redspot.com.au` passed it too, on a file whose
+      own failure message is "Software will connect to it."
+    * `myredspot.com.au` contains `redspot.com.au` and is a different company.
+    * In the other direction, a site filed as `www.example.com` matched nothing
+      on `example.com`, so every same-site URL read as cross-origin. That is the
+      `rewrite_links` bug from this morning, unfixed in three more places.
+
+    Compared on hosts through `domain_of`, so one spelling of a domain decides
+    it -- the rule `58b4107` applied to the tables and `domain_of` states. A
+    subdomain counts: `shop.example.com` is the site's own infrastructure, and a
+    leading dot is what separates it from `notexample.com`.
+    """
+    host = _host(url)
+    base = _host(site)
+    if not host or not base:
+        return False
+    return host == base or host.endswith("." + base)
+
+
+def _host(value: str) -> str:
+    """The comparable host of a URL **or** of a bare hostname.
+
+    `domain_of` runs `urlparse`, which puts a scheme-less string in `path` and
+    leaves `netloc` empty -- so a bare host like `ucp.dev`, which is exactly what
+    AGT-009's trusted set is built from, compared as "". Callers hold both
+    shapes and neither is wrong, so the normalisation belongs here rather than at
+    four call sites that would each have to remember.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    return domain_of(text if "//" in text else f"//{text}")
+
+
 def unquoted(summary: str) -> str:
     """A site summary without a blockquote marker it arrived carrying.
 

@@ -28,6 +28,7 @@ import json
 import re
 
 from app.core.rules.registry import Category, Rule, Severity, fail, ok, skip
+from app.core.text import same_site
 
 LINK_LINE = re.compile(r"^\s+Link:\s*(.+?)\s*$", re.M)
 LINK_TARGET = re.compile(r"<([^>]+)>")
@@ -194,13 +195,15 @@ def _paths_are_root_relative(ctx: DeliveryContext):
     external OpenAPI document is legitimate.
     """
     external: list[str] = []
-    host = ctx.site_url.split("//")[-1].strip("/").lower()
+    # `same_site`, not `host not in value`. Substring containment passed
+    # `https://example.com.attacker.net/x` as this site's own, and refused every
+    # genuine same-site URL on a client filed with a `www.` prefix.
     for link in _links(ctx.text):
         target = LINK_TARGET.search(link)
         if target is None:
             continue
         value = target.group(1)
-        if value.startswith(("http://", "https://")) and (not host or host not in value.lower()):
+        if value.startswith(("http://", "https://")) and not same_site(value, ctx.site_url):
             external.append(value)
 
     if not external:
@@ -265,8 +268,9 @@ def _entries_trace_to_a_probe(ctx: DeliveryContext):
 
     entries = document.get("entries") or []
     urls = [e.get("url", "") for e in entries if isinstance(e, dict)]
-    host = ctx.site_url.split("//")[-1].strip("/").lower()
-    foreign = [u for u in urls if u and host and host not in u.lower()]
+    # Searched the whole URL, so `https://evil.example/?ref=example.com` passed
+    # on a file whose failure message is "Software will connect to it."
+    foreign = [u for u in urls if u and not same_site(u, ctx.site_url)]
 
     if not foreign:
         return ok("CAT-001", f"{len(urls)} entr(y/ies), all on this site")

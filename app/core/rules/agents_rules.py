@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from app.core.rules.registry import Category, Rule, Severity, fail, ok, skip
+from app.core.text import domain_of, same_site
 
 # Contact details a merchant would not want handed to every agent that reads the
 # file. Shopify's own documentation warns against emitting these, and the warning
@@ -272,12 +273,12 @@ def _same_origin(ctx: AgentsContext):
     # on the site's own authority. Shopify's profile names `*.myshopify.com`, so
     # without this the rule fires on every correctly configured store -- flagging
     # the platform's canonical endpoint as a possible hijack.
-    trusted = {host, "ucp.dev"} | {urlparse(u).netloc.lower() for u in ctx.verified_urls if u}
-    offsite = [
-        u
-        for u in _urls(_body(ctx))
-        if not any(t and t in urlparse(u).netloc.lower() for t in trusted)
-    ]
+    trusted = {host, "ucp.dev"} | {domain_of(u) for u in ctx.verified_urls if u}
+    # `same_site`, not substring containment. `"redspot.com.au" in
+    # "redspot.com.au.attacker.net"` is True, so this rule -- which exists
+    # because "a file quietly directing agents elsewhere is how a hijack looks"
+    # -- passed the hijack.
+    offsite = [u for u in _urls(_body(ctx)) if not any(t and same_site(u, t) for t in trusted)]
     if not offsite:
         return ok("AGT-009")
     return fail(
