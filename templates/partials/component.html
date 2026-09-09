@@ -17,12 +17,22 @@
    mean a published directory silently lost its shape and its caveat -- the same
    trap `client_report._files` documents. #}
 {% set fileset = file_sets.get(status.component.artifact) if file_sets is defined else None %}
+{# The card's heading level is the host page's business, not this partial's.
+
+   Hard-coded `h4` landed at a different depth on each of the three pages that
+   include this: `checklist.html` ran h1 -> h4 -> h3, a skip and then a level
+   going backwards, and `family.html` ran h1 -> h4 -> h2. Only `handover.html`
+   was right, and only because `delivery.html` happens to contribute the h2.
+
+   Defaults to 4, which is what every caller rendered before, so a page that
+   does not set it is unchanged. #}
+{% set level = heading_level | default(4) %}
 <div class="component {{ status.state.value }}">
     <div class="spread">
-        <h4>
+        <h{{ level }}>
             {{ status.component.title }}
             <span class="{{ look.css }}">{{ look.headline }}</span>
-        </h4>
+        </h{{ level }}>
         <span class="muted">{{ status.component.priority.value }}</span>
     </div>
 

@@ -117,3 +117,40 @@ def test_every_scroll_container_can_take_focus(path: Path):
             missing.append(tag[:90])
 
     assert missing == [], f"{path.name}: scroll container not focusable: {missing}"
+
+
+#: Partials included by more than one page. A heading level hard-coded in one of
+#: these is right on at most one of its hosts.
+_SHARED = ("partials/component.html",)
+
+
+@pytest.mark.parametrize("name", _SHARED)
+def test_a_shared_partial_does_not_hard_code_its_heading_level(name: str):
+    """Depth is the host page's business.
+
+    `component.html` hard-coded `h4` and is included on three pages at three
+    different depths: `checklist.html` ran h1 -> h4 -> h3, a skip and then a
+    level running backwards, and `family.html` ran h1 -> h4 -> h2. Only
+    `handover.html` was correct, and only because `delivery.html` happens to
+    contribute the missing h2.
+    """
+    text = _stripped((TEMPLATES / name).read_text(encoding="utf-8"))
+
+    hard_coded = re.findall(r"<h[1-6][\s>]", text)
+
+    assert hard_coded == [], f"{name} fixes its own heading depth: {hard_coded}"
+
+
+def test_every_page_including_a_shared_partial_states_the_depth():
+    """A host that does not pass one gets the default, which is right for some
+    pages and wrong for others -- so the default must be a decision, not an
+    oversight. Asserted per host rather than globally for that reason."""
+    for name in _SHARED:
+        for path in _templates():
+            text = _stripped(path.read_text(encoding="utf-8"))
+            if f'include "{name}"' not in text:
+                continue
+            include_line = next(ln for ln in text.splitlines() if f'include "{name}"' in ln)
+            assert "heading_level" in include_line or path.name == "handover.html", (
+                f"{path.name} includes {name} without saying at what depth"
+            )

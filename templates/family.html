@@ -17,7 +17,7 @@
 {% if statuses %}
 <div class="panel">
     {% for status in statuses %}
-    {% include "partials/component.html" %}
+    {% with heading_level = 2 %}{% include "partials/component.html" %}{% endwith %}
     {% endfor %}
 </div>
 
