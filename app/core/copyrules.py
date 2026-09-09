@@ -101,7 +101,33 @@ class CopyVerdict:
 
 
 def _superlative_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
-    return re.compile(r"\b(" + "|".join(re.escape(w) for w in words) + r")\b", re.I)
+    # Longest first. Alternation is leftmost-first, so with `best` listed before
+    # `best-in-class` the `\b` after `best` matched at the hyphen and the report
+    # named the wrong term -- an operator then greps the file for "best" and
+    # finds a word that is not the problem.
+    ordered = sorted(words, key=len, reverse=True)
+    return re.compile(r"\b(" + "|".join(re.escape(w) for w in ordered) + r")\b", re.I)
+
+
+def opens_with_banned(description: str, banned: tuple[str, ...] = BANNED_OPENERS) -> str:
+    """The banned opener this description starts with, or "".
+
+    `startswith` on a bare stem flagged "Discovery Bay depot hours" as opening
+    with `discover`, "Explorer bookings" as `explore` and "Learning resources for
+    apprentices" as `learn`. Each is a real description of a real page, marked as
+    a call to action -- and `enforce_copy_rules` regenerates a flagged line, so a
+    correct description was rewritten and then shipped still flagged.
+
+    The opener has to be a whole word: the next character must not be a letter.
+    One definition, because there were two -- IDX-014 in the audit and
+    `check_copy` in the generator -- and two copies of a rule about the same
+    words is exactly how IDX-013 and IDX-015 drifted apart.
+    """
+    text = (description or "").strip().lower()
+    for word in banned:
+        if text == word or (text.startswith(word) and not text[len(word) :][:1].isalpha()):
+            return word
+    return ""
 
 
 def check_copy(
@@ -136,8 +162,7 @@ def check_copy(
     elif len(description) > max_description:
         verdict.problems.append(f"description is {len(description)} chars (max {max_description})")
 
-    lowered = description.lower()
-    if opener := next((w for w in banned_openers if lowered.startswith(w)), None):
+    if opener := opens_with_banned(description, banned_openers):
         verdict.problems.append(f"opens with {opener!r}, which describes the reader not the page")
 
     if found := superlatives_in(description, banned_superlatives):

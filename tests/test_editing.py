@@ -639,3 +639,65 @@ def test_a_rename_onto_an_existing_section_does_not_steal_its_row():
 
     assert [s.name for s in result.sections] == ["Beta"]
     assert result.sections[0].description == "second", "Beta keeps its own description"
+
+
+# -- checks that flagged correct copy --------------------------------------------
+
+
+def test_a_word_that_merely_begins_with_a_banned_opener_is_not_flagged():
+    """`startswith` on a bare stem flagged real descriptions of real pages.
+
+    Worse than a cosmetic false positive: `enforce_copy_rules` regenerates a
+    flagged line, so a correct description was rewritten by a model and then
+    shipped still flagged.
+    """
+    from app.core.copyrules import opens_with_banned
+
+    for fine in (
+        "Discovery Bay depot hours and access.",
+        "Explorer bookings for touring groups.",
+        "Learning resources for apprentice technicians.",
+        "Understanding Bay area routes.",
+    ):
+        assert opens_with_banned(fine) == "", fine
+
+    for flagged in ("Learn about authentication.", "Discover our fleet.", "Explore the range."):
+        assert opens_with_banned(flagged) != "", flagged
+
+
+def test_one_definition_of_a_banned_opener():
+    """There were three: `check_copy`, IDX-014, and the tuple itself. Two copies
+    of a rule about the same words is how IDX-013 and IDX-015 drifted apart."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    audit = (root / "app" / "core" / "rules" / "index_rules.py").read_text(encoding="utf-8")
+
+    assert "opens_with_banned" in audit, "IDX-014 reimplements the opener test"
+    assert ".lower().startswith(banned)" not in audit
+
+
+def test_a_hyphenated_superlative_is_reported_by_its_whole_name():
+    """Alternation is leftmost-first, so `best` before `best-in-class` matched at
+    the hyphen and the report named a word that is not the problem."""
+    from app.core.copyrules import superlatives_in
+
+    assert superlatives_in("best-in-class rates") == ["best-in-class"]
+    assert superlatives_in("the best rates") == ["best"]
+
+
+def test_a_service_page_is_not_crawl_junk():
+    """Unanchored substrings dropped real pages from the crawl plan before the
+    model or the operator saw them, and the exclusion read as a decision."""
+    from app.llm.stages import _JUNK
+
+    for real in (
+        "/services/search-engine-optimisation/{slug}",
+        "/services/cartage-and-logistics",
+        "/accounting-services",
+        "/feedback",
+    ):
+        assert not _JUNK.search(real), real
+
+    for junk in ("/search", "/cart?x=1", "/checkout", "/account/settings", "/login", "/feed"):
+        assert _JUNK.search(junk), junk

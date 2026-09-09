@@ -35,19 +35,28 @@ logger = logging.getLogger(__name__)
 
 # Templates that are almost never worth a crawl slot on any site. These are the
 # deterministic prior; the LLM may override them, a human may override the LLM.
+# Every single-word path segment is bounded. Unanchored, `/search` matched
+# `/services/search-engine-optimisation/{slug}`, `/cart` matched
+# `/services/cartage-and-logistics`, `/account` matched `/accounting-services`
+# and `/feed` matched `/feedback` -- so a client's actual service pages were
+# dropped from the crawl plan before the model or the operator ever saw them,
+# and the exclusion read as a considered decision rather than a bug.
+#
+# `(?=/|$|\?)` rather than ``: a word boundary is satisfied by the `-` in
+# `/search-engine`, which is exactly the case that was wrong.
 JUNK_PATTERNS = (
     r"/page/\{",
     r"/tag/",
     r"/tags/",
     r"/author/",
     r"/category/\{[^}]+\}/page",
-    r"/search",
-    r"/cart",
-    r"/checkout",
-    r"/account",
-    r"/login",
+    r"/search(?=/|$|\?)",
+    r"/cart(?=/|$|\?)",
+    r"/checkout(?=/|$|\?)",
+    r"/account(?=/|$|\?)",
+    r"/login(?=/|$|\?)",
     r"/wp-json",
-    r"/feed",
+    r"/feed(?=/|$|\?)",
     r"\?",
     r"/amp$",
     r"/print$",

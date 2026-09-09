@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from app.core.copyrules import locale_conflicts, superlatives_in
+from app.core.copyrules import locale_conflicts, opens_with_banned, superlatives_in
 from app.core.rules.document import ANY_MD_LINK, IndexDoc
 from app.core.rules.registry import Category, Rule, RuleContext, Severity, fail, ok, skip
 
@@ -353,10 +353,14 @@ def idx_013(ctx):
 def idx_014(ctx):
     doc = _doc(ctx)
     banned = _openers(ctx)
+    # Delegates rather than reimplementing. `startswith` on a bare stem flagged
+    # "Discovery Bay depot hours" and "Learning resources for apprentices" as
+    # calls to action. This was the third copy of a rule about the same words,
+    # and two copies is how IDX-013 and IDX-015 drifted apart.
     hits = [
         f"{link.description[:70]}"
         for link in doc.links
-        if link.description.strip().lower().startswith(banned)
+        if opens_with_banned(link.description, banned)
     ]
     if hits:
         return fail(
