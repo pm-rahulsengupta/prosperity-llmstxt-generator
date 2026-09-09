@@ -143,7 +143,20 @@ class Report:
     applicable_weight: float = 0.0
     passed_weight: float = 0.0
     # Set when a severity cap held the score down, so the number is explicable.
+    # Empty where no cap bound, even if a rule of that severity failed.
     capped_by: str = ""
+    #: Share of the rule set's weight that actually ran, 0-100. A score without
+    #: it is a number whose sample the reader cannot see.
+    coverage: int = 0
+    #: Rules that raised. A fault, not a limit: they leave the denominator, so a
+    #: broken rule raises the score.
+    crashed: list[str] = field(default_factory=list)
+    #: Findings whose rule is not in the set being scored. Otherwise invisible.
+    unknown: list[str] = field(default_factory=list)
+
+    @property
+    def fully_covered(self) -> bool:
+        return self.coverage >= 100
 
     @property
     def failures(self) -> list[Finding]:
@@ -161,6 +174,14 @@ class Report:
         return finding is not None and finding.failed
 
 
+#: What `Rule.run` writes into a finding when the rule itself raised.
+_CRASH_PREFIX = "rule raised "
+
+
+def _crashed(finding: Finding) -> bool:
+    return (finding.reason or "").startswith(_CRASH_PREFIX)
+
+
 def score_report(findings: Iterable[Finding], rules: dict[str, Rule]) -> Report:
     """Share of applicable severity weight that passed, as 0-100.
 
@@ -172,12 +193,39 @@ def score_report(findings: Iterable[Finding], rules: dict[str, Rule]) -> Report:
 
     for finding in report.findings:
         rule = rules.get(finding.rule_id)
-        if rule is None or finding.outcome is Outcome.SKIPPED:
+        if rule is None:
+            # A finding whose rule is not in this set vanished from the numerator,
+            # the denominator *and* the skip list -- so it was invisible in a
+            # report that lists everything else. Usually a rule audited against
+            # the wrong set; either way it is a bug, and a silent one.
+            report.unknown.append(finding.rule_id)
+            continue
+        if finding.outcome is Outcome.SKIPPED:
             continue
         weight = SEVERITY_WEIGHT[rule.severity]
         report.applicable_weight += weight
         if finding.outcome is Outcome.PASS:
             report.passed_weight += weight
+
+    # How much of the rule set actually ran. The Checker's methodology states the
+    # rule this implements: "A score always carries its sample ... 71% at full
+    # coverage and 71% at half coverage are different findings, and a bare number
+    # hides which one you are looking at."
+    #
+    # Measured on redspot: 79/100 over 26 of 31 rules, because five IDX rules
+    # skip for want of a profile and network results that no caller passes. The
+    # number was true and the reader had no way to know it was true of five
+    # sixths of the rubric.
+    total = sum(SEVERITY_WEIGHT[rule.severity] for rule in rules.values())
+    report.coverage = round(100 * report.applicable_weight / total) if total else 0
+
+    # A rule that raised is not a rule that did not apply. `Rule.run` turns any
+    # exception into a SKIPPED, which leaves the denominator -- so a broken rule
+    # *raises* the score, and the inflation is largest exactly when something is
+    # most wrong. Counted separately so it reads as a fault rather than a limit.
+    report.crashed = [
+        f.rule_id for f in report.findings if f.outcome is Outcome.SKIPPED and _crashed(f)
+    ]
 
     raw = (
         round(100 * report.passed_weight / report.applicable_weight)
@@ -192,13 +240,19 @@ def score_report(findings: Iterable[Finding], rules: dict[str, Rule]) -> Report:
     #
     #   90-100  publishable        80-89  minor issues only
     #   50-79   a warning failed   0-49   an error failed
+    # `capped_by` is set only where the cap actually lowered the number. It used
+    # to be set whenever a rule of that severity failed, so a report scoring 30
+    # on its own merits claimed a cap had held it down -- and the panel then told
+    # an operator the score was capped when nothing had capped it.
     failed_severities = {rules[f.rule_id].severity for f in report.failures if f.rule_id in rules}
     if Severity.ERROR in failed_severities:
+        if raw > 49:
+            report.capped_by = "error"
         raw = min(raw, 49)
-        report.capped_by = "error"
     elif Severity.WARNING in failed_severities:
+        if raw > 79:
+            report.capped_by = "warning"
         raw = min(raw, 79)
-        report.capped_by = "warning"
 
     report.score = raw
     return report

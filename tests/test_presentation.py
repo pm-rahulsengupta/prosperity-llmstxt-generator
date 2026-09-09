@@ -396,3 +396,106 @@ def test_every_look_returns_a_class_the_stylesheet_defines():
         if tone is Tone.QUIET:
             continue
         assert f".pill.{tone.value}" in css, f"no rule for .pill.{tone.value}"
+
+
+# -- a score that carries its sample ----------------------------------------------
+
+
+def _report(*findings, rules=None):
+    from app.core.rules.registry import score_report
+
+    return score_report(findings, rules or {})
+
+
+def test_a_score_reports_how_much_of_the_rubric_ran():
+    """The Checker's methodology names the rule this implements: "A score always
+    carries its sample ... 71% at full coverage and 71% at half coverage are
+    different findings, and a bare number hides which one you are looking at."
+
+    Measured on redspot: 79/100 over 26 of 31 rules, because five IDX rules skip
+    for want of a profile and network results that no caller passes.
+    """
+    from app.core.rules.registry import (
+        Category,
+        Finding,
+        Outcome,
+        Rule,
+        Severity,
+        score_report,
+    )
+
+    rules = {
+        rid: Rule(rid, rid, Category.INDEX, Severity.ERROR, lambda c: None, "")
+        for rid in ("A", "B", "C", "D")
+    }
+    findings = [
+        Finding("A", Outcome.PASS),
+        Finding("B", Outcome.PASS),
+        Finding("C", Outcome.SKIPPED, reason="no profile"),
+        Finding("D", Outcome.SKIPPED, reason="no network"),
+    ]
+
+    report = score_report(findings, rules)
+
+    assert report.score == 100, "what ran, passed"
+    assert report.coverage == 50, "and only half of it ran"
+    assert report.fully_covered is False
+
+
+def test_capped_by_is_empty_when_no_cap_bound():
+    """It was set whenever a rule of that severity failed, so a report scoring 30
+    on its own merits claimed a cap had held it down."""
+    from app.core.rules.registry import (
+        Category,
+        Finding,
+        Outcome,
+        Rule,
+        Severity,
+        score_report,
+    )
+
+    rules = {
+        "E": Rule("E", "E", Category.INDEX, Severity.ERROR, lambda c: None, ""),
+        **{
+            rid: Rule(rid, rid, Category.INDEX, Severity.INFO, lambda c: None, "")
+            for rid in ("F", "G", "H", "I", "J", "K", "L")
+        },
+    }
+    # One error failing, and enough infos also failing to put the raw score below
+    # the cap on its own.
+    findings = [Finding("E", Outcome.FAIL)] + [
+        Finding(rid, Outcome.FAIL) for rid in ("F", "G", "H", "I", "J", "K", "L")
+    ]
+
+    report = score_report(findings, rules)
+
+    assert report.score <= 49
+    assert report.capped_by == "", "nothing was capped; the score was already lower"
+
+
+def test_a_rule_that_raises_is_reported_rather_than_quietly_raising_the_score():
+    """`Rule.run` turns any exception into a SKIPPED, which leaves the
+    denominator -- so a broken rule inflates the score, and the inflation is
+    largest exactly when something is most wrong."""
+    from app.core.rules.registry import Category, Rule, RuleContext, Severity, score_report
+
+    def explodes(ctx):
+        raise ValueError("boom")
+
+    rules = {"X": Rule("X", "X", Category.INDEX, Severity.ERROR, explodes, "")}
+    report = score_report([rules["X"].run(RuleContext())], rules)
+
+    assert report.crashed == ["X"]
+    assert report.coverage == 0
+
+
+def test_a_finding_with_no_rule_in_the_set_is_surfaced():
+    """It vanished from the numerator, the denominator and the skip list -- so it
+    was invisible in a report that lists everything else."""
+    from app.core.rules.registry import Category, Finding, Outcome, Rule, Severity, score_report
+
+    rules = {"A": Rule("A", "A", Category.INDEX, Severity.ERROR, lambda c: None, "")}
+
+    report = score_report([Finding("A", Outcome.PASS), Finding("ZZZ", Outcome.FAIL)], rules)
+
+    assert report.unknown == ["ZZZ"]

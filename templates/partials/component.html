@@ -129,7 +129,21 @@
                 {{ report.score }}/100
             </span>
             {% if report.failures %}{{ report.failures|length }} to fix{% endif %}
-            {% if report.skipped %}<span class="muted">&middot; {{ report.skipped|length }} not checked</span>{% endif %}
+            {# The sample, beside the score. "A score always carries its sample":
+               79 at full coverage and 79 at 89% are different findings, and the
+               count of skipped rules alone does not say how much of the rubric
+               that was. #}
+            {% if not report.fully_covered %}
+            <span class="muted">
+                &middot; {{ report.coverage }}% of the checks ran
+                ({{ report.skipped|length }} could not)
+            </span>
+            {% endif %}
+            {% if report.crashed %}
+            {# A rule that raised leaves the denominator, so a broken rule raises
+               the score. That is a fault of ours, not a limit of the file. #}
+            <span class="pill bad">{{ report.crashed|length }} check(s) errored</span>
+            {% endif %}
         </p>
         {% if report.failures %}
         <details class="spec">
