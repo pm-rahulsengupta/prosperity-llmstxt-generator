@@ -1182,6 +1182,16 @@ def _assemble(
             result.site_summary,
             result.sections,
             result.optional,
+            # The run's own date, not today's. Without it `render_okf` stamps
+            # `datetime.now()`, so every regeneration rewrote all 426 files with
+            # a new timestamp and nothing else -- measured on redspot: 426 of 426
+            # differing, every one of them by that line alone.
+            #
+            # A bundle that cannot be diffed against its predecessor cannot show
+            # a client what changed, and re-uploading it presents 426 modified
+            # files with no modified content. The timestamp should say when the
+            # concept was last built, which is when the run finished.
+            generated_on=(run.finished_at or run.created_at).date() if run else None,
         )
         if result is not None
         else None
@@ -3644,7 +3654,7 @@ async def chat_edit(
     run.notes = target.notes
 
     rebuilt = rebuild(
-        _result_from_rows(run, pages, sections),
+        _result_from_rows(run, pages, sections, target.renames),
         excluded_urls={page.url for page in pages if not page.included},
         site_name=run.site_name,
         site_summary=run.site_summary,
@@ -3923,7 +3933,7 @@ async def admin_runs(
     return templates.TemplateResponse(request, "admin/runs.html", {"user": user, "rows": rows})
 
 
-def _result_from_rows(run, pages, stored=None) -> GenerationResult:  # noqa: F821
+def _result_from_rows(run, pages, stored=None, renames=None) -> GenerationResult:  # noqa: F821
     """Reconstruct a `GenerationResult` from stored rows, for re-rendering.
 
     `stored` is the run's `SectionRow` list. Without it the section order and
@@ -3956,6 +3966,18 @@ def _result_from_rows(run, pages, stored=None) -> GenerationResult:  # noqa: F82
             grouped.setdefault(page.section_name or "Pages", []).append(entry)
 
     known = {row.name: row for row in (stored or [])}
+    # A rename happens on the page rows, so by the time we get here the stored
+    # row still carries the old name and matches nothing. Without this the
+    # renamed section falls into the unknown-name tail below: it jumps to the
+    # bottom of the file and loses its description, and `save_sections` then
+    # persists that as the truth.
+    #
+    # `apply_operations` already records the mapping; it simply had no way to
+    # reach this function. Caught by a dry run, not by a test -- the operation
+    # applied, the file rebuilt, and only the order was wrong.
+    for old_name, new_name in (renames or {}).items():
+        if old_name in known and new_name not in known:
+            known[new_name] = known.pop(old_name)
     # Stored order first, then anything the rows know about that the section
     # table does not -- a section can only appear here by a page naming it, and
     # dropping one because it has no row would drop its pages with it.

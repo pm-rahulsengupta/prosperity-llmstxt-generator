@@ -594,3 +594,48 @@ def test_every_path_that_stores_a_rebuild_reads_the_stored_sections():
     for handler in storing:
         name = re.search(r"async def (\w+)", handler).group(1)
         assert "get_sections" in handler, f"{name} re-renders and drops the stored order"
+
+
+def test_a_rename_keeps_the_sections_place_and_description():
+    """A regression introduced by reading the stored order, caught by a dry run.
+
+    A rename rewrites `page.section_name`, so the stored row still carries the
+    old name and matches nothing. Without the rename map the renamed section
+    fell into the unknown-name tail: it jumped to the bottom of the file and lost
+    its description, and `save_sections` then persisted that as the truth.
+
+    `apply_operations` has always recorded the mapping in `EditTarget.renames`;
+    it simply had no way to reach the reconstruction.
+    """
+    from app.main import _result_from_rows
+
+    stored = [_Row("Services", 0, "About our services"), _Row("Fleet", 1, "The cars")]
+    renamed = [
+        _Page("https://x.example/a/", "What We Do", 0),
+        _Page("https://x.example/b/", "Fleet", 1),
+    ]
+
+    without = _result_from_rows(_Run(), renamed, stored)
+    with_map = _result_from_rows(_Run(), renamed, stored, {"Services": "What We Do"})
+
+    assert [s.name for s in without.sections] == ["Fleet", "What We Do"], "the regression"
+    assert [s.name for s in with_map.sections] == ["What We Do", "Fleet"]
+    assert with_map.sections[0].description == "About our services"
+
+
+def test_a_rename_onto_an_existing_section_does_not_steal_its_row():
+    """Merging two sections by renaming one onto the other must not move the
+    survivor's description onto the merged name and leave the original with
+    none."""
+    from app.main import _result_from_rows
+
+    stored = [_Row("Alpha", 0, "first"), _Row("Beta", 1, "second")]
+    merged = [
+        _Page("https://x.example/a/", "Beta", 0),
+        _Page("https://x.example/b/", "Beta", 1),
+    ]
+
+    result = _result_from_rows(_Run(), merged, stored, {"Alpha": "Beta"})
+
+    assert [s.name for s in result.sections] == ["Beta"]
+    assert result.sections[0].description == "second", "Beta keeps its own description"
