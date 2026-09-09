@@ -16,6 +16,86 @@ not happened yet when the code was committed.
 
 ---
 
+## 2026-09-09 (later)
+
+### Three files the specs asked for, and the checks that would have lied about them
+
+llms.txt v2, Google's Open Knowledge Format and the AI-info-page convention all
+describe artifacts this tool did not produce. Building them turned up two checks
+that reported a pass on output they had not examined, which is the same failure
+as the six above and was found the same way — by generating the thing and then
+asking the rules what they thought of it.
+
+Everything is built from stored rows. `Page.markdown` is a column and was
+persisted the whole time; the sections were computed for llms.txt and discarded
+afterwards. So the three artifacts cost **no crawl and no model call**, and are
+available for a run that finished weeks ago.
+
+#### `info_render` was written, tested, and imported by nothing
+
+`app/core/info_render.py` is a complete XSS-safe HTML renderer carrying a
+source-level test that asserts no f-string in it interpolates into markup.
+Nothing imported it but its own test file. It is now what builds `ai-info.html`.
+
+Third instance of this shape in two days: `copyrules.locale_conflicts` (written,
+tested, never called), the deleted `repo` functions, and now this one. The
+pattern is worth naming: a module with tests looks finished on every measure
+this project has, including coverage.
+
+#### Two checks that reported a pass on something they had not read
+
+- **OKF-005** matched `\b\d{4}-\d{2}-\d{2}\b`. There is no word boundary between
+  the `9` and the `T` of `2026-09-09T00:00:00+00:00` — the form `log.md` writes —
+  so it matched a bare date, missed every ISO timestamp, and reported a correctly
+  dated log as undated. Same shape as the `\bprogram` bug in `c378139`, found the
+  same day.
+- **HDR-001** scored **100** on a `_headers` advertising
+  `rel="alternate"; type="text/markdown"` with no `md/` directory generated. Its
+  path map cannot match a per-page alternate, and matching the path was never the
+  point: what that rel asserts is that the directory exists. This is the rule
+  whose own docstring says the generator refusing to lie "is one defence, and it
+  does not survive a human editing the file afterwards."
+
+#### Cloudflare cannot express the rel that v2 is mostly about
+
+`_headers` matches path placeholders but performs no interpolation into header
+**values**, so no rule maps `/about/` to `</about/index.md>`. The alternatives
+were 419 literal blocks — past Cloudflare's file cap, which drops the tail
+silently — or claiming the rel and not delivering it. So the homepage rule is
+emitted because that one is expressible, and the general rule is written into the
+file as an edge-config instruction.
+
+Second time the honest answer for this component has been an instruction rather
+than a file, which is what `templated=True` already meant.
+
+#### A directory broke three things that measured a body
+
+`Artifact` gained `files`, and two artifacts carry it instead of `body`:
+
+- `client_report` sized a directory by `len(artifact.body)` and reported `md/` as
+  **0 bytes**, then generated the step *"Upload it to your site so it answers at
+  https://site/"* — for 419 files.
+- `delivery` measured the same empty body.
+- `_size` counted **characters** and labelled them **bytes**. Understates by a
+  third on any page carrying an em-dash.
+
+All three now read `Artifact.size`, which encodes UTF-8.
+
+#### What the UI says that the score does not
+
+A directory's LIVE chip is settled by fetching **one** URL —
+`curl <site>/<some-page>.md` is the whole probe — so an emerald "Published" on
+`md/` asserts every other file in it. The component card now says so under the
+chip. The readiness score still counts that one-URL probe as a full pass: the UI
+says what was measured and the number does not. Open.
+
+**Measured:** 1,374 tests (was 1,337), 1 xfailed, ruff check and format clean.
+Components 26 → 29. Rule sets 6 → 9 (MD-001..005, INF-001..007, OKF-001..005).
+
+Deployed `063ba47` to web and worker, 2026-09-09 13:59 AEST.
+
+---
+
 ## 2026-09-09
 
 ### Six ways the tool read data that was there, found by finishing one run
