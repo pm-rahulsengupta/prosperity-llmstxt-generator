@@ -28,6 +28,7 @@ and not because inconsistency is untidy.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 from app.core.rules.registry import Category, Rule, Severity, fail, ok, skip
 
@@ -68,7 +69,7 @@ class ArtifactContext:
     docstring: a rule that did not run is not a rule that passed.
     """
 
-    __slots__ = ("facts", "files", "site_url", "text")
+    __slots__ = ("facts", "files", "index_text", "site_url", "text")
 
     def __init__(
         self,
@@ -77,11 +78,15 @@ class ArtifactContext:
         files: dict[str, str] | None = None,
         site_url: str = "",
         facts: int = 0,
+        index_text: str = "",
     ) -> None:
         self.text = text
         self.files = files or {}
         self.site_url = site_url
         self.facts = facts
+        #: The llms.txt this directory is supposed to be linked from. Empty means
+        #: we were not given one, which MD-006 treats as a skip.
+        self.index_text = index_text
 
 
 # -- markdown page versions -------------------------------------------------
@@ -164,6 +169,62 @@ def _no_colliding_paths(ctx: ArtifactContext):
     return ok("MD-005", "no case collisions")
 
 
+def _the_index_points_at_the_twins(ctx: ArtifactContext):
+    """MD-006. The rule the whole directory exists to satisfy.
+
+    Generating 419 markdown files changes nothing on its own. What llms.txt v2
+    asks for is that the *index* points at them, and that step is one function
+    call away from being skipped.
+
+    It was skipped, on the first real site. `rewrite_links` compared the link's
+    host against the site's verbatim, the site is filed as `redspot.com.au` and
+    every page it lists is `www.redspot.com.au`, so all 419 links were left
+    pointing at HTML -- and the file was byte-for-byte what it had been, which is
+    exactly what "nothing needed changing" looks like.
+
+    Counting is the check. A `.md` link on a site publishing no directory is
+    caught by nothing here either, which is why the count is compared against the
+    directory rather than merely required to be non-zero.
+    """
+    if not ctx.files:
+        return skip("MD-006", "no markdown directory was generated")
+    if not ctx.index_text.strip():
+        return skip("MD-006", "no llms.txt was supplied to cross-check")
+
+    published = {f"/{name}" for name in ctx.files}
+    linked = 0
+    html_with_a_twin: list[str] = []
+    for target in _MD_LINK.findall(ctx.index_text):
+        path = urlsplit(target).path or "/"
+        if path in published:
+            linked += 1
+            continue
+        for candidate in (
+            path.rstrip("/") + "/index.md",
+            path.rstrip("/") + "/index.html.md",
+            path.rsplit(".", 1)[0] + ".md" if "." in path.rsplit("/", 1)[-1] else "",
+            path + ".md",
+        ):
+            if candidate and candidate in published:
+                html_with_a_twin.append(target)
+                break
+
+    if html_with_a_twin:
+        return fail(
+            "MD-006",
+            "llms.txt links to the HTML page where a markdown twin was generated, "
+            "so the directory is published and nothing points into it",
+            count=len(html_with_a_twin),
+            examples=html_with_a_twin,
+        )
+    if not linked:
+        return fail(
+            "MD-006",
+            "llms.txt links at none of the generated markdown files",
+        )
+    return ok("MD-006", f"{linked} llms.txt links point at their markdown twin")
+
+
 MARKDOWN_RULES: list[Rule] = [
     Rule(
         "MD-001",
@@ -204,6 +265,14 @@ MARKDOWN_RULES: list[Rule] = [
         Severity.WARNING,
         _no_colliding_paths,
         "Two files differing only by case overwrite on most hosts.",
+    ),
+    Rule(
+        "MD-006",
+        "llms.txt points at the twins",
+        Category.MARKDOWN,
+        Severity.ERROR,
+        _the_index_points_at_the_twins,
+        "Generating the directory changes nothing if the index still links to HTML.",
     ),
 ]
 

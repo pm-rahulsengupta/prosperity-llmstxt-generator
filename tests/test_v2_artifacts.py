@@ -391,3 +391,39 @@ def test_a_directorys_reported_size_is_its_contents_not_its_body():
     )
 
     assert report.files["md/"] == 8, "the empty body would have reported 0"
+
+
+def test_a_www_page_on_a_bare_site_is_still_the_same_site():
+    """The defect that shipped: redspot is filed as `redspot.com.au` and every
+    page it lists is `www.redspot.com.au`, so comparing hosts verbatim rejected
+    all 419 links and rewrote none -- and the file was byte-identical, which is
+    what "nothing needed changing" also looks like."""
+    pages = [_page("https://www.redspot.com.au/vehicles/ute-hire/")]
+    out = render_md_pages(pages, REPLACE)
+    llms = "- [Ute Hire](https://www.redspot.com.au/vehicles/ute-hire/): utes\n"
+
+    rewritten = rewrite_links(llms, out.paths, "https://redspot.com.au")
+
+    assert "/vehicles/ute-hire/index.md" in rewritten
+
+
+def test_generating_the_directory_without_pointing_the_index_at_it_is_an_error():
+    """MD-006. 419 markdown files nothing links to is not a feature."""
+    pages = [_page("https://x.example/a/"), _page("https://x.example/b/")]
+    out = render_md_pages(pages, REPLACE)
+    html_only = "- [A](https://x.example/a/): one\n- [B](https://x.example/b/): two\n"
+
+    missed = audit_markdown_pages(out.files, index_text=html_only)
+    assert missed.by_id("MD-006").outcome.value == "fail"
+
+    pointed = audit_markdown_pages(
+        out.files, index_text=rewrite_links(html_only, out.paths, "https://x.example")
+    )
+    assert pointed.by_id("MD-006").outcome.value == "pass"
+
+
+def test_md_006_skips_rather_than_passes_when_it_was_given_no_index():
+    """A rule that did not run is not a rule that passed."""
+    out = render_md_pages([_page("https://x.example/a/")], REPLACE)
+
+    assert audit_markdown_pages(out.files).by_id("MD-006").outcome.value == "skipped"

@@ -233,9 +233,16 @@ def audit_catalog(text: str, *, artifacts: set[str] | None = None, site_url: str
     return score_report([rule.run(ctx) for rule in CATALOG_RULES], CATALOG_BY_ID)
 
 
-def audit_markdown_pages(files: dict[str, str], *, site_url: str = "") -> Report:
-    """Run the MD rules over the generated markdown directory."""
-    ctx = ArtifactContext(files=files, site_url=site_url)
+def audit_markdown_pages(
+    files: dict[str, str], *, site_url: str = "", index_text: str = ""
+) -> Report:
+    """Run the MD rules over the generated markdown directory.
+
+    `index_text` is the llms.txt that is supposed to link into it. Without it
+    MD-006 skips, which is correct and is also the reason to pass it: the whole
+    directory is pointless if the index still names the HTML pages.
+    """
+    ctx = ArtifactContext(files=files, site_url=site_url, index_text=index_text)
     return score_report([rule.run(ctx) for rule in MARKDOWN_RULES], MARKDOWN_BY_ID)
 
 

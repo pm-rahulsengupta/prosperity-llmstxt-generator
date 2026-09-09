@@ -37,6 +37,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from app.core.full_text import normalise_body
 from app.core.models import PageEntry
+from app.core.text import domain_of
 
 __all__ = [
     "REPLACE",
@@ -195,18 +196,23 @@ def rewrite_links(llms_txt: str, published: frozenset[str], site_url: str = "") 
     if not published:
         return llms_txt
 
-    origin = ""
-    if site_url:
-        parts = urlsplit(site_url)
-        origin = f"{parts.scheme}://{parts.netloc}"
+    # `domain_of`, not the raw netloc. The site is filed as `redspot.com.au` and
+    # every page it links to is `www.redspot.com.au`, so comparing hosts verbatim
+    # rejected all 419 links and rewrote none of them -- silently, because
+    # "nothing matched" and "nothing needed changing" produce the same file.
+    #
+    # This is the rule `text.domain_of` exists to state and the same one `58b4107`
+    # applied to the tables: a site has one spelling of its domain, and the `www.`
+    # is not part of it.
+    site = domain_of(site_url) if site_url else ""
 
     out: list[str] = []
     for line in llms_txt.splitlines():
-        out.append(_rewrite_line(line, published, origin))
+        out.append(_rewrite_line(line, published, site))
     return "\n".join(out) + ("\n" if llms_txt.endswith("\n") else "")
 
 
-def _rewrite_line(line: str, published: frozenset[str], origin: str) -> str:
+def _rewrite_line(line: str, published: frozenset[str], site: str) -> str:
     stripped = line.lstrip()
     if not stripped.startswith("- ["):
         return line
@@ -219,7 +225,7 @@ def _rewrite_line(line: str, published: frozenset[str], origin: str) -> str:
 
     url = line[open_paren + 2 : close]
     parts = urlsplit(url)
-    if origin and f"{parts.scheme}://{parts.netloc}" != origin:
+    if site and domain_of(url) != site:
         return line
 
     md = md_path_for(url, REPLACE)

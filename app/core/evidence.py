@@ -200,7 +200,14 @@ def reports_for(view) -> dict[str, object]:
         if which is None or not (body.strip() or files):
             continue
         if which == "markdown":
-            reports[component.key] = audit_markdown_pages(files, site_url=ev.site_url)
+            reports[component.key] = audit_markdown_pages(
+                files,
+                site_url=ev.site_url,
+                # MD-006 is a cross-check between the directory and the index, so
+                # it needs both. Passing only the directory would make the one
+                # rule that matters skip.
+                index_text=bodies.get("llms.txt", ""),
+            )
             continue
         if which == "okf":
             reports[component.key] = audit_okf(files, site_url=ev.site_url)
