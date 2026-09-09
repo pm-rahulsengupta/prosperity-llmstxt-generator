@@ -258,3 +258,33 @@ def test_the_report_renders_for_agents_findings():
     text = render_text(bare_report())
     assert "Score:" in text
     assert "AGT-" in text
+
+
+def test_a_url_ending_a_sentence_is_not_an_unverified_url():
+    """`URL_IN_TEXT` kept the full stop, so "See https://x.example/contact."
+    yielded a URL no probe could have verified.
+
+    AGT-004 is an ERROR, so the score capped at 49 -- and because `_regressions`
+    treats AGT-004 as absolute, every refine turn was then refused for a file
+    that names only real pages, after billing the model call.
+    """
+    from app.core.rules.agents_rules import URL_IN_TEXT
+
+    assert URL_IN_TEXT.findall("See https://x.example/contact.") == ["https://x.example/contact"]
+    assert URL_IN_TEXT.findall("See https://x.example/contact, then call.") == [
+        "https://x.example/contact"
+    ]
+    assert URL_IN_TEXT.findall("https://x.example/a/") == ["https://x.example/a/"]
+
+
+def test_an_iso_timestamp_counts_as_a_generation_date():
+    """There is no word boundary between the `9` and the `T` of
+    `2026-09-09T00:00:00+00:00`, so a dated file was reported as undated. The
+    same bug was fixed in `artifact_rules._DATE` and this copy was missed."""
+    import re
+
+    pattern = r"\b20\d{2}-\d{2}-\d{2}(?!\d)"
+
+    assert re.search(pattern, "*Generated 2026-09-09T00:00:00+00:00.*")
+    assert re.search(pattern, "*Generated 2026-09-09.*")
+    assert not re.search(pattern, "version 20260909")

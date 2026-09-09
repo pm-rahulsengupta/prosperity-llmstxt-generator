@@ -52,7 +52,11 @@ TRANSACTION_WORDS = (
     "submit payment",
 )
 
-URL_IN_TEXT = re.compile(r"https?://[^\s<>\")\]`]+")
+# Trailing sentence punctuation is not part of the URL. Without stripping it,
+# "See https://redspot.com.au/contact." yielded a URL ending in a full stop,
+# which is in no probe's verified set -- so AGT-004 failed, the score capped at
+# 49, and every refine turn was refused for a file that names only real pages.
+URL_IN_TEXT = re.compile(r"https?://[^\s<>\")\]`]*[^\s<>\")\]`.,;:!?]")
 
 SECTION_HEADING = re.compile(r"^##\s+(.*)$", re.M)
 
@@ -323,7 +327,11 @@ def _dated(ctx: AgentsContext):
 
     A file with no date gives a reader no way to judge how stale its claims are.
     """
-    if re.search(r"\b20\d{2}-\d{2}-\d{2}\b", _body(ctx)):
+    # `(?!\d)` rather than a trailing `\b`: there is no word boundary between the
+    # `9` and the `T` of `2026-09-09T00:00:00+00:00`, so a file dated with an ISO
+    # timestamp was reported as having no date at all. The same bug was fixed in
+    # `artifact_rules._DATE` this morning and this second copy was missed.
+    if re.search(r"\b20\d{2}-\d{2}-\d{2}(?!\d)", _body(ctx)):
         return ok("AGT-012")
     return fail("AGT-012", "No generation date, so a reader cannot tell how current this is.")
 

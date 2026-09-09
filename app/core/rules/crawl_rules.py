@@ -49,7 +49,13 @@ KNOWN_AI_BOTS = tuple(SEARCH_BOTS) + tuple(TRAINING_BOTS)
 SEARCH_ENGINE_BOTS = ("Googlebot", "Bingbot", "DuckDuckBot", "Applebot")
 
 USER_AGENT = re.compile(r"^\s*user-agent\s*:\s*(.+?)\s*$", re.I | re.M)
-DIRECTIVE = re.compile(r"^\s*(allow|disallow)\s*:\s*(.*?)\s*$", re.I | re.M)
+# `[^#]*?` stops the value at a comment. It was `(.*?)`, so a line reading
+# `Disallow: /  # block everything` captured the comment as part of the path,
+# `_blocks_everything` compared it against "/" and found no match, and CRW-001
+# then reported that "the stated signal and the crawl rules agree" on a
+# robots.txt whose Content-Signal said ai-train=yes above a total block.
+# That is the one check this rule's own docstring says nothing else can make.
+DIRECTIVE = re.compile(r"^\s*(allow|disallow)\s*:\s*([^#]*?)\s*(?:#.*)?$", re.I | re.M)
 CONTENT_SIGNAL = re.compile(r"^\s*content-signal\s*:\s*(.+?)\s*$", re.I | re.M)
 SITEMAP = re.compile(r"^\s*sitemap\s*:\s*(.+?)\s*$", re.I | re.M)
 
@@ -84,6 +90,23 @@ class CrawlContext:
         # Whether this is the live file or something we generated. A generated
         # block is not expected to carry the catch-all or the sitemap.
         self.fetched = fetched
+
+
+def _agent_groups(text: str) -> dict[str, list[tuple[str, str]]]:
+    """`_groups` keyed by lowercased agent name.
+
+    RFC 9309 says the user-agent product token is matched case-insensitively,
+    and every lookup here used an exact-cased constant -- `groups.get("GPTBot")`.
+    A file writing `User-agent: gptbot` or `user-agent: googlebot`, both common
+    in hand-written robots.txt, matched nothing.
+
+    That failed *open* on the rule that matters: CRW-001 found no group, so it
+    reported that the stated signal and the crawl rules agree on a file where
+    they contradict each other. Meanwhile CRW-005 would report the same line as
+    an unrecognised AI agent, so the file was wrong twice in opposite
+    directions.
+    """
+    return {name.lower(): directives for name, directives in _groups(text)}
 
 
 def _groups(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
@@ -154,18 +177,18 @@ def _signal_agrees_with_rules(ctx: CrawlContext):
     if not signal:
         return skip("CRW-001", "no Content-Signal line, so there is nothing to contradict")
 
-    groups = dict(_groups(ctx.text))
+    groups = _agent_groups(ctx.text)
     conflicts: list[str] = []
 
     if signal.get("search") == "yes":
         for bot in SEARCH_BOTS:
-            directives = groups.get(bot)
+            directives = groups.get(bot.lower())
             if directives and _blocks_everything(directives):
                 conflicts.append(f"search=yes but {bot} is disallowed from the whole site")
 
     if signal.get("ai-train") == "yes":
         for bot in TRAINING_BOTS:
-            directives = groups.get(bot)
+            directives = groups.get(bot.lower())
             if directives and _blocks_everything(directives):
                 conflicts.append(f"ai-train=yes but {bot} is disallowed from the whole site")
 
@@ -222,8 +245,8 @@ def _every_group_has_a_rule(ctx: CrawlContext):
     if not named:
         return skip("CRW-004", "no user-agent groups in this file")
 
-    groups = dict(_groups(ctx.text))
-    empty = [name for name in named if not groups.get(name)]
+    groups = _agent_groups(ctx.text)
+    empty = [name for name in named if not groups.get(name.lower())]
     if not empty:
         return ok("CRW-004", f"{len(named)} group(s), each carrying at least one rule")
     return fail(
@@ -285,8 +308,8 @@ def _search_engines_not_blocked(ctx: CrawlContext):
     if not ctx.fetched:
         return skip("CRW-007", "this is a generated block, not the site's whole robots.txt")
 
-    groups = dict(_groups(ctx.text))
-    blocked = [bot for bot in SEARCH_ENGINE_BOTS if _blocks_everything(groups.get(bot, []))]
+    groups = _agent_groups(ctx.text)
+    blocked = [bot for bot in SEARCH_ENGINE_BOTS if _blocks_everything(groups.get(bot.lower(), []))]
     catch_all = groups.get("*", [])
     if _blocks_everything(catch_all):
         blocked.append("* (every crawler without its own rule)")
