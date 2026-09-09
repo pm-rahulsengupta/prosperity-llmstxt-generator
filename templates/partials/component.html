@@ -11,6 +11,12 @@
    score said the opposite about the same file. `look` collapses that to the
    question a reader is actually asking. #}
 {% set look = component_look(status) %}
+{# The generated set, where this component produces a directory rather than a
+   file. Keyed on `component.artifact`, not `status.artifact_name`: `derive`
+   leaves `artifact_name` empty on a LIVE component, and matching on it would
+   mean a published directory silently lost its shape and its caveat -- the same
+   trap `client_report._files` documents. #}
+{% set fileset = file_sets.get(status.component.artifact) if file_sets is defined else None %}
 <div class="component {{ status.state.value }}">
     <div class="spread">
         <h4>
@@ -33,6 +39,27 @@
     <p class="hint">What we found: {{ status.detail }}</p>
     {% endif %}
 
+    {# What "published" is allowed to mean for a set.
+
+       A single file's chip is settled by fetching that file. A directory's is
+       settled by fetching ONE url from it -- `curl <site>/<some-page>.md` is the
+       whole probe -- so an emerald "Published" on a directory asserts every other
+       file in it, and nobody measured those. The remedy is the one
+       `ReadinessReport.sampled` already uses: carry the sample with the verdict
+       rather than quietly widening it.
+
+       Keyed on the registry's trailing slash, not on `fileset`. A count from our
+       bundle would be the size of the set WE generated, printed as though it
+       described theirs -- and this caveat exists precisely to stop one number
+       standing in for another. It also has to render when we generated nothing,
+       which is every already-published directory. #}
+    {% if status.state.value == 'live' and status.component.artifact.endswith('/') %}
+    <p class="hint">
+        One url out of this set was fetched and it answered. Nothing here fetches
+        every file in a directory, so published means the sample rather than the set.
+    </p>
+    {% endif %}
+
     {% if status.state.value == 'template' %}
     <p class="notice bad">
         Not for publication. This names something that does not answer yet.
@@ -45,12 +72,19 @@
     {% endif %}
 
     {% if status.publishable %}
-    <p>
-        <a class="button" href="/agents/download?site={{ site_url|urlencode }}&amp;kind={{ status.artifact_name|urlencode }}">
-            Download {{ status.artifact_name }}
-        </a>
-        <span class="hint">Serve at <code>{{ status.component.path or status.artifact_name }}</code></span>
-    </p>
+        {% if fileset %}
+        {# A directory. `Serve at md/` would be wrong -- those files scatter into
+           the web root beside the html they mirror -- so the set says where it
+           goes in its own words, and the verify line below carries the url. #}
+        {% include "partials/fileset.html" %}
+        {% else %}
+        <p>
+            <a class="button" href="/agents/download?site={{ site_url|urlencode }}&amp;kind={{ status.artifact_name|urlencode }}">
+                Download {{ status.artifact_name }}
+            </a>
+            <span class="hint">Serve at <code>{{ status.component.path or status.artifact_name }}</code></span>
+        </p>
+        {% endif %}
     {% endif %}
 
     {% if status.component.needs_developer %}
@@ -96,9 +130,15 @@
             </ul>
         </details>
         {% endif %}
-        {% elif judged is defined and status.artifact_name not in judged %}
+        {# `component.artifact`, not `artifact_name`. The same trap as above, and
+           it was already firing: a LIVE component carries no `artifact_name`, so
+           this sentence rendered as "No spec rules exist for  yet" -- a blank
+           where the filename belongs -- on every published file with no rule
+           set. `JUDGED_BY` is keyed by artefact name, which is what makes the
+           registry field the right one to test. #}
+        {% elif judged is defined and status.component.artifact not in judged %}
         <p class="hint muted">
-            No spec rules exist for {{ status.artifact_name }} yet, so this file is
+            No spec rules exist for {{ status.component.artifact }} yet, so this is
             generated but not checked.
         </p>
         {% endif %}

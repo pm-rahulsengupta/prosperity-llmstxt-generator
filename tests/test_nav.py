@@ -335,6 +335,10 @@ def _render_context(**extra) -> dict:
         "is_stale": False,
         "label": "",
         "reports": {},
+        # Empty rather than populated: the default rendering of a component is
+        # the single-file one, and the directory tests build their own set.
+        "file_sets": {},
+        "list_cap": 500,
         "refinable": False,
         "judged": __import__("app.core.evidence", fromlist=["JUDGED_BY"]).JUDGED_BY,
         "share_enabled": True,

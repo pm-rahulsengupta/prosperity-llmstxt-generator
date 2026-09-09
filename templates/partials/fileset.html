@@ -1,0 +1,73 @@
+{# A directory artefact: `md/` at four hundred files, `okf/` at twenty.
+
+   The single-file rendering above this shows a preview and a download link,
+   which is honest when a reader can see the whole artefact at once. Neither
+   half of it survives here -- a preview of one `page.md` is one file shown
+   where an artefact was promised, and a link labelled `md/` that delivers a
+   1.2 MB archive is a surprise on a call.
+
+   So: the shape of the set before the click, the archive named in the button,
+   and the files themselves behind a disclosure. `<details>` for the same reason
+   the share panel and the client guides use it -- it opens with the keyboard
+   and needs no script, and this page loads htmx only. #}
+<div class="fileset">
+    <p class="fileset-head">
+        <strong>{{ fileset.count }} file{{ '' if fileset.count == 1 else 's' }}</strong>
+        &middot; {{ fileset.size_label }}
+        {%- if fileset.entry %}
+        &middot; <code>{{ fileset.entry }}</code> is the way in
+        {%- endif %}
+    </p>
+
+    {# Only past `SHAPE_FROM`. Below it the list under the disclosure is already
+       a picture of the set, and a summary of twenty files is a second thing to
+       read that says what the first one said. #}
+    {% if fileset.shape %}
+    <table class="fileset-shape">
+        <caption class="visually-hidden">
+            Files in {{ fileset.name }}, grouped by their top-level path
+        </caption>
+        <tbody>
+        {% for segment in fileset.shape %}
+            <tr>
+                <th scope="row">
+                    {%- if segment.is_path %}<code>{{ segment.label }}</code>
+                    {%- else %}<span class="fileset-rest">{{ segment.label }}</span>{% endif -%}
+                </th>
+                <td class="num">{{ segment.count }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<p>
+    <a class="button"
+       href="/agents/download?site={{ site_url|urlencode }}&amp;kind={{ fileset.name|urlencode }}">
+        Download {{ fileset.zip_name }}
+    </a>
+    <span class="hint">{{ fileset.serve_note }}</span>
+</p>
+
+{# Not truncated to a sample. The question this list exists to answer is "is
+   that one page in there", and a list that stops at twelve cannot answer it.
+   It scrolls inside a fixed height instead. #}
+<details class="fileset-all">
+    <summary>Every file in {{ fileset.name }} ({{ fileset.count }})</summary>
+    <ul class="fileset-list">
+        {% for item in fileset.listing %}
+        <li>
+            <a href="/agents/download?site={{ site_url|urlencode }}&amp;kind={{ fileset.name|urlencode }}&amp;file={{ item.path|urlencode }}">{{ item.path }}</a>
+            <span class="fileset-bytes">{{ item.size }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% if fileset.withheld %}
+    <p class="hint fileset-note">
+        {{ fileset.withheld }} more file{{ '' if fileset.withheld == 1 else 's' }} are in the
+        archive and not in this list, which stops at {{ list_cap }}. A set this large is
+        worth a look at the crawl plan before it is handed over.
+    </p>
+    {% endif %}
+</details>

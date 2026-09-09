@@ -1370,3 +1370,145 @@ pre.doc.template {
    read -- and until now the only way to look was to mint a share token, which
    is a thing with an expiry and a revoke button. */
 .preview-link { margin: 0.75rem 0 0; font-size: var(--pm-sm); }
+
+/* -- a directory artefact ----------------------------------------------------
+   `md/` is one markdown file per crawled page -- 419 of them on Redspot -- and
+   `okf/` is a cross-linked bundle with an entry point. The single-file row above
+   this (preview, then a download link named after the file) is honest only while
+   a reader can see the whole artefact at once, and neither half survives here.
+
+   So the block states what is true of the SET -- count, size, the top-level
+   paths it covers -- and the files themselves live behind a disclosure. Nothing
+   in it is inverted the way `pre.output` is: that treatment separates "what the
+   tool produced" from "the tool", and a file *listing* is an inventory of the
+   bundle rather than a thing the bundle contains. It belongs to the UI. */
+
+/* Hugs its content. Stretched to the panel's full 1160px it is a tinted band
+   with a paragraph in its left quarter, which reads as a layout fault rather
+   than as a block worth reading. `fit-content` makes it a callout instead. */
+.fileset {
+    width: fit-content;
+    max-width: min(100%, 46rem);
+    background: var(--pm-sunken);
+    border-radius: var(--pm-radius-sm);
+    padding: 0.65rem 0.8rem;
+    margin: 0.6rem 0;
+}
+.fileset-head { margin: 0; }
+/* 500, not the browser's 700. Only Poppins 300/400/500 are self-hosted, so a
+   `strong` at its default weight is synthesised -- smeared stems at 15px, and
+   heavier than any real heading on the page. */
+.fileset-head strong { font-weight: 500; }
+
+/* Auto width, never 100%. A two-column summary stretched across an 1100px panel
+   puts the count a hand's width from the path it belongs to, and the reader has
+   to track across empty space to pair them. */
+.fileset-shape {
+    width: auto;
+    min-width: 16rem;
+    max-width: 26rem;
+    margin: 0.5rem 0 0;
+    font-size: var(--pm-sm);
+}
+/* The global `th` is an uppercase, letter-spaced column label. These are file
+   paths in a row header, so all of that is undone rather than inherited. */
+.fileset-shape th {
+    font-size: var(--pm-sm);
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--pm-ink);
+    padding: 0.2rem 0.6rem 0.2rem 0;
+}
+.fileset-shape td {
+    padding: 0.2rem 0;
+    font-variant-numeric: tabular-nums;
+    color: var(--pm-ink-soft);
+}
+/* Dotted, like the run log: a solid hairline per row on an already-tinted block
+   turns a four-row summary into a grid. */
+.fileset-shape th, .fileset-shape td { border-bottom: 1px dotted var(--pm-rule); }
+.fileset-shape tr:last-child th, .fileset-shape tr:last-child td { border-bottom: none; }
+.fileset-shape tbody tr:hover { background: none; }
+
+/* The lighter of the two disclosure treatments in this sheet. `.share-open`
+   boxes its summary because it is the only control in its block; this one sits
+   directly under the download button, and a second bordered control beside the
+   primary action makes the reader choose between them. */
+.fileset-all { margin-top: 0.4rem; }
+/* `list-item`, not `inline-block`. Setting a summary to `inline-block` drops its
+   ::marker, and this one sits between a button and a `Verify:` line -- without
+   the triangle it is a sentence in a stack of sentences, and nothing says it
+   opens. `fit-content` still keeps the target on the words rather than running
+   it to the full width of the card. */
+.fileset-all > summary {
+    display: list-item;
+    list-style-position: inside;
+    width: fit-content;
+    font-size: var(--pm-sm);
+    color: var(--pm-ink-soft);
+    cursor: pointer;
+    padding: 0.15rem 0;
+}
+.fileset-all > summary:hover { color: var(--pm-ink); }
+
+/* Complete, and scrolled rather than truncated. The question this list exists to
+   answer is "is that one page in there", which a list capped at twelve cannot
+   answer -- so the height is capped and the content is not. Same container idiom
+   as `.log`. */
+/* Capped to the same measure as the block above it. Run to the panel's full
+   width, a fifteen-character path sits at the far left and its size at the far
+   right, and pairing them is a five-inch eye movement per row. */
+.fileset-list {
+    list-style: none;
+    max-width: min(100%, 46rem);
+    margin: 0.5rem 0 0;
+    padding: 0.35rem 0.55rem;
+    max-height: 15rem;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    background: var(--pm-sunken);
+    border: 1px solid var(--pm-rule);
+    border-radius: var(--pm-radius-sm);
+    font-family: var(--pm-mono);
+    font-size: var(--pm-sm);
+}
+.fileset-list li {
+    display: flex;
+    gap: 0.75rem;
+    align-items: baseline;
+    padding: 0.18rem 0;
+    border-bottom: 1px dotted var(--pm-rule);
+}
+.fileset-list li:last-child { border-bottom: none; }
+/* Underlined, at one pixel rather than the page's two. These are links and the
+   underline is the affordance, but four hundred rows of 2px emerald is a green
+   field with paths in it. */
+.fileset-list a {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+}
+.fileset-bytes {
+    margin-left: auto;
+    flex: 0 0 auto;
+    font-size: var(--pm-xs);
+    color: var(--pm-ink-muted);
+    font-variant-numeric: tabular-nums;
+}
+/* A footnote about the list, not about the component, so it sits below the
+   card's other hints rather than level with them. */
+.fileset-note { font-size: var(--pm-sm); color: var(--pm-ink-muted); }
+
+@media (max-width: 720px) {
+    .fileset-shape { width: 100%; max-width: none; min-width: 0; }
+    /* The byte size drops under the path rather than squeezing it to two
+       characters a line. */
+    .fileset-list li { flex-wrap: wrap; gap: 0 0.75rem; }
+    .fileset-bytes { margin-left: 0; }
+}
+/* The tail row. Prose, so it drops out of the monospace face the real paths
+   wear -- a reader should not go looking for a directory called "6 other
+   paths". */
+.fileset-rest { color: var(--pm-ink-soft); font-style: italic; }
