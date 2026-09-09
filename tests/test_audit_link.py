@@ -293,3 +293,77 @@ def test_an_audit_with_no_recommendations_does_not_read_as_clean():
     html = _render_panel(audit=link_audit({"overall_score": 70}), audited_ago="", checker_url="")
 
     assert "not the same as a clean result" in _squash(html)
+
+
+# -- the breakdown that was ingested and never shown -----------------------------
+
+
+def test_the_rubric_is_broken_out_by_pillar():
+    """`pillar_scores` arrived on every audit and was read by nothing.
+
+    An overall 61 cannot tell an operator whether the site is strong where we can
+    help and weak where we cannot, or the reverse -- and those are opposite
+    conversations to have with a client.
+    """
+    from app.core.audit_link import link_audit
+
+    view = link_audit(
+        {
+            "overall_score": 61,
+            "pillar_scores": {"robots_crawl": 61, "schema_entity": 12},
+        }
+    )
+    by_slug = {p.slug: p for p in view.pillars()}
+
+    assert by_slug["robots_crawl"].score == 61
+    assert by_slug["schema_entity"].score == 12
+    assert by_slug["robots_crawl"].generated is True
+    assert by_slug["schema_entity"].generated is False
+
+
+def test_a_pillar_the_export_did_not_score_is_not_a_zero():
+    """The nav's `gap: int | None` rule, applied to a second source: a pillar
+    nobody scored must not read as a pillar that scored nothing."""
+    from app.core.audit_link import link_audit
+
+    view = link_audit({"pillar_scores": {"robots_crawl": 61}})
+    unscored = next(p for p in view.pillars() if p.slug == "js_rendering")
+
+    assert unscored.score is None
+    assert unscored.measured is False
+
+
+def test_the_whole_rubric_is_shown_even_when_half_of_it_is_unscored():
+    """Two of six rows reads as a two-row rubric, which understates what the
+    Checker measures and what the client is being graded on."""
+    from app.core.audit_link import PILLARS, link_audit
+
+    view = link_audit({"pillar_scores": {"robots_crawl": 61}})
+
+    assert len(view.pillars()) == len(PILLARS) == 6
+
+
+def test_the_generated_share_is_stated_rather_than_implied():
+    """The integration's whole risk is reading as though this tool fixes
+    everything the Checker measures. 35 of 100 is the honest number, and it is
+    the one the module docstring has carried in prose since it was written."""
+    from app.core.audit_link import link_audit
+
+    assert link_audit({}).generated_weight == 35
+
+
+def test_the_weights_are_a_whole_rubric():
+    from app.core.audit_link import PILLARS
+
+    assert sum(weight for _, _, weight in PILLARS) == 100
+
+
+def test_the_panel_renders_the_breakdown():
+    from pathlib import Path
+
+    markup = (
+        Path(__file__).resolve().parents[1] / "templates" / "partials" / "audit_panel.html"
+    ).read_text(encoding="utf-8")
+
+    assert "audit.pillars()" in markup, "the breakdown is computed and not shown"
+    assert "generated_weight" in markup

@@ -33,8 +33,10 @@ __all__ = [
     "AUDIT_PATHS",
     "GENERATED_PILLARS",
     "PATH_DISAGREEMENTS",
+    "PILLARS",
     "AuditFinding",
     "AuditView",
+    "PillarScore",
     "link_audit",
     "path_disagreements",
 ]
@@ -73,6 +75,47 @@ PATH_DISAGREEMENTS: dict[str, tuple[str, str]] = {
 #: Pillars whose findings this tool can answer with a generated file. Everything
 #: else is developer work, and saying so is the point.
 GENERATED_PILLARS: frozenset[str] = frozenset({"robots_crawl", "ai_discoverability"})
+
+#: The Checker's rubric: slug -> (display name, weight as a percentage).
+#:
+#: Written down here because the weights are the whole point of showing the
+#: breakdown. An operator reading one overall score of 61 cannot tell whether the
+#: site is strong where we can help and weak where we cannot, or the reverse --
+#: and those are opposite conversations to have with a client. The module
+#: docstring above has carried this table in prose since the integration was
+#: written, while the panel showed one number.
+#:
+#: Ordered by weight, because that is the order the work matters in.
+PILLARS: tuple[tuple[str, str, int], ...] = (
+    ("schema_entity", "Schema & Entity", 25),
+    ("robots_crawl", "Robots & Crawl", 20),
+    ("js_rendering", "JS Rendering", 15),
+    ("ai_discoverability", "AI Discoverability", 15),
+    ("ai_interactivity", "AI Interactivity", 15),
+    ("content_citability", "Content & Citability", 10),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PillarScore:
+    """One pillar of the Checker's rubric, and whether we can act on it."""
+
+    slug: str
+    label: str
+    weight: int
+    score: int | None
+    generated: bool
+
+    @property
+    def measured(self) -> bool:
+        """False where the export carried no score for this pillar.
+
+        Kept distinct from a score of zero, which is the same rule the nav's
+        `gap: int | None` states: a pillar nobody scored must not read as a
+        pillar that scored nothing.
+        """
+        return self.score is not None
+
 
 #: The Checker's severities, worst first. Only two exist today; an unknown one
 #: sorts last rather than crashing, because a new severity upstream must not take
@@ -131,6 +174,43 @@ class AuditView:
     def for_developer(self) -> list[AuditFinding]:
         """The rest. Not dropped -- handed over with the Checker's own words."""
         return [f for f in self.findings if f.pillar not in _GENERATED_LABELS]
+
+    def pillars(self) -> list[PillarScore]:
+        """The rubric, scored, in weight order.
+
+        `pillar_scores` has been stored on every ingested audit and read by
+        nothing, so the panel showed one overall number. That number cannot
+        distinguish "strong where we can help, weak where we cannot" from its
+        opposite -- and those are opposite conversations to have with a client.
+
+        A pillar the export did not score is carried with `score=None` rather
+        than dropped, because a rubric with two of six rows shown reads as a
+        two-row rubric.
+        """
+        raw = self.pillar_scores or {}
+        out: list[PillarScore] = []
+        for slug, label, weight in PILLARS:
+            value = raw.get(slug)
+            out.append(
+                PillarScore(
+                    slug=slug,
+                    label=label,
+                    weight=weight,
+                    score=value if isinstance(value, int) else _int_or_none(value),
+                    generated=slug in GENERATED_PILLARS,
+                )
+            )
+        return out
+
+    @property
+    def generated_weight(self) -> int:
+        """Share of the rubric this tool can produce a file for.
+
+        Stated rather than implied. The integration's whole risk is reading as
+        though the tool fixes everything the Checker measures, and 35 of 100 is
+        the honest number.
+        """
+        return sum(w for slug, _, w in PILLARS if slug in GENERATED_PILLARS)
 
     def by_pillar(self) -> dict[str, list[AuditFinding]]:
         grouped: dict[str, list[AuditFinding]] = {}

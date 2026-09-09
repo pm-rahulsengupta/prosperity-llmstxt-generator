@@ -62,6 +62,55 @@
         </div>
     </div>
 
+    {# The rubric, broken out.
+
+       `pillar_scores` has arrived on every audit since the integration was
+       written and was read by nothing, so this panel showed one number. An
+       overall 61 cannot tell an operator whether the site is strong where we can
+       help and weak where we cannot, or the reverse -- and those are opposite
+       conversations to have with a client.
+
+       The weight column is why the breakdown is worth showing: a 12 on a 25%
+       pillar costs more than a 40 on a 15% one, and the two rows a file of ours
+       can move are marked as such rather than left to be inferred. #}
+    {% if audit.pillar_scores %}
+    <h3>Where the score comes from</h3>
+    <p class="hint">
+        The Checker's own rubric. We can produce a file for
+        {{ audit.generated_weight }}% of it; the rest is developer work, listed
+        below in the Checker's own words.
+    </p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Checker rubric by pillar">
+        <table>
+            <thead>
+                <tr>
+                    <th scope="col">Pillar</th>
+                    <th scope="col" class="num">Weight</th>
+                    <th scope="col" class="num">Their score</th>
+                    <th scope="col">Who fixes it</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for pillar in audit.pillars() %}
+                <tr>
+                    <th scope="row">{{ pillar.label }}</th>
+                    <td class="num">{{ pillar.weight }}%</td>
+                    <td class="num">
+                        {# Not scored is not zero. Same rule as the nav's gap badge. #}
+                        {% if pillar.measured %}{{ pillar.score }}
+                        {% else %}<span class="muted">not scored</span>{% endif %}
+                    </td>
+                    <td>
+                        {% if pillar.generated %}<span class="pill ok">We generate this</span>
+                        {% else %}<span class="muted">Developer</span>{% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
     {% if audit.findings %}
     {# The split is the point of this panel. The Checker's rubric is far wider
        than anything this tool can generate: Schema, JS rendering, interactivity
